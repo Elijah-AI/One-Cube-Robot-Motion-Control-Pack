@@ -1,0 +1,9 @@
+# Request
+std_msgs/Header header
+string request_id
+
+---
+
+# Response
+int8 status
+int64 error_flag
