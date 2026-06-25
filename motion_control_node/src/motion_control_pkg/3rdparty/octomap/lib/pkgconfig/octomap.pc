@@ -1,0 +1,10 @@
+prefix=/home/robot/AlgoInstall/octomap
+libdir=/home/robot/AlgoInstall/octomap/lib
+includedir=/home/robot/AlgoInstall/octomap/include
+
+Name: octomap
+Description: octomap
+Requires: 
+Version: 1.10.0
+Libs: -L${libdir}  -loctomap -loctomath
+Cflags: -I${includedir} 

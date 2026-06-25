@@ -1,0 +1,10 @@
+prefix=/home/robot/AlgoInstall/octomap
+libdir=/home/robot/AlgoInstall/octomap/lib
+includedir=/home/robot/AlgoInstall/octomap/include
+
+Name: dynamicEDT3D
+Description: dynamicEDT3D
+Requires:  octomap
+Version: 1.10.0
+Libs: -L${libdir}  -ldynamicedt3d
+Cflags: -I${includedir} 

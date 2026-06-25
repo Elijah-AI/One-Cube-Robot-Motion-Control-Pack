@@ -1,0 +1,4 @@
+source;share/toppra/local_setup.bash
+source;share/toppra/local_setup.dsv
+source;share/toppra/local_setup.sh
+source;share/toppra/local_setup.zsh

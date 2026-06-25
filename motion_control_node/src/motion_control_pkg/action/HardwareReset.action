@@ -1,0 +1,11 @@
+string task_id
+int64 timeout_ms
+int32 priority
+---
+bool success
+uint8 status_code
+string error_message
+float64 duration_sec
+---
+float32 progress_percent
+string current_step

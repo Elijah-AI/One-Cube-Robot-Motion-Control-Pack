@@ -1,0 +1,20 @@
+std_msgs/Header header                     
+string task_id       
+uint8 gripper_id           
+uint8[2] position     
+uint8[2] speed      
+uint8[2] max_torque         
+uint8[2] com_port 
+bool block_until_complete      
+int64 timeout_ms                             
+---
+bool success
+uint8[2] final_position      
+uint8[2] final_torque      
+string error_message
+---
+uint8[2] current_position    
+uint8[2] current_torque       
+uint8[2] current_speed
+float32 progress_rate                
+std_msgs/Header header          
