@@ -10,6 +10,16 @@ tasks:
     trigger_reg: 40001
     status_reg: 50001
     action_sequence:
+      - action_type: move_arm
+        params:
+          arm_id: "arm0"
+          use_planning: true
+          collision_check: true
+          target_pose: [535.822, 343.300, 117.851, 0.027731, -0.702962, 0.693387, -0.150793]
+          use_config_pose: true
+          safety_distance: [5.01, 0.01, 0.01, -5.01, 0.01, 0.01]
+          avoid_obstacle: true
+     
       - action_type: vision_detect
         params:
           target_obj_name: "box"
@@ -19,6 +29,15 @@ tasks:
           downsample_res: 0.02
           type: 0.02
           priority: 1
+      - action_type: move_arm
+        params:
+          arm_id: "arm0"
+          use_planning: true
+          collision_check: true
+          target_pose: [403.817, 512.938, 197.793, 0.0798, 0.7338, 0.6693, -0.0861]
+          use_config_pose: true
+          safety_distance: [5.01, 0.01, 0.01, -5.01, 0.01, 0.01]
+          avoid_obstacle: true
       - action_type: gripper_ctrl
         params:
           gripper_id: 0
@@ -27,16 +46,36 @@ tasks:
           speed: [30, 30]
           max_torque: [80, 80]
           block: true
-          timeout_ms: 2000
+          timeout_ms: 10000
       - action_type: move_arm
         params:
           arm_id: "arm0"
           use_planning: true
           collision_check: true
-          target_pose: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
-          use_config_pose: false
+          target_pose: [334.171, 596.153, 187.666, 0.1472, 0.7027, 0.6943, -0.0531]
+          use_config_pose: true
           safety_distance: [5.01, 0.01, 0.01, -5.01, 0.01, 0.01]
           avoid_obstacle: true
+      - action_type: gripper_ctrl
+        params:
+          gripper_id: 0
+          comport: [2, 2]
+          position: [255, 255]
+          speed: [30, 30]
+          max_torque: [80, 80]
+          block: true
+          timeout_ms: 10000
+      - action_type: move_arm
+        params:
+          arm_id: "arm0"
+          use_planning: true
+          collision_check: true
+          target_pose: [182.956, 618.655, 244.897, -0.2207, 0.6826, 0.2037, 0.6634]
+          use_config_pose: true
+          safety_distance: [5.01, 0.01, 0.01, -5.01, 0.01, 0.01]
+          avoid_obstacle: true
+      
+      
 boot_task:
   self_check:
     action_sequence:

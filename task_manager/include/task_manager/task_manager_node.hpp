@@ -3,15 +3,17 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/service.hpp>
-#include <task_manager/msg/heartbeat.hpp>
-#include <task_manager/msg/node_status.hpp>
-#include <task_manager/srv/get_system_status.hpp>
+// #include <task_manager/msg/heartbeat.hpp>
+// #include <task_manager/msg/node_status.hpp>
+// #include <task_manager/srv/get_system_status.hpp>
 #include "task_manager/behavior_tree_engine.hpp"
 #include "task_manager/fsm_state.hpp"
 #include "task_manager/task_config_parser.hpp"
 #include "task_manager/modbus_slave.hpp"
 #include "task_manager/task_action_client.hpp"
-
+#include "safety_interfaces/msg/heartbeat.hpp"
+#include "safety_interfaces/msg/node_status.hpp"
+#include "safety_interfaces/srv/get_system_status.hpp"
 #include <chrono>
 #include <unordered_map>
 #include <atomic>
@@ -19,9 +21,9 @@
 
 namespace task_mgr
 {
-using HeartbeatMsg = task_manager::msg::Heartbeat;
-using NodeStatusMsg = task_manager::msg::NodeStatus;
-using GetSystemStatusSrv = task_manager::srv::GetSystemStatus;
+using HeartbeatMsg = safety_interfaces::msg::Heartbeat;
+using NodeStatusMsg = safety_interfaces::msg::NodeStatus;
+using GetSystemStatusSrv = safety_interfaces::srv::GetSystemStatus;
 
 class TaskManagerNode : public rclcpp::Node
 {

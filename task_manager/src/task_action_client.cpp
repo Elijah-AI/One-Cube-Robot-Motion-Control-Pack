@@ -9,6 +9,7 @@
 #include "motion_control_pkg/action/control_gripper.hpp"
 #include "motion_control_pkg/action/move_arm.hpp"
 
+
 namespace task_act
 {
 TaskActionClient::TaskActionClient(rclcpp::Node::SharedPtr node)
@@ -99,7 +100,7 @@ TaskActionClient::call_vision_detect(
   auto send_goal_future = vision_client_->async_send_goal(goal, send_goal_options);
   current_state_ = ActionRunState::RUNNING;
   task_start_time_ = rclcpp::Time(goal.header.stamp);
-  execution_time_ = 10000;
+  execution_time_ = 60000;
   return true;
 
 }
@@ -283,7 +284,7 @@ bool TaskActionClient::call_move_arm(
   auto send_goal_future = arm_client_->async_send_goal(goal, send_goal_options);
   current_state_ = ActionRunState::RUNNING;
   task_start_time_ = rclcpp::Time(goal.header.stamp);
-  execution_time_ = 10000;
+  execution_time_ = 60000;
   return true;
  
 }

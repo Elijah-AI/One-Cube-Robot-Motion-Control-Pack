@@ -8,7 +8,6 @@
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
   
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
@@ -16,13 +15,17 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>builtin_interfaces</depend>
-  <depend>rosidl_default_generators</depend>
-
+  
+  <!-- 关键：添加对 safety_interfaces 的依赖 -->
+  <depend>safety_interfaces</depend>
+  
+  <!-- 添加其他自定义包的依赖 -->
+  <depend>vision_detection_action</depend>
+  <depend>motion_control_pkg</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-  <exec_depend>rosidl_default_runtime</exec_depend>
-  <member_of_group>rosidl_interface_packages</member_of_group>
+  
   <export>
     <build_type>ament_cmake</build_type>
   </export>

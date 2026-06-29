@@ -109,7 +109,7 @@ ArmControlNode::ArmControlNode(const rclcpp::NodeOptions & options)
     cons.max_acc = l_a_limit_;
     cons.max_jerk = l_jerk_limit_;
     std::cout<<"6*********"<<std::endl;
-    traj_ptr_ = PlannerFactory::createPlanner(PlannerType::TOPPRA);
+    traj_ptr_ = PlannerFactory::createPlanner(PlannerType::RUCKIG);
     traj_ptr_->init(arm_dof_, cons);
     traj_ptr_->setCycleTime(CONTROL_TIME); 
     // joint_command_timer_ = create_wall_timer(250ms,
@@ -224,7 +224,7 @@ void ArmControlNode::execute_hardware_check(const std::shared_ptr<GoalHandleHard
  bool ArmControlNode::init_arm_params()
  {
     bool res = false;
-    if (LOADMvCfg((char*)"/home/robot/ylf_robot_ws_20260603/src/motion_control_pkg/config/ccs_m6_40.MvKDCfg", type_, grv_, dh_, pnva_, bd_, mass_, mcp_, i_) == FX_FALSE)
+    if (LOADMvCfg((char*)"/home/wang/ros2_ws/src/motion_control_pkg/config/ccs_m6_40.MvKDCfg", type_, grv_, dh_, pnva_, bd_, mass_, mcp_, i_) == FX_FALSE)
     {
          std::cout<<"1*****"<<std::endl;
        return res;
@@ -373,10 +373,12 @@ void ArmControlNode::set_arm_control_mode()
 
 void ArmControlNode::execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> goal_handle)
 {
+    RCLCPP_INFO(this->get_logger(), "Received request to cancel MoveArm goal");
     const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<MoveArm::Feedback>();
     auto result = std::make_shared<MoveArm::Result>();
     std::cout<<"execute_move_arm***"<<std::endl;
+    std::cout<<"l_init_arm_params_ := "<<l_init_arm_params_<<std::endl;
     if(!l_init_arm_params_)
     {
         result->success = ACTION_FAIL;
@@ -414,41 +416,41 @@ void ArmControlNode::execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> g
         return;
     }
     RCLCPP_INFO(this->get_logger(), "arm no error ");
-    long ErrCode_A[7]={};
-    long ErrCode_B[7]={};
-    OnGetServoErr_A(ErrCode_A);
-    OnGetServoErr_B(ErrCode_B);
-    bool allZero_a = true;
-    bool allZero_b = true;
-    for (int i = 0; i < arm_dof_; ++i) 
-    {
-        if (ErrCode_A[i] != 0) {
-            allZero_a = false;
-            break;
-        }
-    }
-    for (int i = 0; i < arm_dof_; ++i) 
-    {
-        if (ErrCode_B[i] != 0) {
-            allZero_b = false;
-            break;
-        }
-    }
-   if(allZero_a)
-   {
-        result->success = ACTION_FAIL;
-        result->error_message = " left arm servo exits error";
-        goal_handle->abort(result);
-        return;
-   }
+//     long ErrCode_A[7]={};
+//     long ErrCode_B[7]={};
+//     OnGetServoErr_A(ErrCode_A);
+//     OnGetServoErr_B(ErrCode_B);
+//     bool allZero_a = true;
+//     bool allZero_b = true;
+//     for (int i = 0; i < arm_dof_; ++i) 
+//     {
+//         if (ErrCode_A[i] != 0) {
+//             allZero_a = false;
+//             break;
+//         }
+//     }
+//     for (int i = 0; i < arm_dof_; ++i) 
+//     {
+//         if (ErrCode_B[i] != 0) {
+//             allZero_b = false;
+//             break;
+//         }
+//     }
+//    if(allZero_a)
+//    {
+//         result->success = ACTION_FAIL;
+//         result->error_message = " left arm servo exits error";
+//         goal_handle->abort(result);
+//         return;
+//    }
 
-   if(allZero_b)
-   {
-        result->success = ACTION_FAIL;
-        result->error_message = " right arm servo exits error";
-        goal_handle->abort(result);
-        return;
-   }
+//    if(allZero_b)
+//    {
+//         result->success = ACTION_FAIL;
+//         result->error_message = " right arm servo exits error";
+//         goal_handle->abort(result);
+//         return;
+//    }
     RCLCPP_INFO(this->get_logger(), " robot no servo errors ");
 
     for(int i = 0; i < arm_dof_; i++)
@@ -461,7 +463,7 @@ void ArmControlNode::execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> g
     std::cout<<"start pos:="<<l_current_joint_[0]<<","<<l_current_joint_[1]
       <<","<<l_current_joint_[2]<<","<<l_current_joint_[3]
       <<","<<l_current_joint_[4]<<","<<l_current_joint_[5]
-      <<","<<l_current_joint_[6]<<","<<l_current_joint_[7]<<std::endl;
+      <<","<<l_current_joint_[6]<<std::endl;
     if(goal->use_planning)
     {
         auto tar_pose = goal->target_pose.pose;
@@ -478,31 +480,39 @@ void ArmControlNode::execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> g
         
         if(goal->arm_id==ARM_LEFT)
         {      
-        //   pose_to_matrix(pose,l_tar_pos);
-        //   for (int i = 0; i < 4; i++)
+          pose_to_matrix(pose,l_tar_pos);
+          for (int i = 0; i < 4; i++)
+          {
+                for (int j = 0; j < 4; j++)
+                {
+                    l_sp_.m_Input_IK_TargetTCP[i][j] = l_tar_pos[i][j];
+                }
+          }
+
+        // double Ret_joints[7]={0.0,50.0,-30.0,30.0,40.0,10.0,10.0};
+        // for (long i = 0; i < arm_dof_; i++)
         //   {
-        //         for (int j = 0; j < 4; j++)
-        //         {
-        //             l_sp_.m_Input_IK_TargetTCP[i][j] = l_tar_pos[i][j];
-        //         }
+        //     l_sp_.m_Input_RetJoint[i]
         //   }
-        //   if (FX_Robot_Kine_IK(0, &l_sp_) == FX_FALSE)
-        //   {
-        //       result->success = ACTION_FAIL;
-        //       result->error_message = "left arm inverse kinamatics error";
-        //       goal_handle->abort(result);
-        //       return;
-        //   }
+          if (FX_Robot_Kine_IK(0, &l_sp_) == FX_FALSE)
+          {
+              result->success = ACTION_FAIL;
+              result->error_message = "left arm inverse kinamatics error";
+              RCLCPP_ERROR(this->get_logger(), "left arm inverse kinamatics error");
+              goal_handle->abort(result);
+              return;
+          }
           RCLCPP_INFO(this->get_logger(), " arm inverse kinamatics no errors ");
           double tar_joints[7]={10.0,10.0,20.0,30.0,40.0,10.0,10.0};
-        //   for (long i = 0; i < arm_dof_; i++)
-        //   {
-        //      tar_joints[i] = l_sp_.m_Output_RetJoint[i];
-        //   }
-        //   std::cout<<"tar_joints:="<<tar_joints[0]<<","<<tar_joints[1]<<","<<tar_joints[2]<<","<<tar_joints[3]<<","<<tar_joints[4]<<","<<tar_joints[5]<<","<<tar_joints[6]<<","<<tar_joints[7]<<std::endl;
+          for (long i = 0; i < arm_dof_; i++)
+          {
+             tar_joints[i] = l_sp_.m_Output_RetJoint[i];
+          }
+          std::cout<<"tar_joints:="<<tar_joints[0]<<","<<tar_joints[1]<<","<<tar_joints[2]<<","<<tar_joints[3]<<","<<tar_joints[4]<<","<<tar_joints[5]<<","<<tar_joints[6]<<std::endl;
           //运动规划
           auto& ompl = OMPLWrapper::instance();         
-          std::vector<double>q_start,q_goal;
+          std::vector<double>q_start(7);
+          std::vector<double>q_goal(7);
           for(int i=0;i<arm_dof_;i++)
           {
              q_start[i] = l_current_joint_[i]*DEG2RAD;
@@ -526,31 +536,57 @@ void ArmControlNode::execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> g
                     arm_status_mtx_.lock();
                     l_traj_active_ = (arm_status_error_==false)?true:false;
                     arm_status_mtx_.unlock();
+                    RCLCPP_INFO(this->get_logger(), " l_traj_active_ = %s\n", l_traj_active_ ? "true" : "false");
                     if(l_traj_active_)
                     {
-                         for(int i =0;i<points;i++)
-                         {
-                            //下发运动点位
-                            double joints_a[7] = {0.0};
-                            for(int j=0;j<arm_dof_;j++)
-                            {
-                              joints_a[j] = l_current_traj_.positions[i][j]*RAD2DEG;
-                            }
-                           //  OnClearSet();
-                           // OnSetJointCmdPos_A(joints_a);
-                           //  OnSetSend();
-                            l_step_++;
-                            feedback->task_status  = 1;
-                            feedback->progress_rate = l_step_/points;
-                            feedback->current_step_info = "joint command send";
-                            feedback->header.stamp = this->get_clock()->now();
-                            goal_handle->publish_feedback(feedback);
-                            rclcpp::sleep_for(std::chrono::milliseconds(2));
-                         } 
+                        for(int i =0;i<points;i++)
+                        {
+                        //下发运动点位
+                        double joints_a[7] = {0.0};
+                        for(int j=0;j<arm_dof_;j++)
+                        {
+                            joints_a[j] = l_current_traj_.positions[i][j]*RAD2DEG;
+                        }
+                        OnClearSet();
+                        OnSetJointCmdPos_A(joints_a);
+                        OnSetSend();
+                        l_step_++;
+                        feedback->task_status  = 1;
+                        feedback->progress_rate = static_cast<double>(l_step_)/points * 100.0;
+                        if (feedback->progress_rate > 100.0)
+                        {
+                            feedback->progress_rate = 100.0;
+                        }
+                        else if (feedback->progress_rate < 0.0)
+                        {
+                            feedback->progress_rate = 0.0;
+                        }
 
-                            result->success = ACTION_SUCCESS;
-                            goal_handle->succeed(result);
-                            break;                       
+                        RCLCPP_INFO(this->get_logger(), " feedback->progress_rate:%.1f, %d, %d\n", feedback->progress_rate, l_step_, points);
+
+                        feedback->current_step_info = "joint command send";
+                        feedback->header.stamp = this->get_clock()->now();
+                        goal_handle->publish_feedback(feedback);
+                        rclcpp::sleep_for(std::chrono::milliseconds(2));
+                        } 
+                        while(1)
+                        {
+                            arm_status_mtx_.lock();
+                            //RCLCPP_INFO(this->get_logger(), "dcss_.m_Out[0].m_LowSpdFlag = %d", dcss_.m_Out[0].m_LowSpdFlag);
+                            if(dcss_.m_Out[0].m_LowSpdFlag == 1 && dcss_.m_Out[1].m_LowSpdFlag)
+                            {
+                                arm_status_mtx_.unlock();
+                                break;
+                            }
+                            arm_status_mtx_.unlock();
+
+                            
+                        }
+                        
+                        RCLCPP_INFO(this->get_logger(), " goal_handle->succeed(result)");
+                        result->success = ACTION_SUCCESS;
+                        goal_handle->succeed(result);
+                        break;                       
                     }else{
                         feedback->task_status  = 1;
                         feedback->progress_rate = l_step_/points;
@@ -665,6 +701,26 @@ void ArmControlNode::handle_accepted_control_gripper(
     std::thread{std::bind(&ArmControlNode::execute_control_gripper, this, std::placeholders::_1), goal_handle}.detach();
 }
 
+void ArmControlNode::log_jodell_status(rclcpp::Logger logger, const Jodell_status& status) {
+    RCLCPP_INFO(logger, "=== Jodell Status [0] ===");
+    
+    // 打印故障位
+    RCLCPP_INFO(logger, "Faults: Active[%d] Ctrl[%d] Comm[%d] OC[%d] Volt[%d] En[%d] Temp[%d] Self[%d]",
+                status.err_active, status.err_control, status.err_comm,
+                status.err_over_current, status.err_voltage, status.err_enable,
+                status.err_over_temp, status.err_self);
+
+    // 打印实时数据 (注意 uint8_t/int8_t 需要强转为 int 才能打印数字，否则可能打印字符)
+    RCLCPP_INFO(logger, "Data: Pos[%d] Spd[%d] Torque[%d] BusV[%d] Temp[%d C]",
+                (int)status.position, (int)status.speed, (int)status.torque,
+                (int)status.busvoltage, (int)status.temperature);
+
+    // 打印夹爪状态
+    RCLCPP_INFO(logger, "Gripper: Stat[%d] Mode[%d] GTO[%d] State[%d] Obj[%d]",
+                (int)status.status, (int)status.mode, (int)status.gto,
+                (int)status.state, (int)status.obj);
+}
+
 
 void ArmControlNode::execute_control_gripper(const std::shared_ptr<GoalHandleControlGripper> goal_handle)
 {
@@ -679,20 +735,14 @@ void ArmControlNode::execute_control_gripper(const std::shared_ptr<GoalHandleCon
     auto result = std::make_shared<ControlGripper::Result>();
     std::shared_ptr<Jodell_Control> jodell_control = std::make_shared<Jodell_Control>();
 
-    Jodell_status rt_status[2];
+    Jodell_status rt_status[2] = {{}, {}};
     int init_position[2] = {0,0};
     
-    
-
-    
-    
-
-    
-
 
     if (goal->gripper_id == GRIPPER_LEFT)
     {
         jodell_control->Jodell_modbus_config_A(goal->com_port[0], 9);
+        rclcpp::sleep_for(std::chrono::milliseconds(20));
         bool ret = jodell_control->Jodell_Status_A(&rt_status[GRIPPER_LEFT]);
         if (ret)
         {
@@ -703,12 +753,12 @@ void ArmControlNode::execute_control_gripper(const std::shared_ptr<GoalHandleCon
             result->success = ACTION_FAIL;
             result->error_message = "Get gripper_A status failed";
             RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_A"), "Get gripper_A status failed");
-            //goal_handle->abort(result);
-            //return;
+            goal_handle->abort(result);
+            return;
         }
+
         //左爪
         jodell_control->Jodell_Move_Abs_A(goal->position[GRIPPER_LEFT], goal->max_torque[GRIPPER_LEFT], goal->speed[GRIPPER_LEFT]);
-
         while (true)
         {
 
@@ -730,21 +780,18 @@ void ArmControlNode::execute_control_gripper(const std::shared_ptr<GoalHandleCon
                 result->final_torque[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].torque;
                 result->final_torque[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].torque;
                 result->success = ACTION_SUCCESS;
-                    
-                goal_handle->succeed(result);
-
-                //goal_handle->abort(result);
+                goal_handle->abort(result);
                 break;
             }
-
-
             ret = jodell_control->Jodell_Status_A(&rt_status[GRIPPER_LEFT]);
 
             if (ret)
             {
+                log_jodell_status(rclcpp::get_logger("Jodell_Status_A"), rt_status[GRIPPER_LEFT]);
                 if(rt_status[GRIPPER_LEFT].gto == 0)
                 {
                     control_gripper_result(rt_status, result, goal_handle);
+                    break;
                 }
                 else
                 {
@@ -772,8 +819,8 @@ void ArmControlNode::execute_control_gripper(const std::shared_ptr<GoalHandleCon
             result->success = ACTION_FAIL;
             result->error_message = "Get gripper_B status failed";
             RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_B"), "Get gripper_B status failed");
-            //goal_handle->abort(result);
-            //return;
+            goal_handle->abort(result);
+            return;
         }
         jodell_control->Jodell_Move_Abs_B(goal->position[GRIPPER_RIGHT], goal->max_torque[GRIPPER_RIGHT], goal->speed[GRIPPER_RIGHT]);
 
@@ -793,7 +840,7 @@ void ArmControlNode::execute_control_gripper(const std::shared_ptr<GoalHandleCon
                 RCLCPP_INFO(rclcpp::get_logger("timeout"), "timeout exit");
                 result->success = ACTION_FAIL;
                 result->error_message = "time_out";
-                //goal_handle->abort(result);
+                goal_handle->abort(result);
                 break;
             }
 
@@ -885,6 +932,7 @@ void ArmControlNode::execute_control_gripper(const std::shared_ptr<GoalHandleCon
                 if(rt_status[GRIPPER_LEFT].gto == 0 && rt_status[GRIPPER_RIGHT].gto == 0)
                 {
                     control_gripper_result(rt_status, result, goal_handle);
+                    break;
                 }
                 else
                 {
@@ -1103,7 +1151,7 @@ void ArmControlNode::control_gripper_result(Jodell_status *rt_status, std::share
         }
         
     }
-    
+
     result->final_position[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].position;
     result->final_position[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].position;
     result->final_torque[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].torque;
@@ -1112,7 +1160,7 @@ void ArmControlNode::control_gripper_result(Jodell_status *rt_status, std::share
     {
         result->success = ACTION_FAIL;
         RCLCPP_ERROR(rclcpp::get_logger("control_gripper_result"), "%s", result->error_message.c_str());
-        //goal_handle->abort(result);
+        goal_handle->abort(result);
     }
     else
     {
@@ -1259,53 +1307,53 @@ void ArmControlNode::pose_to_matrix(const geometry_msgs::msg::Pose& pose,Matrix4
 bool ArmControlNode::check_robot_statu_error()
 {
     bool res = false;
-    int arm_error_a=dcss_.m_State[0].m_ERRCode;
-    int arm_state_a=dcss_.m_State[0].m_CurState;
-    if (arm_error_a!=0 || arm_state_a==100)
-    {
-        res = true;
-        return res;
-    }
+//     int arm_error_a=dcss_.m_State[0].m_ERRCode;
+//     int arm_state_a=dcss_.m_State[0].m_CurState;
+//     if (arm_error_a!=0 || arm_state_a==100)
+//     {
+//         res = true;
+//         return res;
+//     }
 
-    int arm_error_b=dcss_.m_State[1].m_ERRCode;
-    int arm_state_b=dcss_.m_State[1].m_CurState;
-    if (arm_error_b!=0 || arm_state_b==100)
-    {
-        res = true;
-        return res;
-    }
+//     int arm_error_b=dcss_.m_State[1].m_ERRCode;
+//     int arm_state_b=dcss_.m_State[1].m_CurState;
+//     if (arm_error_b!=0 || arm_state_b==100)
+//     {
+//         res = true;
+//         return res;
+//     }
 
-    long ErrCode_A[7]={};
-    long ErrCode_B[7]={};
-    OnGetServoErr_A(ErrCode_A);
-    OnGetServoErr_B(ErrCode_B);
-    bool allZero_a = true;
-    bool allZero_b = true;
-    for (int i = 0; i < 7; ++i) 
-    {
-        if (ErrCode_A[i] != 0) {
-            allZero_a = false;
-            break;
-        }
-    }
-    for (int i = 0; i < 7; ++i) 
-    {
-        if (ErrCode_B[i] != 0) {
-            allZero_b = false;
-            break;
-        }
-    }
-   if(allZero_a)
-   {
-       res = true;
-        return res;
-   }
+//     long ErrCode_A[7]={};
+//     long ErrCode_B[7]={};
+//     OnGetServoErr_A(ErrCode_A);
+//     OnGetServoErr_B(ErrCode_B);
+//     bool allZero_a = true;
+//     bool allZero_b = true;
+//     for (int i = 0; i < 7; ++i) 
+//     {
+//         if (ErrCode_A[i] != 0) {
+//             allZero_a = false;
+//             break;
+//         }
+//     }
+//     for (int i = 0; i < 7; ++i) 
+//     {
+//         if (ErrCode_B[i] != 0) {
+//             allZero_b = false;
+//             break;
+//         }
+//     }
+//    if(allZero_a)
+//    {
+//        res = true;
+//         return res;
+//    }
 
-   if(allZero_b)
-   {
-       res = true;
-        return res;
-   }
+//    if(allZero_b)
+//    {
+//        res = true;
+//         return res;
+//    }
 
     return res;
 }
@@ -1319,7 +1367,10 @@ void ArmControlNode::motor_statu_cb()
      motor_status_pub_->publish(motor_status_msg_);
     }else
     {
+      arm_status_mtx_.lock();
       OnGetBuf(&dcss_);
+      arm_status_mtx_.unlock();
+      //dcss_[0].
       auto is_error = check_robot_statu_error();
       if(is_error)
       {

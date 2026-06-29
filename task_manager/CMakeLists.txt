@@ -14,31 +14,14 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(vision_detection_action REQUIRED) 
-find_package(motion_control_pkg REQUIRED) 
+find_package(motion_control_pkg REQUIRED)
+
+# 关键修改：添加对 safety_interfaces 的依赖
+find_package(safety_interfaces REQUIRED)
+
 # libmodbus /usr/include/modbus 适配
 include_directories("/usr/include")
 set(MODBUS_LIB modbus)
-
-# 自定义接口
-set(msg_files
-  "msg/Heartbeat.msg"
-  "msg/NodeStatus.msg"
-)
-set(srv_files
-  "srv/GetSystemStatus.srv"
-)
-set(action_files
-  "action/VisionDetection.action"
-  "action/MoveArm.action"
-  "action/ControlGripper.action"
-)
-
-rosidl_generate_interfaces(${PROJECT_NAME}
-  ${msg_files}
-  ${srv_files}
-  ${action_files}
-  DEPENDENCIES std_msgs geometry_msgs sensor_msgs
-)
 
 # 项目头文件目录
 include_directories(include)
@@ -62,10 +45,17 @@ target_link_libraries(task_manager_node
   uuid
 )
 
+# 添加所有必要的依赖
 ament_target_dependencies(task_manager_node
-  rclcpp rclcpp_action std_msgs geometry_msgs sensor_msgs vision_detection_action motion_control_pkg
+  rclcpp 
+  rclcpp_action 
+  std_msgs 
+  geometry_msgs 
+  sensor_msgs 
+  vision_detection_action 
+  motion_control_pkg
+  safety_interfaces  # 关键：添加 safety_interfaces 依赖
 )
-rosidl_target_interfaces(task_manager_node ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # 安装规则
 install(TARGETS
@@ -79,7 +69,6 @@ install(DIRECTORY config
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
-
 
 install(DIRECTORY include/
   DESTINATION include/

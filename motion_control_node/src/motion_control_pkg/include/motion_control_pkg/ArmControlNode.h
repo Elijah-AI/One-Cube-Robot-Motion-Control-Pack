@@ -55,8 +55,9 @@ enum
 
 enum
 {
-    ACTION_SUCCESS = 0,
-    ACTION_FAIL,
+    ACTION_FAIL = 0,
+    ACTION_SUCCESS,
+    
 };
 
 
@@ -120,6 +121,8 @@ public:
     using MotorStatus = motion_control_pkg::msg::MotorStatus;
 
     explicit ArmControlNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+
+    void log_jodell_status(rclcpp::Logger logger, const Jodell_status& status);
 
 private:
     // --- PickAndPlace Action Handlers ---
