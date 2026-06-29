@@ -488,12 +488,17 @@ void ArmControlNode::execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> g
                     l_sp_.m_Input_IK_TargetTCP[i][j] = l_tar_pos[i][j];
                 }
           }
-
+        //Todo: 任务节点添加目标构型的关节角度
         // double Ret_joints[7]={0.0,50.0,-30.0,30.0,40.0,10.0,10.0};
         // for (long i = 0; i < arm_dof_; i++)
         //   {
         //     l_sp_.m_Input_RetJoint[i]
         //   }
+	l_sp_.m_Input_IK_ZSPType=1;
+	l_sp_.m_Input_IK_ZSPPara[0]=l_tar_pos[0][0];
+	l_sp_.m_Input_IK_ZSPPara[1]=l_tar_pos[1][0];
+	l_sp_.m_Input_IK_ZSPPara[2]=l_tar_pos[2][0];
+	l_sp_.m_Input_ZSP_Angle = 0.0;
           if (FX_Robot_Kine_IK(0, &l_sp_) == FX_FALSE)
           {
               result->success = ACTION_FAIL;
