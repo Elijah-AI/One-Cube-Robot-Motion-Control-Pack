@@ -175,7 +175,7 @@ private:
 
     void execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> goal_handle);
     bool init_arm_params();
-
+    void init_set_tcp();
     rclcpp_action::GoalResponse handle_goal_adjust_base_pose(
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const AdjustBasePose::Goal> goal);
@@ -207,11 +207,14 @@ private:
     void heart_beat_cb();
     void motor_statu_cb();
     void init_motor_status();
+  
     geometry_msgs::msg::Pose matrix_to_pose(const Matrix4& mat);
     void pose_to_matrix(const geometry_msgs::msg::Pose& pose,Matrix4& mat);
     void joint_command_cb();
     bool check_robot_statu_error();
     void set_arm_control_mode();
+    void matrix_multiply(const Matrix4& a, const Matrix4& b, Matrix4& result);
+    void print_matrix(Matrix4 a); 
     // Action ServersHeartBeat
     rclcpp_action::Server<PickAndPlace>::SharedPtr pick_and_place_action_server_;
     rclcpp_action::Server<HardwareReset>::SharedPtr hardware_reset_action_server_;
@@ -240,6 +243,8 @@ private:
     FX_DOUBLE i_[2][7][6];
     Matrix4 r_tool_; //右臂工具设置
     Matrix4 l_tool_; //左臂工具设置
+    Matrix4 l_install_base_inv_;//左臂安装设置
+    Matrix4 r_install_base_inv_;//右臂安装设置
     FX_DOUBLE r_current_joint_[7];
     FX_DOUBLE l_current_joint_[7];
     FX_InvKineSolvePara r_sp_;//右臂逆运学数据结构
@@ -263,7 +268,7 @@ private:
     int l_step_ = 0;
     bool l_init_arm_params_ ;
     std::unique_ptr<TrajectoryPlanner> traj_ptr_;
-
+    
 };
 
 #endif // ARM_CONTROL_NODE_HPP
