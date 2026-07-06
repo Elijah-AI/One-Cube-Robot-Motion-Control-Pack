@@ -113,13 +113,13 @@ ArmControlNode::ArmControlNode(const rclcpp::NodeOptions & options)
     traj_ptr_->setCycleTime(CONTROL_TIME); 
     //
     l_install_base_inv_[0][0] = 1.0; l_install_base_inv_[0][1] = 0.0; l_install_base_inv_[0][2] = 0.0; l_install_base_inv_[0][3] = 0.0;
-    l_install_base_inv_[1][0] = 0.0; l_install_base_inv_[1][1] = 0.0; l_install_base_inv_[1][2] = -1.0; l_install_base_inv_[1][3] = 1.121;
-    l_install_base_inv_[2][0] = 0.0; l_install_base_inv_[2][1] = 1.0; l_install_base_inv_[2][2] = 0.0; l_install_base_inv_[2][3] = -0.04;
+    l_install_base_inv_[1][0] = 0.0; l_install_base_inv_[1][1] = 0.0; l_install_base_inv_[1][2] = -1.0; l_install_base_inv_[1][3] = 1121.0;
+    l_install_base_inv_[2][0] = 0.0; l_install_base_inv_[2][1] = 1.0; l_install_base_inv_[2][2] = 0.0; l_install_base_inv_[2][3] = -40.0;
     l_install_base_inv_[3][0] = 0.0; l_install_base_inv_[3][1] = 0.0; l_install_base_inv_[3][2] = 0.0; l_install_base_inv_[3][3] = 1.0;
 
     r_install_base_inv_[0][0] = -1.0;r_install_base_inv_[0][1] = 0.0;r_install_base_inv_[0][2] = 0.0; r_install_base_inv_[0][3] = 0.0;
-    r_install_base_inv_[1][0] = 0.0; r_install_base_inv_[1][1] = 0.0;r_install_base_inv_[1][2] = 1.0; r_install_base_inv_[1][3] = -1.121;
-    r_install_base_inv_[2][0] = 0.0; r_install_base_inv_[2][1] = 1.0;r_install_base_inv_[2][2] = 0.0; r_install_base_inv_[2][3] = 0.04;
+    r_install_base_inv_[1][0] = 0.0; r_install_base_inv_[1][1] = 0.0;r_install_base_inv_[1][2] = 1.0; r_install_base_inv_[1][3] = -1121.0;
+    r_install_base_inv_[2][0] = 0.0; r_install_base_inv_[2][1] = 1.0;r_install_base_inv_[2][2] = 0.0; r_install_base_inv_[2][3] = 40.0;
     r_install_base_inv_[3][0] = 0.0; r_install_base_inv_[3][1] = 0.0;r_install_base_inv_[3][2] = 0.0; r_install_base_inv_[3][3] = 1.0;
  
     
@@ -546,7 +546,7 @@ void ArmControlNode::execute_move_arm(const std::shared_ptr<GoalHandleMoveArm> g
         // double Ret_joints[7]={0.0,50.0,-30.0,30.0,40.0,10.0,10.0};
         // for (long i = 0; i < arm_dof_; i++)
         //   {
-        //     l_sp_.m_Input_RetJoint[i]
+        //     l_sp_.m_Input_IK_RefJoint[i] = Ret_joints[i];
         //   }
             l_sp_.m_Input_IK_ZSPType=1;
             l_sp_.m_Input_IK_ZSPPara[0]=l_tar_pos[0][0];
