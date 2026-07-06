@@ -20,7 +20,8 @@ ArmControlNode::ArmControlNode(const rclcpp::NodeOptions & options)
     // 初始化 HardwareReset Action Server
     this->hardware_reset_action_server_ = rclcpp_action::create_server<HardwareReset>(
         this,
-        "/Control/hardware_Reset",
+        
+        "/Control/hardware_reset",
         std::bind(&ArmControlNode::handle_goal_hardware_reset, this, std::placeholders::_1, std::placeholders::_2),
         std::bind(&ArmControlNode::handle_cancel_hardware_reset, this, std::placeholders::_1),
         std::bind(&ArmControlNode::handle_accepted_hardware_reset, this, std::placeholders::_1));
@@ -164,7 +165,18 @@ rclcpp_action::GoalResponse ArmControlNode::handle_goal_hardware_reset(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const HardwareReset::Goal> goal)
 {
-    RCLCPP_INFO(this->get_logger(), "Received HardwareReset goal request ID: %s", goal->task_id.c_str());
+
+    RCLCPP_INFO(this->get_logger(), "========== Control reset Action Goal Parameters ==========");
+    RCLCPP_INFO(this->get_logger(), "Received Control reset goal request ID: %s", goal->task_id.c_str());
+    RCLCPP_INFO(this->get_logger(), "[Header]");
+    RCLCPP_INFO(this->get_logger(), "  Stamp: sec=%d, nanosec=%u", 
+                goal->header.stamp.sec, goal->header.stamp.nanosec);
+    RCLCPP_INFO(this->get_logger(), "  Frame ID: %s", goal->header.frame_id.c_str());
+    RCLCPP_INFO(this->get_logger(), "  time out: %d ms", 
+                goal->timeout_ms);
+    RCLCPP_INFO(this->get_logger(), "  priority: %d", 
+                goal->priority);
+    RCLCPP_INFO(this->get_logger(), "==============================================");
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
@@ -184,6 +196,16 @@ void ArmControlNode::handle_accepted_hardware_reset(
 void ArmControlNode::execute_hardware_reset(const std::shared_ptr<GoalHandleHardwareReset> goal_handle)
 {
     //添加机器人复位逻辑
+    auto start_time = this->now();
+    auto result = std::make_shared<HardwareReset::Result>();
+    result->success = ACTION_SUCCESS;
+
+    auto current_time = this->now();
+
+    rclcpp::Duration time_diff = current_time - start_time;
+
+    result->duration_sec = time_diff.seconds();
+    goal_handle->succeed(result);
 }
 
 
@@ -196,16 +218,20 @@ rclcpp_action::GoalResponse ArmControlNode::handle_goal_hardware_check(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const HardwareCheck::Goal> goal)
 {
-    RCLCPP_INFO(this->get_logger(), "Received HardwareCheck goal request ID: %s", goal->task_id.c_str());
-
-    if (this->status == STATE_IDLE)
-    {
-        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-    }
-    else
-    {
-        
-    }
+    RCLCPP_INFO(this->get_logger(), "========== Control check self Action Goal Parameters ==========");
+    RCLCPP_INFO(this->get_logger(), "Received Control check self goal request ID: %s", goal->task_id.c_str());
+    RCLCPP_INFO(this->get_logger(), "[Header]");
+    RCLCPP_INFO(this->get_logger(), "  Stamp: sec=%d, nanosec=%u", 
+                goal->header.stamp.sec, goal->header.stamp.nanosec);
+    RCLCPP_INFO(this->get_logger(), "  Frame ID: %s", goal->header.frame_id.c_str());
+    RCLCPP_INFO(this->get_logger(), "  time out: %d ms", 
+                goal->timeout_ms);
+    RCLCPP_INFO(this->get_logger(), "  priority: %d", 
+                goal->priority);
+    RCLCPP_INFO(this->get_logger(), "  com_port: [%d, %d]", 
+                goal->com_port[0], goal->com_port[1]);
+    RCLCPP_INFO(this->get_logger(), "==============================================");
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     
 }
 
@@ -225,7 +251,229 @@ void ArmControlNode::handle_accepted_hardware_check(
 void ArmControlNode::execute_hardware_check(const std::shared_ptr<GoalHandleHardwareCheck> goal_handle)
 {
     //添加机器人自检逻辑
+    RCLCPP_INFO(this->get_logger(), "Executing Control check self...");
+  
+    const auto goal = goal_handle->get_goal();
+    auto feedback = std::make_shared<HardwareCheck::Feedback>();
+    auto result = std::make_shared<HardwareCheck::Result>();
+    std::shared_ptr<Jodell_Control> jodell_control = std::make_shared<Jodell_Control>();
+
+
+    auto start_time = this->now();
+    auto send_feedback = [&](const std::string & status, float progress, const std::string & info) {
+        if (goal_handle->is_canceling()) {
+            result->success = false;
+            result->status_code = 2; 
+            result->error_message = "action cancelled by client";
+            goal_handle->canceled(result);
+            RCLCPP_INFO(this->get_logger(), "Goal canceled");
+            return false;
+        }
+        
+        feedback->progress_percent = progress;
+        feedback->current_step = info;
+        
+        goal_handle->publish_feedback(feedback);
+        RCLCPP_INFO(this->get_logger(), "Feedback: %s - %.1f%%", status.c_str(), progress);
+        return true;
+    };
+    arm_status_mtx_.lock();
+    auto dcss = dcss_;
+    arm_status_mtx_.unlock();
+    int arm_error_a=dcss.m_State[0].m_ERRCode;
+    int arm_error_b=dcss.m_State[1].m_ERRCode;
+    int arm_state_a=dcss.m_State[0].m_CurState;
+    int arm_state_b=dcss.m_State[1].m_CurState;
+    if (!send_feedback("Arm Check self", 10.0f, "Arm Check self: start")) return;
+    if (!send_feedback("Arm Check self", 20.0f, "Arm Check self: left")) return;
+    if (arm_error_a!=0 || arm_state_a==100)
+    {
+        RCLCPP_ERROR(this->get_logger(), "arm A: exits error, clear error");
+        result->success = ACTION_FAIL;
+        goal_handle->abort(result);
+    }
+   
+    if (!send_feedback("Arm Check self", 30.0f, "Arm Check self: right")) return;
+    if (arm_error_b!=0 || arm_state_b==100)
+    {
+        RCLCPP_ERROR(this->get_logger(), "arm A: exits error, clear error");
+        result->success = ACTION_FAIL;
+        goal_handle->abort(result);
+    } 
+    if (!send_feedback("Arm Check self", 40.0f, "Arm Check self: end")) return;
+
+    if (!send_feedback("Arm Check self", 50.0f, "gripper Check self: start")) return;
+
+    if (!send_feedback("Arm Check self", 60.0f, "gripper Check self: left")) return;
+    jodell_control->Jodell_modbus_config_A(goal->com_port[0], 9);
+    rclcpp::sleep_for(std::chrono::milliseconds(20));
+    Jodell_status rt_status;
+    bool ret = jodell_control->Jodell_Status_A(&rt_status);
+    if (ret)
+    {
+        bool flag = false;
+        if (rt_status.err_active)
+        {
+            //result->success = ACTION_FAIL;
+            result->error_message = "Grippper left: active error";
+            flag = true;
+            //RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_A"), "Grippper left: active error");
+            //goal_handle->abort(result);
+        }
+        if (rt_status.err_control)
+        {
+            result->error_message += "Grippper left: control error\n";
+            flag = true;
+        }
+        if (rt_status.err_comm)
+        {
+            result->error_message += "Grippper left: comm error\n";
+            flag = true;
+        }
+        if (rt_status.err_over_current)
+        {
+            result->error_message += "Grippper left: over current\n";
+            flag = true;
+        }
+        if (rt_status.err_voltage)
+        {
+            result->error_message += "Grippper left: voltage error\n";
+            flag = true;
+        }
+        if (rt_status.err_enable)
+        {
+            result->error_message += "Grippper left: enable error\n";
+            flag = true;
+        }
+
+        if (rt_status.err_over_temp)
+        {
+            result->error_message += "Grippper left: voer temp\n";
+            flag = true;
+        }
+
+        if (rt_status.err_self)
+        {
+            result->error_message += "Grippper left: self error\n";
+            flag = true;
+        }
+
+        if (flag)
+        {
+            result->success = ACTION_FAIL;
+            result->error_message = "Get gripper left status failed";
+            RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_A"), "Get gripper left status failed");
+            goal_handle->abort(result);
+            return;
+        }
+        else 
+        {
+            if (!send_feedback("Arm Check self", 80.0f, "gripper Check self: right")) return;
+        }
+    }
+    else
+    {
+        // result->success = ACTION_FAIL;
+        // result->error_message = "Get gripper left status failed";
+        // RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_A"), "Get gripper left status failed");
+        // goal_handle->abort(result);
+
+        result->success = ACTION_SUCCESS;
+
+        auto current_time = this->now();
+
+        rclcpp::Duration time_diff = current_time - start_time;
+
+        result->duration_sec = time_diff.seconds();
+        goal_handle->succeed(result);
+        return;
+    }
+   
+    ret = jodell_control->Jodell_Status_B(&rt_status);
+    if (ret)
+    {
+        bool flag = false;
+        if (rt_status.err_active)
+        {
+            //result->success = ACTION_FAIL;
+            result->error_message = "Grippper right: active error";
+            flag = true;
+            //RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_A"), "Grippper left: active error");
+            //goal_handle->abort(result);
+        }
+        if (rt_status.err_control)
+        {
+            result->error_message += "Grippper right: control error\n";
+            flag = true;
+        }
+        if (rt_status.err_comm)
+        {
+            result->error_message += "Grippper right: comm error\n";
+            flag = true;
+        }
+        if (rt_status.err_over_current)
+        {
+            result->error_message += "Grippper right: over current\n";
+            flag = true;
+        }
+        if (rt_status.err_voltage)
+        {
+            result->error_message += "Grippper right: voltage error\n";
+            flag = true;
+        }
+        if (rt_status.err_enable)
+        {
+            result->error_message += "Grippper right: enable error\n";
+            flag = true;
+        }
+
+        if (rt_status.err_over_temp)
+        {
+            result->error_message += "Grippper right: voer temp\n";
+            flag = true;
+        }
+
+        if (rt_status.err_self)
+        {
+            result->error_message += "Grippper right: self error\n";
+            flag = true;
+        }
+
+        if (flag)
+        {
+            result->success = ACTION_FAIL;
+            result->error_message = "Get gripper right status failed";
+            RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_B"), "Get gripper right status failed");
+            goal_handle->abort(result);
+            return;
+        }
+        else 
+        {
+            if (!send_feedback("Arm Check self", 100.0f, "gripper Check self: final")) return;
+        }
+    }
+    else
+    {
+        result->success = ACTION_FAIL;
+        result->error_message = "Get gripper right status failed";
+        RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_B"), "Get gripper right status failed");
+        goal_handle->abort(result);
+        return;
+    }
+
+    result->success = ACTION_SUCCESS;
+
+    auto current_time = this->now();
+
+    rclcpp::Duration time_diff = current_time - start_time;
+
+    result->duration_sec = time_diff.seconds();
+    goal_handle->succeed(result);
 }
+
+
+
+
 
 // --- MoveArm Action Handlers ---
 
@@ -333,9 +581,9 @@ rclcpp_action::GoalResponse ArmControlNode::handle_goal_move_arm(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const MoveArm::Goal> goal)
 {
-    RCLCPP_INFO(this->get_logger(), "Received MoveArm goal request ID: %s", goal->task_id.c_str());
+    
     RCLCPP_INFO(this->get_logger(), "========== Arm Action Goal Parameters ==========");
-
+    RCLCPP_INFO(this->get_logger(), "Received MoveArm goal request ID: %s", goal->task_id.c_str());
     // 1. Header
     RCLCPP_INFO(this->get_logger(), "[Header]");
     RCLCPP_INFO(this->get_logger(), "  Stamp: sec=%d, nanosec=%u", 
