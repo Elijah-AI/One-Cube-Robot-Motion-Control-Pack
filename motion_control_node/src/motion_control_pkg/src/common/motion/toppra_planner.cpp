@@ -98,7 +98,25 @@ TrajectoryResult ToppraPlanner::plan(const std::vector<Waypoint>& waypoints)
 
     // 4. 生成参数化
     const auto& data = opt.getParameterizationData();
-    toppra::parametrizer::Spline param(path, data.gridpoints, data.controllable_sets.col(1));
+
+   int stride = 4;
+   std::vector<double> grid_vec;
+   std::vector<double> vel_sq_vec;
+
+   for (size_t i = 0; i < data.gridpoints.size(); i += stride) {
+    grid_vec.push_back(data.gridpoints(i));
+    vel_sq_vec.push_back(data.controllable_sets(i, 1));
+   }
+
+  if (grid_vec.back() != data.gridpoints(data.gridpoints.size() - 1)) {
+    grid_vec.push_back(data.gridpoints(data.gridpoints.size() - 1));
+    vel_sq_vec.push_back(data.controllable_sets(data.gridpoints.size() - 1, 1));
+   }
+
+   Eigen::VectorXd sparse_grid = Eigen::Map<Eigen::VectorXd>(grid_vec.data(), grid_vec.size());
+   Eigen::VectorXd sparse_vel_sq = Eigen::Map<Eigen::VectorXd>(vel_sq_vec.data(), vel_sq_vec.size());
+
+   toppra::parametrizer::Spline param(path, sparse_grid, sparse_vel_sq);
     if (!param.validate())
         return res;
 
