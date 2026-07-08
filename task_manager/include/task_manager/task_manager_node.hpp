@@ -11,9 +11,9 @@
 #include "task_manager/task_config_parser.hpp"
 #include "task_manager/modbus_slave.hpp"
 #include "task_manager/task_action_client.hpp"
-#include "safety_interfaces/msg/heartbeat.hpp"
-#include "safety_interfaces/msg/node_status.hpp"
-#include "safety_interfaces/srv/get_system_status.hpp"
+#include "com_interfaces/msg/heartbeat.hpp"
+#include "com_interfaces/msg/node_status.hpp"
+#include "com_interfaces/srv/get_system_status.hpp"
 #include <chrono>
 #include <unordered_map>
 #include <atomic>
@@ -21,9 +21,9 @@
 
 namespace task_mgr
 {
-using HeartbeatMsg = safety_interfaces::msg::Heartbeat;
-using NodeStatusMsg = safety_interfaces::msg::NodeStatus;
-using GetSystemStatusSrv = safety_interfaces::srv::GetSystemStatus;
+using HeartbeatMsg = com_interfaces::msg::Heartbeat;
+using NodeStatusMsg = com_interfaces::msg::NodeStatus;
+using GetSystemStatusSrv = com_interfaces::srv::GetSystemStatus;
 
 class TaskManagerNode : public rclcpp::Node
 {
@@ -36,12 +36,13 @@ private:
   bool init_config();
   bool init_modbus();
   void boot_check_system_state();
+  void boot_reset_system_state();
   void run_boot_task(const std::vector<task_cfg::AtomicAction>& seq);
   BTNode::Ptr create_action_node(const task_cfg::AtomicAction& action);
   void heartbeat_timer_cb();
   rclcpp::TimerBase::SharedPtr hb_timer_;
   rclcpp::Publisher<HeartbeatMsg>::SharedPtr hb_pub_;
-
+  void request_result_callback(rclcpp::Client<GetSystemStatusSrv>::SharedFuture result_future);
   void publish_state_change();
   rclcpp::Publisher<NodeStatusMsg>::SharedPtr state_pub_;
 

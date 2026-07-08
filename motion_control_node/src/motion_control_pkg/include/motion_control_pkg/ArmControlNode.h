@@ -8,16 +8,15 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include "Modbus_Jodell.h"
 // 引入自动生成的Action头文件
-#include "motion_control_pkg/action/pick_and_place.hpp"
-#include "motion_control_pkg/action/hardware_reset.hpp"
-#include "motion_control_pkg/action/hardware_check.hpp"
-#include "motion_control_pkg/action/move_arm.hpp"
-#include "motion_control_pkg/action/control_gripper.hpp"
-#include "motion_control_pkg/action/adjust_base_pose.hpp"
-#include "motion_control_pkg/msg/heart_beat.hpp"
-#include "motion_control_pkg/msg/device_status.hpp"
-#include "motion_control_pkg/msg/motor_status.hpp"
-
+#include "com_interfaces/action/pick_and_place.hpp"
+#include "com_interfaces/action/hardware_reset.hpp"
+#include "com_interfaces/action/hardware_check.hpp"
+#include "com_interfaces/action/move_arm.hpp"
+#include "com_interfaces/action/control_gripper.hpp"
+#include "com_interfaces/action/adjust_base_pose.hpp"
+#include "com_interfaces/msg/heart_beat.hpp"
+#include "com_interfaces/msg/node_status.hpp"
+#include "com_interfaces/msg/motor_status.hpp"
 #include "traj_planner.h"
 #include "ompl_wrapper.h"
 #include "planner_factory.h"
@@ -90,6 +89,7 @@ enum
     STATE_ERROR       = 8    // 异常故障
 }DeviceState;
 
+
 const std::vector<std::string> MotorName = {"Joint1_L", "Joint2_L", "Joint3_L", "Joint4_L", "Joint5_L",
                                             "Joint6_L", "Joint7_L", "Joint1_R", "Joint2_R", "Joint3_R",
                                             "Joint4_R", "Joint5_R", "Joint6_R", "Joint7_R"}; 
@@ -97,33 +97,33 @@ const std::vector<std::string> MotorName = {"Joint1_L", "Joint2_L", "Joint3_L", 
 class ArmControlNode : public rclcpp::Node
 {
 public:
-    using PickAndPlace = motion_control_pkg::action::PickAndPlace;
+    using PickAndPlace = com_interfaces::action::PickAndPlace;
     using GoalHandlePickAndPlace = rclcpp_action::ServerGoalHandle<PickAndPlace>;
 
-    using HardwareReset = motion_control_pkg::action::HardwareReset;
+    using HardwareReset = com_interfaces::action::HardwareReset;
     using GoalHandleHardwareReset = rclcpp_action::ServerGoalHandle<HardwareReset>;
 
-    using HardwareCheck = motion_control_pkg::action::HardwareCheck;
+    using HardwareCheck = com_interfaces::action::HardwareCheck;
     using GoalHandleHardwareCheck = rclcpp_action::ServerGoalHandle<HardwareCheck>;
 
-    using MoveArm = motion_control_pkg::action::MoveArm;
+    using MoveArm = com_interfaces::action::MoveArm;
     using GoalHandleMoveArm = rclcpp_action::ServerGoalHandle<MoveArm>;
 
-    using ControlGripper = motion_control_pkg::action::ControlGripper;
+    using ControlGripper = com_interfaces::action::ControlGripper;
     using GoalHandleControlGripper = rclcpp_action::ServerGoalHandle<ControlGripper>;
 
-    using AdjustBasePose = motion_control_pkg::action::AdjustBasePose;
+    using AdjustBasePose = com_interfaces::action::AdjustBasePose;
     using GoalHandleAdjustBasePose = rclcpp_action::ServerGoalHandle<AdjustBasePose>;
 
-    using HeartBeat = motion_control_pkg::msg::HeartBeat;
-    using DeviceStatus = motion_control_pkg::msg::DeviceStatus;
+    using HeartBeat = com_interfaces::msg::HeartBeat;
+    using NodeStatus = com_interfaces::msg::NodeStatus;
  
-    using MotorStatus = motion_control_pkg::msg::MotorStatus;
+    using MotorStatus = com_interfaces::msg::MotorStatus;
 
     explicit ArmControlNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
     void log_jodell_status(rclcpp::Logger logger, const Jodell_status& status);
-
+    
 private:
     // --- PickAndPlace Action Handlers ---
     rclcpp_action::GoalResponse handle_goal_pick_and_place(
@@ -223,7 +223,7 @@ private:
     rclcpp_action::Server<ControlGripper>::SharedPtr control_gripper_action_server_;
     rclcpp_action::Server<AdjustBasePose>::SharedPtr adjust_base_pose_action_server_;
     rclcpp::Publisher<HeartBeat>::SharedPtr heart_beat_pub_;
-    rclcpp::Publisher<DeviceStatus>::SharedPtr device_status_pub_;
+    rclcpp::Publisher<NodeStatus>::SharedPtr device_status_pub_;
     rclcpp::Publisher<MotorStatus>::SharedPtr motor_status_pub_;
     MotorStatus motor_status_msg_;
     rclcpp::TimerBase::SharedPtr hear_beat_timer_;
@@ -231,7 +231,7 @@ private:
     //rclcpp::TimerBase::SharedPtr joint_command_timer_;
     uint8_t status;
     int64_t error_flag;
-   
+    Eigen::Matrix4d result_matrix;
     //天机Dural Arm data strcture
     FX_INT32L type_[2];
     FX_DOUBLE grv_[2][3];

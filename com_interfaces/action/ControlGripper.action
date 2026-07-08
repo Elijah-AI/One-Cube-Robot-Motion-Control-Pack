@@ -1,0 +1,25 @@
+# Goal
+std_msgs/Header header
+string task_id
+uint8 gripper_id
+uint8[] position     # 改为动态数组，或在代码中确保传入长度为2
+uint8[] speed
+uint8[] max_torque
+uint8[] com_port
+bool block_until_complete
+int64 timeout_ms
+
+---
+# Result
+bool success
+uint8[] final_position
+uint8[] final_torque
+string error_message
+
+---
+# Feedback
+uint8[] current_position
+uint8[] current_torque
+uint8[] current_speed
+float32 progress_rate
+std_msgs/Header header

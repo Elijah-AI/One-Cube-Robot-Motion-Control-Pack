@@ -24,19 +24,8 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(com_interfaces REQUIRED)
 
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "action/PickAndPlace.action"
-  "action/HardwareReset.action"
-  "action/HardwareCheck.action"
-  "action/MoveArm.action"
-  "action/ControlGripper.action"
-  "action/AdjustBasePose.action"
-  "msg/HeartBeat.msg"
-  "msg/DeviceStatus.msg"
-  "msg/MotorStatus.msg"
-  DEPENDENCIES std_msgs geometry_msgs sensor_msgs
-)
 
 # 如果其他模块需要，在此添加更多 find_package，例如:
 # find_package(geometry_msgs REQUIRED)
@@ -234,13 +223,9 @@ ament_target_dependencies(motion_control_node
     rclcpp
     rclcpp_action
     std_msgs
-    geometry_msgs)
+    geometry_msgs
+    com_interfaces)
 
-# 链接生成的 Action 接口库
-# 注意：这一步至关重要，否则找不到 action 的头文件
-rosidl_target_interfaces(motion_control_node
-  ${PROJECT_NAME} "rosidl_typesupport_cpp"
-)
 
 
 # 2. 第三方库
@@ -307,10 +292,6 @@ install(DIRECTORY include/
     DESTINATION include
 )
 
-# 安装 action 文件（可选，但推荐，以便其他包引用）
-install(DIRECTORY action/
-  DESTINATION share/${PROJECT_NAME}/action
-)
 
 # 导出包配置
 ament_package()

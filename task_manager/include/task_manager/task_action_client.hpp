@@ -11,21 +11,30 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
 // 你的 Action 消息头
-//#include "task_manager/action/vision_detection.hpp"
-#include "vision_detection_action/action/vision_detection.hpp"
+#include "com_interfaces/action/vision_detection.hpp"
+#include "com_interfaces/action/vision_check_self.hpp"
 
-#include "motion_control_pkg/action/control_gripper.hpp"
-#include "motion_control_pkg/action/move_arm.hpp"
+#include "com_interfaces/action/control_gripper.hpp"
+#include "com_interfaces/action/hardware_check.hpp"
+#include "com_interfaces/action/hardware_reset.hpp"
+#include "com_interfaces/action/move_arm.hpp"
 
 
 namespace task_act
 {
-using VisionDet = vision_detection_action::action::VisionDetection;
-using MoveArm = motion_control_pkg::action::MoveArm;
-using CtrlGripper = motion_control_pkg::action::ControlGripper;
+using VisionDet = com_interfaces::action::VisionDetection;
+using VisionCheckSelf = com_interfaces::action::VisionCheckSelf;
+using ControlCheckSelf = com_interfaces::action::HardwareCheck;
+using ControlReset     = com_interfaces::action::HardwareReset;
+using MoveArm = com_interfaces::action::MoveArm;
+using CtrlGripper = com_interfaces::action::ControlGripper;
 using GoalHandleVisionDetection = rclcpp_action::ClientGoalHandle<VisionDet>;
 using GoalHandleMoveArm = rclcpp_action::ClientGoalHandle<MoveArm>;
 using GoalHandleCtrlGripper = rclcpp_action::ClientGoalHandle<CtrlGripper>;
+using GoalHandleVisionCheckSelf = rclcpp_action::ClientGoalHandle<VisionCheckSelf>;
+using GoalHandleControlCheckSelf = rclcpp_action::ClientGoalHandle<ControlCheckSelf>;
+using GoalHandleHardwareReset = rclcpp_action::ClientGoalHandle<ControlReset>;
+
 // 动作全局状态枚举
 enum class ActionRunState
 {
@@ -58,6 +67,14 @@ public:
     bool call_gripper(
         const std::string& task_id, const task_cfg::GripperParam& param);
 
+    bool call_vision_reset(const std::string& task_id, const task_cfg::VisionResetParam& param);
+
+    bool call_vision_check_self(const std::string& task_id, const task_cfg::VisionCheckSelfParam& param);
+
+    bool call_control_reset(const std::string& task_id, const task_cfg::ControlResetParam& param);
+
+    bool call_control_check_self(const std::string& task_id, const task_cfg::ControlCheckSelfParam& param);
+
     // 统一入口：根据 AtomicAction 分发执行
     bool send_goal(const task_cfg::AtomicAction& act);
     void StartTimer(uint32_t ms);
@@ -77,7 +94,7 @@ public:
 private:
     rclcpp::Node::SharedPtr node_;
     std::shared_future<std::shared_ptr<GoalHandleCtrlGripper> >  gripper_send_future_;
-    //std::future<std::shared_ptr<rclcpp_action::ClientGoalHandle<motion_control_pkg::action::ControlGripper>>> gripper_send_future_;
+    //std::future<std::shared_ptr<rclcpp_action::ClientGoalHandle<com_interfaces::action::ControlGripper>>> gripper_send_future_;
     //std::future<typename rclcpp_action::ClientGoalHandle<CtrlGripper>::SharedPtr> gripper_send_future_;
     void goal_response_callback(GoalHandleVisionDetection::SharedPtr goal_handle);
     void feedback_callback(GoalHandleVisionDetection::SharedPtr, const std::shared_ptr<const VisionDet::Feedback> feedback);
@@ -91,11 +108,31 @@ private:
     void gripper_goal_response_callback(GoalHandleCtrlGripper::SharedPtr goal_handle);
     void gripper_feedback_callback(GoalHandleCtrlGripper::SharedPtr, const std::shared_ptr<const GoalHandleCtrlGripper::Feedback> feedback);
     void gripper_result_callback(const GoalHandleCtrlGripper::WrappedResult & result);
+
+
+    void vision_self_goal_response_callback(GoalHandleVisionCheckSelf::SharedPtr goal_handle);
+    void vision_self_feedback_callback(GoalHandleVisionCheckSelf::SharedPtr, const std::shared_ptr<const GoalHandleVisionCheckSelf::Feedback> feedback);
+    void vision_self_result_callback(const GoalHandleVisionCheckSelf::WrappedResult & result);
+
+
+
+    void control_self_goal_response_callback(GoalHandleControlCheckSelf::SharedPtr goal_handle);
+    void control_self_feedback_callback(GoalHandleControlCheckSelf::SharedPtr, const std::shared_ptr<const GoalHandleControlCheckSelf::Feedback> feedback);
+    void control_self_result_callback(const GoalHandleControlCheckSelf::WrappedResult & result);
+
+
+    void control_reset_goal_response_callback(GoalHandleHardwareReset::SharedPtr goal_handle);
+    void control_reset_feedback_callback(GoalHandleHardwareReset::SharedPtr, const std::shared_ptr<const GoalHandleHardwareReset::Feedback> feedback);
+    void control_reset_result_callback(const GoalHandleHardwareReset::WrappedResult & result);
+
+
     // 三类 Action 客户端
     rclcpp_action::Client<VisionDet>::SharedPtr vision_client_;
     rclcpp_action::Client<MoveArm>::SharedPtr arm_client_;
     rclcpp_action::Client<CtrlGripper>::SharedPtr gripper_client_;
-
+    rclcpp_action::Client<VisionCheckSelf>::SharedPtr vision_check_self_client_;
+    rclcpp_action::Client<ControlCheckSelf>::SharedPtr control_check_self_client_;
+    rclcpp_action::Client<ControlReset>::SharedPtr control_reset_client_;
     // 动作执行超时定时器
     //rclcpp::TimerBase::SharedPtr action_time_out_timer_;
 

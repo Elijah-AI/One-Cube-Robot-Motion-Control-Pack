@@ -1,0 +1,14 @@
+#
+std_msgs/Header header
+string task_id                      # 唯一请求ID
+int32 priority                      # 优先级
+int64 timeout_ms                    # 超时时长
+---
+bool success                        # 是否成功
+uint8 status_code                   # 详细状态码: # 0: OK 1: FAILED (硬件故障) 2: TIMEOUT (超时未响应) 3: BUSY (正在执行其他高优先级任务)
+string error_message                # 详细错误描述 (e.g., "Goal blocked by dynamic obstacle")
+float64 execution_time              # 执行时长
+---
+float32 progress_percent            # 进度 (0-100%)
+string current_step                 # 当前步骤描述，如 "Checking voltage...", "Calibrating gyro..."
+

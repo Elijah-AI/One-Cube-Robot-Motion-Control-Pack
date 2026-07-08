@@ -1,0 +1,5 @@
+string request_id             # 唯一请求ID，用于日志追踪和匹配异步回调
+std_msgs/Header header        # 时间戳
+---
+int8 status                   # 核心字段: 0:未知状态，1:初始化状态，2：空闲状态，3：异常状态,4：急停状态。
+int64 error_flag              # 详细定义待更新。

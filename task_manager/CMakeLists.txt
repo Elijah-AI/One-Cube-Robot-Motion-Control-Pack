@@ -13,11 +13,7 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(vision_detection_action REQUIRED) 
-find_package(motion_control_pkg REQUIRED)
-
-# 关键修改：添加对 safety_interfaces 的依赖
-find_package(safety_interfaces REQUIRED)
+find_package(com_interfaces REQUIRED)
 
 # libmodbus /usr/include/modbus 适配
 include_directories("/usr/include")
@@ -52,9 +48,7 @@ ament_target_dependencies(task_manager_node
   std_msgs 
   geometry_msgs 
   sensor_msgs 
-  vision_detection_action 
-  motion_control_pkg
-  safety_interfaces  # 关键：添加 safety_interfaces 依赖
+  com_interfaces
 )
 
 # 安装规则

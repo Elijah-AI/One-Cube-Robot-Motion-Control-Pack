@@ -33,6 +33,8 @@ public:
 
   using WriteRegCb = std::function<void(RegAddr addr, RegValue old_val, RegValue new_val)>;
   void register_write_callback(WriteRegCb cb);
+  RegAddr get_regaddr();
+  void set_regaddr(RegAddr addr);
 
 private:
   std::string listen_ip_;
@@ -42,7 +44,7 @@ private:
   std::atomic<bool> run_flag_{false};
   std::thread server_thread_;
   WriteRegCb write_cb_;
-
+  RegAddr real_reg_addr_;
   modbus_t* ctx_ = nullptr;
   int server_fd_ = -1;
   std::mutex reg_mutex_;  // 用于保护 holding_regs_ 的访问

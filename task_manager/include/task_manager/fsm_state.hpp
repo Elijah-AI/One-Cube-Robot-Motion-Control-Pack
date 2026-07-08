@@ -21,13 +21,14 @@ enum class SystemState : int8_t
 
 enum ErrorBitMask : uint64_t
 {
-  ERR_MODBUS_FAULT       = 1ULL << 0,
-  ERR_VISION_TIMEOUT     = 1ULL << 1,
-  ERR_ARM_PLAN_FAIL      = 1ULL << 2,
-  ERR_GRIPPER_FAULT      = 1ULL << 3,
-  ERR_CONFIG_PARSE_FAIL  = 1ULL << 4,
-  ERR_BT_EXEC_ERROR      = 1ULL << 5,
-  ERR_SERVICE_TIMEOUT    = 1ULL << 6
+  ERR_EMERGENCY          = 1ULL << 0,
+  ERR_MODBUS_FAULT       = 1ULL << 1,
+  ERR_VISION_TIMEOUT     = 1ULL << 2,
+  ERR_ARM_PLAN_FAIL      = 1ULL << 3,
+  ERR_GRIPPER_FAULT      = 1ULL << 4,
+  ERR_CONFIG_PARSE_FAIL  = 1ULL << 5,
+  ERR_BT_EXEC_ERROR      = 1ULL << 6,
+  ERR_SERVICE_TIMEOUT    = 1ULL << 7
 };
 
 std::string state_to_str(SystemState state);

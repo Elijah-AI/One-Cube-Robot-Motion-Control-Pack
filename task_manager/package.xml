@@ -16,13 +16,9 @@
   <depend>geometry_msgs</depend>
   <depend>builtin_interfaces</depend>
   
-  <!-- 关键：添加对 safety_interfaces 的依赖 -->
-  <depend>safety_interfaces</depend>
+  <!-- 关键：添加对 com_interfaces 的依赖 -->
+  <depend>com_interfaces</depend>
   
-  <!-- 添加其他自定义包的依赖 -->
-  <depend>vision_detection_action</depend>
-  <depend>motion_control_pkg</depend>
-
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   

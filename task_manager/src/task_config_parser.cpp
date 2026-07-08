@@ -16,6 +16,7 @@ bool TaskConfigParser::load_config(const std::string& file_path, GlobalConfig& o
     }
 
     out_cfg.node_id = root["node_id"].as<int32_t>();
+    RCLCPP_ERROR(rclcpp::get_logger("load_config"), "out_cfg.node_id: %d", out_cfg.node_id);
     auto mb_node = root["modbus_slave"];
     out_cfg.modbus_listen_ip = mb_node["listen_ip"].as<std::string>();
     out_cfg.modbus_port = mb_node["listen_port"].as<uint16_t>();
@@ -72,7 +73,6 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
   else if(act.action_type == "gripper_ctrl")
   {
     act.gripper_param.gripper_id = p["gripper_id"].as<uint8_t>();
-    
     act.gripper_param.com_port = p["comport"].as<std::vector<uint8_t>>();
     act.gripper_param.position = p["position"].as<std::vector<uint8_t>>();
     RCLCPP_INFO(rclcpp::get_logger("act.gripper_param.position size"), "%d", act.gripper_param.position.size());
@@ -80,6 +80,23 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
     act.gripper_param.max_torque = p["max_torque"].as<std::vector<uint8_t>>();
     act.gripper_param.block = p["block"].as<bool>();
     act.gripper_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+  }
+  else if (act.action_type == "vision_check_self")
+  {
+    act.vision_check_self_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+  }
+  else if (act.action_type == "control_check_self")
+  {
+    act.control_check_self_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+    act.control_check_self_param.com_port = p["comport"].as<std::vector<uint8_t>>();
+  }
+  else if (act.action_type == "control_reset")
+  {
+    act.control_reset_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+  }
+  else if (act.action_type == "vision_reset")
+  {
+    act.vision_reset_param.timeout_ms = p["timeout_ms"].as<int64_t>();
   }
   return true;
 }

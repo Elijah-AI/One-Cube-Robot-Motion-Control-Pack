@@ -64,13 +64,13 @@ ArmControlNode::ArmControlNode(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(this->get_logger(), "Action Servers started.");
 
     this->heart_beat_pub_ = this->create_publisher<HeartBeat>("/SafeNode/heartbeat", 10);
-    this->device_status_pub_ = this->create_publisher<DeviceStatus>("/SafeNode/status", 10);
+    this->device_status_pub_ = this->create_publisher<NodeStatus>("/SafeNode/status", 10);
     this->status = STATE_INIT;
     this->error_flag = 0;
 
     hear_beat_timer_ = create_wall_timer(1000ms,
     std::bind(&ArmControlNode::heart_beat_cb, this));
-    auto ds_msg = motion_control_pkg::msg::DeviceStatus();
+    auto ds_msg = com_interfaces::msg::NodeStatus();
     ds_msg.node_id = MOTION_CONTROL;
     ds_msg.status = this->status;
     ds_msg.header.stamp = this->get_clock()->now();
@@ -103,7 +103,7 @@ ArmControlNode::ArmControlNode(const rclcpp::NodeOptions & options)
     this->motor_status_pub_ = this->create_publisher<MotorStatus>("/Control/MotorInfo",10);
     joint_feedback_timer_ = create_wall_timer(250ms,
     std::bind(&ArmControlNode::motor_statu_cb, this));
-    motor_status_msg_ = motion_control_pkg::msg::MotorStatus();
+    motor_status_msg_ = com_interfaces::msg::MotorStatus();
     init_motor_status();
     MotionConstraint cons;
     cons.max_vel = l_v_limit_;
@@ -480,7 +480,7 @@ void ArmControlNode::execute_hardware_check(const std::shared_ptr<GoalHandleHard
  bool ArmControlNode::init_arm_params()
  {
     bool res = false;
-    if (LOADMvCfg((char*)"/home/wang/ros2_ws/src/motion_control_pkg/config/ccs_m6_40.MvKDCfg", type_, grv_, dh_, pnva_, bd_, mass_, mcp_, i_) == FX_FALSE)
+    if (LOADMvCfg((char*)"/config/ccs_m6_40.MvKDCfg", type_, grv_, dh_, pnva_, bd_, mass_, mcp_, i_) == FX_FALSE)
     {
          std::cout<<"1*****"<<std::endl;
        return res;
@@ -610,7 +610,24 @@ rclcpp_action::GoalResponse ArmControlNode::handle_goal_move_arm(
                 goal->target_pose.pose.orientation.y,
                 goal->target_pose.pose.orientation.z,
                 goal->target_pose.pose.orientation.w);
+    // WorldPose Pose;
+    // Pose.x = goal->target_pose.pose.position.x;
+    // Pose.y = goal->target_pose.pose.position.y;
+    // Pose.z = goal->target_pose.pose.position.z;
+    // Pose.qx = goal->target_pose.pose.orientation.x;
+    // Pose.qy = goal->target_pose.pose.orientation.x;
+    // Pose.qz = goal->target_pose.pose.orientation.x;
+    // Pose.qw= goal->target_pose.pose.orientation.x;
+    // result_matrix = convertWorldToLeftArmBase(Pose, false, false, false);
 
+    // RCLCPP_INFO(this->get_logger(), "Matrix Row 0: [%f, %f, %f, %f]", 
+    //             result_matrix(0,0), result_matrix(0,1), result_matrix(0,2), result_matrix(0,3));
+    // RCLCPP_INFO(this->get_logger(), "Matrix Row 1: [%f, %f, %f, %f]", 
+    //             result_matrix(1,0), result_matrix(1,1), result_matrix(1,2), result_matrix(1,3));
+    // RCLCPP_INFO(this->get_logger(), "Matrix Row 2: [%f, %f, %f, %f]", 
+    //             result_matrix(2,0), result_matrix(2,1), result_matrix(2,2), result_matrix(2,3));
+    // RCLCPP_INFO(this->get_logger(), "Matrix Row 3: [%f, %f, %f, %f]", 
+    //             result_matrix(3,0), result_matrix(3,1), result_matrix(3,2), result_matrix(3,3));
     // 4. Safety Distance (float32[])
     RCLCPP_INFO(this->get_logger(), "[Safety Distance]");
     if (goal->safety_distance.empty()) {
@@ -642,8 +659,68 @@ rclcpp_action::GoalResponse ArmControlNode::handle_goal_move_arm(
                 goal->env_point_cloud.data.size());
 
     RCLCPP_INFO(this->get_logger(), "==============================================");
+
+
+    
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
+
+
+
+
+// /**
+//  * @brief 将世界坐标系下的位姿转换为左臂坐标系下的 4x4 齐次变换矩阵
+//  * 
+//  * @param world_pose 输入：世界坐标系下的 XYZ 和四元数
+//  * @return Eigen::Matrix4d 输出：物品在左臂坐标系下的 4x4 变换矩阵
+//  */
+
+// Eigen::Matrix4d ArmControlNode::convertWorldToLeftArmBase(const WorldPose& pose_world, bool flip_x = false,  bool flip_y = false,  bool flip_z = false) 
+// {
+    
+
+//     Eigen::Quaterniond quat_w(pose_world.qw, pose_world.qx, pose_world.qy, pose_world.qz);
+//     quat_w.normalize();
+    
+//     Eigen::Matrix4d T_obj_world = Eigen::Matrix4d::Identity();
+//     T_obj_world.block<3,3>(0,0) = quat_w.toRotationMatrix();
+//     T_obj_world(0,3) = pose_world.x;
+//     T_obj_world(1,3) = pose_world.y;
+//     T_obj_world(2,3) = pose_world.z;
+
+//     // 2. 构建固定的 世界->机械臂 变换矩阵 (T_arm_world)
+//     Eigen::Matrix3d R_arm_world;
+//     R_arm_world << 1,  0,  0,
+//                    0,  0, -1,
+//                    0,  1,  0;
+
+//     Eigen::Vector3d t_world_origin(0.0, 40.0, 1121.0);
+//     Eigen::Vector3d t_arm_world = -R_arm_world * t_world_origin;
+
+//     Eigen::Matrix4d T_arm_world = Eigen::Matrix4d::Identity();
+//     T_arm_world.block<3,3>(0,0) = R_arm_world;
+//     T_arm_world.block<3,1>(0,3) = t_arm_world;
+
+//     // 3. 计算初步结果: T_obj_arm = T_arm_world * T_obj_world
+//     Eigen::Matrix4d T_obj_arm = T_arm_world * T_obj_world;
+
+//     // 4. 【可选】镜像/翻转校正
+//     // 如果视觉识别的姿态左右颠倒，或者夹爪安装方向需要调整，可以通过翻转旋转矩阵的列向量来实现
+//     // 旋转矩阵的列向量分别代表机械臂坐标系的 X, Y, Z 轴在世界/物体坐标系中的方向
+//     // 注意：这里是对最终结果的旋转部分进行修正，适用于校正“夹爪朝向”
+    
+//     Eigen::Matrix3d R_corrected = T_obj_arm.block<3,3>(0,0);
+    
+//     if (flip_x) R_corrected.col(0) = -R_corrected.col(0);
+//     if (flip_y) R_corrected.col(1) = -R_corrected.col(1);
+//     if (flip_z) R_corrected.col(2) = -R_corrected.col(2);
+
+//     // 重新组装矩阵
+//     T_obj_arm.block<3,3>(0,0) = R_corrected;
+
+//     return T_obj_arm;
+// }
+
 
 rclcpp_action::CancelResponse ArmControlNode::handle_cancel_move_arm(
     const std::shared_ptr<GoalHandleMoveArm> goal_handle)
@@ -1481,7 +1558,7 @@ void ArmControlNode::control_gripper_result(Jodell_status *rt_status, std::share
 void ArmControlNode::heart_beat_cb()
 {
     //每隔一秒发送一次心跳报文
-    auto hb_msg = motion_control_pkg::msg::HeartBeat();
+    auto hb_msg = com_interfaces::msg::HeartBeat();
     hb_msg.node_id = MOTION_CONTROL;
     hb_msg.header.stamp = this->get_clock()->now();
     heart_beat_pub_->publish(hb_msg);

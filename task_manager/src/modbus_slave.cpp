@@ -67,20 +67,24 @@ RegValue ModbusTcpSlave::get_reg(RegAddr addr)
 void ModbusTcpSlave::set_reg(RegAddr addr, RegValue val)
 {
   std::lock_guard<std::mutex> lock(reg_mutex_);
-  RegValue old = 0;
-  auto iter = holding_regs_.find(addr);
-  if (iter != holding_regs_.end())
-  {
-    old = iter->second;
-  }
+  
   holding_regs_[addr] = val;
-  if (write_cb_)
-    write_cb_(addr, old, val);
+  RCLCPP_INFO(logger_, "----------set_reg addr: %ld, value: %ld--------------", addr, val);
 }
 
 void ModbusTcpSlave::register_write_callback(WriteRegCb cb)
 {
   write_cb_ = std::move(cb);
+}
+
+RegAddr ModbusTcpSlave::get_regaddr()
+{
+  return real_reg_addr_;
+}
+
+void ModbusTcpSlave::set_regaddr(RegAddr addr)
+{
+  real_reg_addr_ = addr;
 }
 
 void ModbusTcpSlave::server_loop()
@@ -154,15 +158,21 @@ void ModbusTcpSlave::handle_modbus_request(uint8_t* query, int query_len)
     uint16_t write_val = (query[10] << 8) | query[11];
     RCLCPP_INFO(logger_, "write_val = %d", write_val);
     // 将逻辑地址转换为实际寄存器地址
-    RegAddr real_reg_addr = logic_addr + 40001;
-    RCLCPP_INFO(logger_, "set_reg %d %d", real_reg_addr, write_val);
+    real_reg_addr_ = logic_addr + 40001;
+    RCLCPP_INFO(logger_, "set_reg %d %d", real_reg_addr_, write_val);
+
+
     // 写入寄存器
-    set_reg(real_reg_addr, write_val);
-    
-    RCLCPP_INFO(logger_, "Write reg %u value: %u", real_reg_addr, write_val);
+    set_reg(real_reg_addr_, write_val);
+    if (write_cb_)
+    write_cb_(real_reg_addr_, 0, write_val);
+
+    set_reg(real_reg_addr_, 0);
+    RCLCPP_INFO(logger_, "Write reg %u value: %u", real_reg_addr_, write_val);
     
     // 对于写操作，直接使用 modbus_reply 回复
     rc = modbus_reply(ctx_, query, query_len, mb_mapping);
+    
   }
   else if (func == MODBUS_FC_READ_HOLDING_REGISTERS)
   {

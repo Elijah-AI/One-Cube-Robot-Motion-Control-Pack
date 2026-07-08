@@ -44,12 +44,38 @@ struct GripperParam
   int64_t timeout_ms;
 };
 
+struct VisionCheckSelfParam
+{
+  int64_t timeout_ms;
+};
+
+struct ControlCheckSelfParam
+{
+  int64_t timeout_ms;
+  std::vector<uint8_t> com_port;
+};
+
+
+struct VisionResetParam
+{
+  int64_t timeout_ms;
+};
+
+struct ControlResetParam
+{
+  int64_t timeout_ms;
+};
+
 struct AtomicAction
 {
   std::string action_type;
   VisionActionParam vision_param;
   MoveArmParam arm_param;
   GripperParam gripper_param;
+  VisionCheckSelfParam vision_check_self_param;
+  ControlCheckSelfParam control_check_self_param;
+  VisionResetParam vision_reset_param;
+  ControlResetParam control_reset_param;
 };
 
 struct TaskMapItem
