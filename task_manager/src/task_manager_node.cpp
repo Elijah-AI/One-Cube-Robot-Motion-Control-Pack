@@ -1,4 +1,17 @@
+// Copyright (c) 2026 Robot Control System
+// All rights reserved.
+//
+// Author: gene.wang
+// Date: 2026
+//
+// Description:
+// 任务管理器 ROS2 节点实现。
+// 系统核心节点，负责初始化配置、启动 Modbus 从站、
+// 管理有限状态机（FSM）、调度行为树执行任务、
+// 发布心跳和状态信息，以及处理 Modbus 寄存器触发任务。
+
 #include "task_manager/task_manager_node.hpp"
+#include "task_manager/log_helper.hpp"
 #include <sstream>
 #include <uuid/uuid.h>
 
@@ -8,9 +21,6 @@ TaskManagerNode::TaskManagerNode()
 : Node("task_manager_node"), current_state_(task_fsm::SystemState::UNKNOWN), error_flag_(0)
 {
   hb_pub_ = this->create_publisher<HeartbeatMsg>("/SafeNode/Heartbeat", 10);
-  hb_timer_ = this->create_wall_timer(std::chrono::milliseconds(1000),
-    std::bind(&TaskManagerNode::heartbeat_timer_cb, this));
-
   state_pub_ = this->create_publisher<NodeStatusMsg>("/SafeNode/status", 10);
   sys_state_client_ = this->create_client<GetSystemStatusSrv>("/Safety/get_system_status");
 }
@@ -22,12 +32,9 @@ TaskManagerNode::~TaskManagerNode()
 
 void TaskManagerNode::run()
 {
-  RCLCPP_DEBUG(this->get_logger(), "Task manager");
+  LOG_DEBUG(this->get_logger(), task_log::Tag::SYSTEM, "Task manager node starting...");
   action_client_ = std::make_unique<task_act::TaskActionClient>(shared_from_this());
   bt_engine_ = std::make_unique<BehaviorTreeEngine>(this->get_logger());
-
-  bt_tick_timer_ = this->create_wall_timer(std::chrono::milliseconds(100),
-    std::bind(&TaskManagerNode::bt_tick_cb, this));
 
   if(!init_config())
   {
@@ -44,6 +51,12 @@ void TaskManagerNode::run()
     return;
   }
 
+  // 所有初始化完成后，再创建定时器，避免 context 未就绪时触发回调
+  hb_timer_ = this->create_wall_timer(std::chrono::milliseconds(HEARTBEAT_INTERVAL_MS),
+    std::bind(&TaskManagerNode::heartbeat_timer_cb, this));
+  bt_tick_timer_ = this->create_wall_timer(std::chrono::milliseconds(BT_TICK_INTERVAL_MS),
+    std::bind(&TaskManagerNode::bt_tick_cb, this));
+
   //boot_check_system_state();
   rclcpp::spin(shared_from_this());
 }
@@ -52,6 +65,7 @@ bool TaskManagerNode::init_config()
 {
   task_cfg::TaskConfigParser parser;
   std::string cfg_path = this->declare_parameter<std::string>("config_path", "./config/task_config.yaml");
+  LOG_WARN(this->get_logger(), task_log::Tag::CONFIG, "Config path: " << cfg_path);
   return parser.load_config(cfg_path, cfg_);
 }
 
@@ -61,124 +75,92 @@ bool TaskManagerNode::init_modbus()
   modbus_slave_->register_write_callback(std::bind(&TaskManagerNode::on_modbus_reg_write, this,
     std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
   modbus_slave_->start();
+  LOG_INFO(this->get_logger(), task_log::Tag::MODBUS, "Modbus slave initialized on " << cfg_.modbus_listen_ip << ":" << cfg_.modbus_port);
   return true;
 }
 
 void TaskManagerNode::boot_check_system_state()
 {
-  
-  
-  // int max_retries = 3;
-  // static int retry_count = 0;
-  // bool server_ready = false;
-  auto req = std::make_shared<GetSystemStatusSrv::Request>();
-  rclcpp::sleep_for(std::chrono::microseconds(1000));
-  //retry_count++;
-  RCLCPP_INFO(this->get_logger(), "Waiting for safety server...");
-  if(!sys_state_client_->wait_for_service(std::chrono::milliseconds(500)))
+  // 避免重复请求
+  if (boot_state_req_pending_)
   {
-    RCLCPP_WARN(this->get_logger(), "sys state service not online, enter idle");
-    //switch_state(task_fsm::SystemState::IDLE);
     return;
   }
 
+  auto req = std::make_shared<GetSystemStatusSrv::Request>();
+  LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Waiting for safety server...");
+  if(!sys_state_client_->wait_for_service(std::chrono::milliseconds(SERVICE_TIMEOUT_MS)))
+  {
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "System state service not online, will retry later");
+    return;
+  }
+
+  boot_state_req_pending_ = true;
   req->header.stamp = this->now();
   req->request_id = gen_request_id();
   auto fut = sys_state_client_->async_send_request(req,
   std::bind(&TaskManagerNode::request_result_callback, this, std::placeholders::_1));
-  
-//   while (retry_count < max_retries && !server_ready) {
-
-//     auto req = std::make_shared<GetSystemStatusSrv::Request>();
-//     rclcpp::sleep_for(std::chrono::microseconds(1000));
-
-//     RCLCPP_INFO(this->get_logger(), "Waiting for safety server (attempt %d/%d)...", 
-//                 retry_count + 1, max_retries);
-//     if(!sys_state_client_->wait_for_service(std::chrono::milliseconds(500)))
-//     {
-//       RCLCPP_WARN(this->get_logger(), "sys state service not online, enter idle");
-//       //switch_state(task_fsm::SystemState::IDLE);
-//       continue;
-//     }
-// 、
-
-//     req->header.stamp = this->now();
-//     req->request_id = gen_request_id();
-//     auto fut = sys_state_client_->async_send_request(req,
-//     std::bind(&AsyncServiceClient::request_result_callback, this, std::placeholders::_1));
-
-//     // if(rclcpp::spin_until_future_complete(shared_from_this(), fut, std::chrono::seconds(3)) != rclcpp::FutureReturnCode::SUCCESS)
-//     // {
-//     //   set_error_flag(task_fsm::ERR_SERVICE_TIMEOUT);
-//     //   switch_state(task_fsm::SystemState::ERROR);
-//     //   continue;
-//     // }
-
-//     // auto resp = fut.get();
-
-//     // RCLCPP_INFO(this->get_logger(), "===== Service Response =====");
-//     // RCLCPP_INFO(this->get_logger(), "request_id: %s", req->request_id.c_str());
-//     // RCLCPP_INFO(this->get_logger(), "global status: %d", resp->status);
-//     // RCLCPP_INFO(this->get_logger(), "error_flag: %ld", resp->error_flag);
-
-
-//     // if (resp->status == static_cast<int8_t>(task_fsm::SystemState::SELF_CHECK))
-//     // {
-//     //   break;
-//     // }
-//     // else
-//     // {
-      
-//     //   continue;
-//     // }
-//   }
-
-
-
-//   if (retry_count == max_retries)
-//   {
-    
-//   }
-  
-  
-  
-
-
-//   run_boot_task(cfg_.boot_tasks.self_check_seq);
-//   switch_state(task_fsm::SystemState::SELF_CHECK);
-  // auto res = fut.get();
-  // if(res->status == static_cast<int8_t>(task_fsm::SystemState::SELF_CHECK))
-  // {
-  //   run_boot_task(cfg_.boot_tasks.self_check_seq);
-  //   run_boot_task(cfg_.boot_tasks.reset_seq);
-  //   switch_state(task_fsm::SystemState::RESET_DONE);
-  // }
-  // switch_state(task_fsm::SystemState::IDLE);
-  // clear_error_flag(task_fsm::ERR_SERVICE_TIMEOUT);
 }
 
 void TaskManagerNode::request_result_callback(rclcpp::Client<GetSystemStatusSrv>::SharedFuture result_future)
 {
+  boot_state_req_pending_ = false;
   auto response = result_future.get();
-  RCLCPP_INFO(this->get_logger(), "===== Service Response =====");
-  //RCLCPP_INFO(this->get_logger(), "request_id: %s", response->request_id.c_str());
-  RCLCPP_INFO(this->get_logger(), "global status: %d", response->status);
-  RCLCPP_INFO(this->get_logger(), "error_flag: %ld", response->error_flag);
-  if (response->status == static_cast<int8_t>(task_fsm::SystemState::SELF_CHECK))
+  LOG_INFO_TITLE(this->get_logger(), task_log::Tag::FSM, "===== Service Response =====");
+  LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Global status: " << static_cast<int>(response->status));
+  LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Error flag: " << response->error_flag);
+
+  // 如果安全节点返回 Init 状态，则进入自检流程
+  if (response->status == static_cast<int8_t>(task_fsm::SystemState::INIT) ||
+      response->status == static_cast<int8_t>(task_fsm::SystemState::SELF_CHECK) ||
+      response->status == static_cast<int8_t>(task_fsm::SystemState::RESET))
   {
-    run_boot_task(cfg_.boot_tasks.self_check_seq);
-    switch_state(task_fsm::SystemState::SELF_CHECK);
+    LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Safety node reports INIT state, starting self-check...");
+    // 根据 YAML 配置决定是否执行 self_check
+    if (!cfg_.boot_tasks.self_check_seq.empty())
+    {
+      run_boot_task(cfg_.boot_tasks.self_check_seq);
+      switch_state(task_fsm::SystemState::SELF_CHECK);
+    }
+    else
+    {
+      LOG_WARN(this->get_logger(), task_log::Tag::FSM, "No self_check tasks configured in boot_task, skip to reset");
+      // 没有自检任务，直接进入复位
+      if (!cfg_.boot_tasks.reset_seq.empty())
+      {
+        boot_reset_system_state();
+        switch_state(task_fsm::SystemState::RESET);
+      }
+      else
+      {
+        switch_state(task_fsm::SystemState::RESET_DONE);
+      }
+    }
   }
-  else if (response->status == static_cast<int8_t>(task_fsm::SystemState::IDLE))
+  else if (response->status == static_cast<int8_t>(task_fsm::SystemState::IDLE) || 
+           response->status == static_cast<int8_t>(task_fsm::SystemState::ERROR))
   {
+    LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Safety node reports IDLE state, entering idle directly");
     switch_state(task_fsm::SystemState::IDLE);
+  }
+  else
+  {
+    LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Safety node reports state: " << static_cast<int>(response->status) << ", will retry later");
   }
 }
 
 
 void TaskManagerNode::boot_reset_system_state()
 {
-  run_boot_task(cfg_.boot_tasks.reset_seq);
+  LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Starting boot reset task...");
+  if (!cfg_.boot_tasks.reset_seq.empty())
+  {
+    run_boot_task(cfg_.boot_tasks.reset_seq);
+  }
+  else
+  {
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "No reset tasks configured in boot_task");
+  }
 }
 
 // task_manager_node.cpp
@@ -186,6 +168,7 @@ void TaskManagerNode::boot_reset_system_state()
 BTNode::Ptr TaskManagerNode::create_action_node(const task_cfg::AtomicAction& action)
 {
     std::string name = action.action_type; // 用于日志和调试
+    return nullptr;
 }
 
 
@@ -194,7 +177,7 @@ BTNode::Ptr TaskManagerNode::create_action_node(const task_cfg::AtomicAction& ac
 
 void TaskManagerNode::run_boot_task(const std::vector<task_cfg::AtomicAction>& seq)
 {
-  action_client_->reset_state();
+  action_client_->reset_all_states();
   bt_engine_->load_action_group(seq, *action_client_);
   bt_engine_->start();
 
@@ -210,7 +193,6 @@ void TaskManagerNode::heartbeat_timer_cb()
   msg.header.stamp = this->now();
   msg.node_id = cfg_.node_id; // nodeId → node_id
   hb_pub_->publish(msg);
-  RCLCPP_INFO(this->get_logger(), "publish hearbeat");
 
   NodeStatusMsg status_msg;
   status_msg.header.stamp = this->now();
@@ -227,7 +209,7 @@ void TaskManagerNode::publish_state_change()
   msg.status = static_cast<int32_t>(current_state_);
   msg.error_flag = error_flag_;     // errorFlag → error_flag
   state_pub_->publish(msg);
-  RCLCPP_INFO(this->get_logger(), "FSM switch to %s, errFlag: %lu, msg.node_id: %zu", task_fsm::state_to_str(current_state_).c_str(), error_flag_, msg.node_id);
+  LOG_INFO(this->get_logger(), task_log::Tag::FSM, "FSM switch to " << task_fsm::state_to_str(current_state_) << ", errFlag: " << error_flag_ << ", node_id: " << msg.node_id);
 }
 
 
@@ -241,7 +223,7 @@ std::string TaskManagerNode::gen_request_id()
 void TaskManagerNode::on_modbus_reg_write(uint32_t addr, uint16_t old_val, uint16_t new_val)
 {
 
-  RCLCPP_INFO(this->get_logger(), "new_val %u, old_val %u", new_val, old_val);
+  LOG_INFO(this->get_logger(), task_log::Tag::MODBUS, "Modbus reg write: addr=" << addr << ", new_val=" << new_val << ", old_val=" << old_val);
   if(new_val == 1 && old_val == 0)
   {
     handle_trigger_task(addr);
@@ -250,22 +232,27 @@ void TaskManagerNode::on_modbus_reg_write(uint32_t addr, uint16_t old_val, uint1
 
 void TaskManagerNode::handle_trigger_task(uint32_t trigger_addr)
 {
+  // 只在 IDLE 状态才能触发新任务，防止任务重叠导致状态混乱
   if(current_state_ != task_fsm::SystemState::IDLE)
   {
-    RCLCPP_WARN(this->get_logger(), "system busy, ignore task reg %u", trigger_addr);
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "System busy (state="
+      << task_fsm::state_to_str(current_state_) << "), ignore task reg " << trigger_addr);
     return;
   }
-
-  auto node = rclcpp::Node::make_shared("yaml_bt_runner");
 
   for(auto& [name, item] : cfg_.task_dict)
   {
     if(item.trigger_reg == trigger_addr)
     {
+      LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Trigger task: " << name << " (reg=" << trigger_addr << ")");
       switch_state(task_fsm::SystemState::RUNNING);
-      //auto node = rclcpp::Node::make_shared("manual_bt_demo");
-      action_client_->reset_state();
-      bt_engine_->load_action_group(item.action_seq, *action_client_);
+      // 重置所有状态并释放所有资源锁，确保新任务从干净状态开始
+      action_client_->reset_all_states();
+      if (bt_engine_->isTaskRunning())
+      {
+        bt_engine_->abort();
+      }
+      bt_engine_->load_parallel_task(item.action_seq, *action_client_);
       bt_engine_->start();
     }
   }
@@ -297,25 +284,17 @@ void TaskManagerNode::set_error_flag(uint64_t mask)
 void TaskManagerNode::bt_tick_cb()
 {
   
-  //RCLCPP_INFO(this->get_logger(), "bt_tick_cb, running state:%d", bt_engine_->isTaskRunning());
   switch (current_state_)
   {
   case task_fsm::SystemState::UNKNOWN:
-    /* code */
-    //RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::UNKNOWN");
     break;
 
   case task_fsm::SystemState::INIT:
-  /* code */
-  //RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::INIT");
-
       boot_check_system_state();
-      
   break;
     
 
   case task_fsm::SystemState::SELF_CHECK:
-    //RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::SELF_CHECK");
     if(rclcpp::ok() && bt_engine_->isTaskRunning())
     {
       bt_engine_->tick_once();
@@ -325,21 +304,20 @@ void TaskManagerNode::bt_tick_cb()
       if (bt_engine_->isTaskSuccess())
       {
         
-        RCLCPP_INFO(this->get_logger(), "Task action success");
+        LOG_SUCCESS(this->get_logger(), task_log::Tag::FSM, "Self-check task success");
         boot_reset_system_state();
         switch_state(task_fsm::SystemState::RESET);
       }
       else
       {
         switch_state(task_fsm::SystemState::INIT);
-        RCLCPP_INFO(this->get_logger(), "Task action failed");
+        LOG_ERROR(this->get_logger(), task_log::Tag::FSM, "Self-check task failed");
       }
       
     }
   break;
 
   case task_fsm::SystemState::RESET:
-  //RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::RESET");
     if(rclcpp::ok() && bt_engine_->isTaskRunning())
     {
       bt_engine_->tick_once();
@@ -349,33 +327,30 @@ void TaskManagerNode::bt_tick_cb()
       if (bt_engine_->isTaskSuccess())
       {
         
-        RCLCPP_INFO(this->get_logger(), "Task action success");
+        LOG_SUCCESS(this->get_logger(), task_log::Tag::FSM, "Reset task success");
         switch_state(task_fsm::SystemState::RESET_DONE);
       }
       else
       {
-        switch_state(task_fsm::SystemState::INIT);
-        RCLCPP_INFO(this->get_logger(), "Task action failed");
+        boot_reset_system_state();
+        switch_state(task_fsm::SystemState::RESET);
+        LOG_ERROR(this->get_logger(), task_log::Tag::FSM, "Reset task failed, retrying...");
       }
       
     }
   break;
 
   case task_fsm::SystemState::RESET_DONE:
-  //RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::RESET_DONE");
   boot_check_system_state();
   break;
 
   case task_fsm::SystemState::IDLE:
-  //RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::IDLE");
   break;
 
   case task_fsm::SystemState::RUNNING:
-    RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::RUNNING");
-    if (modbus_slave_->get_reg(modbus_slave_->get_regaddr()+10000) != 1)
+    if (modbus_slave_->get_reg(modbus_slave_->get_regaddr() + MODBUS_STATUS_OFFSET) != TASK_STATUS_RUNNING)
     {
-      modbus_slave_->set_reg(modbus_slave_->get_regaddr()+10000, 1);
-      RCLCPP_INFO(this->get_logger(), "modbus_slave_->set_reg(%ld, 1)", modbus_slave_->get_regaddr()+10000);
+      modbus_slave_->set_reg(modbus_slave_->get_regaddr() + MODBUS_STATUS_OFFSET, TASK_STATUS_RUNNING);
     }
     
     if(rclcpp::ok() && bt_engine_->isTaskRunning())
@@ -388,37 +363,41 @@ void TaskManagerNode::bt_tick_cb()
       if (modbus_slave_)
       {
         modbus_slave_->set_reg(modbus_slave_->get_regaddr(), 0);
-        RCLCPP_INFO(this->get_logger(), "modbus_slave_->set_reg(%ld, 0)", modbus_slave_->get_regaddr());
+        LOG_DEBUG(this->get_logger(), task_log::Tag::MODBUS, "Set running reg to 0, addr=" << modbus_slave_->get_regaddr());
       }
 
       if (bt_engine_->isTaskSuccess())
       {
         if (modbus_slave_)
         {
-          modbus_slave_->set_reg(modbus_slave_->get_regaddr()+10000, 2);
-          RCLCPP_INFO(this->get_logger(), "modbus_slave_->set_reg(%ld, 2)", modbus_slave_->get_regaddr()+10000);
+          modbus_slave_->set_reg(modbus_slave_->get_regaddr() + MODBUS_STATUS_OFFSET, TASK_STATUS_SUCCESS);
+          LOG_DEBUG(this->get_logger(), task_log::Tag::MODBUS, "Set status reg to " << TASK_STATUS_SUCCESS << " (success), addr=" << (modbus_slave_->get_regaddr() + MODBUS_STATUS_OFFSET));
         }
-        RCLCPP_INFO(this->get_logger(), "Task action success");
+        LOG_SUCCESS(this->get_logger(), task_log::Tag::FSM, "Task execution success");
       }
       else
       {
+        // 任务失败：先中止行为树，确保所有节点状态被重置
+        bt_engine_->abort();
 
         if (modbus_slave_)
         {
-          modbus_slave_->set_reg(modbus_slave_->get_regaddr()+10000, 3);
-          RCLCPP_INFO(this->get_logger(), "modbus_slave_->set_reg(%ld, 3)", modbus_slave_->get_regaddr()+10000);
+          modbus_slave_->set_reg(modbus_slave_->get_regaddr() + MODBUS_STATUS_OFFSET, TASK_STATUS_FAILED);
+          LOG_DEBUG(this->get_logger(), task_log::Tag::MODBUS, "Set status reg to " << TASK_STATUS_FAILED << " (failed), addr=" << (modbus_slave_->get_regaddr() + MODBUS_STATUS_OFFSET));
         }
 
 
-        RCLCPP_INFO(this->get_logger(), "Task action failed");
+        LOG_ERROR(this->get_logger(), task_log::Tag::FSM, "Task execution failed");
       }
+      // 无论成功还是失败，都重置所有 action 客户端状态并释放所有资源锁，确保下次任务从干净状态开始
+      action_client_->reset_all_states();
       switch_state(task_fsm::SystemState::IDLE);
     }
   break;
 
   case task_fsm::SystemState::ERROR:
   {
-    RCLCPP_INFO(this->get_logger(), "current_state_: ask_fsm::SystemState::ERROR");
+    LOG_ERROR(this->get_logger(), task_log::Tag::FSM, "System in ERROR state");
     break;
   }
   

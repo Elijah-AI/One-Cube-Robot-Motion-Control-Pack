@@ -1,12 +1,20 @@
+import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
+    default_config_path = os.path.join(
+        get_package_share_directory('task_manager'),
+        'config',
+        'task_config.yaml'
+    )
+    
     config_arg = DeclareLaunchArgument(
         'config_path',
-        default_value='/home/wang/ros2_ws/src/task_manager/config/task_config.yaml',
+        default_value=default_config_path,
         description='Path to tasks configuration file'
     )
     

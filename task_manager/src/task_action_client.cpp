@@ -1,14 +1,15 @@
 #include "task_manager/task_action_client.hpp"
+#include "task_manager/log_helper.hpp"
 #include <random>
 #include <sstream>
 #include <uuid/uuid.h>
+#include <cmath>
+#include <iomanip>
 
-// 添加正确的 Action 类型头文件
+// 使用 com_interfaces 中的 Action 定义
 #include "com_interfaces/action/vision_detection.hpp"
-
 #include "com_interfaces/action/control_gripper.hpp"
 #include "com_interfaces/action/move_arm.hpp"
-
 
 namespace task_act
 {
@@ -19,21 +20,72 @@ TaskActionClient::TaskActionClient(rclcpp::Node::SharedPtr node)
   vision_client_ = rclcpp_action::create_client<VisionDet>(node_, "/vision/detection_pose_cloud");
   arm_client_ = rclcpp_action::create_client<MoveArm>(node_, "/Control/move_arm");
   gripper_client_ = rclcpp_action::create_client<CtrlGripper>(node_, "/Control/control_gripper");
-  vision_check_self_client_ = rclcpp_action::create_client<VisionCheckSelf>(node_, "/Vision/hardware_Checkself");
-  control_check_self_client_ = rclcpp_action::create_client<ControlCheckSelf>(node_, "/Control/hardware_check");
-  control_reset_client_   = rclcpp_action::create_client<ControlReset>(node_, "/Control/hardware_reset");
+  // HardwareCheck 客户端（用于视觉自检 /vision/Check_self）
+  hw_check_client_ = rclcpp_action::create_client<HardWareCheck>(node_, "/vision/Check_self");
+  // HardwareReset 客户端（用于视觉复位 /vision/Reset）
+  hw_reset_client_ = rclcpp_action::create_client<HardWareReset>(node_, "/vision/Reset");
+  // 运控自检/复位独立客户端（必须为成员变量，否则回调无法触发）
+  control_check_client_ = rclcpp_action::create_client<HardWareCheck>(node_, "/Control/Checkself");
+  control_reset_client_ = rclcpp_action::create_client<HardWareReset>(node_, "/Control/Reset");
   std::shared_future<GoalHandleCtrlGripper> gripper_send_future_{};
   reset_state();
 
+  // 初始化所有资源锁为未占用状态
+  for (size_t i = 0; i < static_cast<size_t>(ResourceType::COUNT); i++)
+  {
+    resource_locks_[i].store(false, std::memory_order_release);
+  }
 }
 
-bool
+// ============================================================================
+// ActionContext 访问方法
+// ============================================================================
+
+const ActionContext& TaskActionClient::get_ctx(const std::string& state_key) const
+{
+    // 自动创建默认上下文
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    auto it = action_contexts_.find(state_key);
+    if (it == action_contexts_.end())
+    {
+        // 插入默认上下文
+        action_contexts_.emplace(state_key, ActionContext());
+        it = action_contexts_.find(state_key);
+    }
+    return it->second;
+}
+
+ActionContext& TaskActionClient::get_ctx(const std::string& state_key)
+{
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    return action_contexts_[state_key];
+}
+
+// ============================================================================
+// call_vision_detect
+// ============================================================================
+
+ActionCallResult
 TaskActionClient::call_vision_detect(
-  const std::string& task_id, const task_cfg::VisionActionParam& param)
+  const std::string& task_id, const task_cfg::VisionActionParam& param,
+  const std::string& state_key)
 {
 
-  RCLCPP_INFO(node_->get_logger(), "---------call_vision_detect Start--------");
-  auto goal = com_interfaces::action::VisionDetection::Goal();
+  LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::VISION, "===== Vision Detect Start =====");
+  
+  // 参数校验
+  if (task_id.empty())
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "task_id is empty");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+  if (param.target_obj_name.empty())
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "target_obj_name is empty");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+
+  auto goal = VisionDet::Goal();
   goal.header.stamp = node_->now();
   goal.task_id = task_id;
   goal.target_obj_name = param.target_obj_name;
@@ -44,18 +96,14 @@ TaskActionClient::call_vision_detect(
   goal.priority = param.priority;
   goal.type = param.type;
   
-  RCLCPP_INFO(node_->get_logger(), "=== Goal Parameters ===");
-  RCLCPP_INFO(node_->get_logger(), "Header Stamp: sec=%d, nanosec=%u", 
-              goal.header.stamp.sec, 
-              goal.header.stamp.nanosec);
-  RCLCPP_INFO(node_->get_logger(), "Task ID: %s", goal.task_id.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Target Object Name: %s", goal.target_obj_name.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Expected Frame ID: %s", goal.expected_frame_id.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Need 6D Pose: %s", goal.need_6d_pose ? "true" : "false");
-  RCLCPP_INFO(node_->get_logger(), "Need Env PointCloud: %s", goal.need_env_point_cloud ? "true" : "false");
-  RCLCPP_INFO(node_->get_logger(), "PointCloud Downsample Resolution: %.4f", goal.point_cloud_downsample_resolution);
-  RCLCPP_INFO(node_->get_logger(), "Priority: %d", goal.priority);
-  RCLCPP_INFO(node_->get_logger(), "Type: %d", goal.type);
+  LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "Goal: task_id=" << goal.task_id
+    << ", target=" << goal.target_obj_name
+    << ", frame_id=" << goal.expected_frame_id
+    << ", need_6d=" << (goal.need_6d_pose ? "true" : "false")
+    << ", need_cloud=" << (goal.need_env_point_cloud ? "true" : "false")
+    << ", downsample=" << goal.point_cloud_downsample_resolution
+    << ", priority=" << goal.priority
+    << ", type=" << goal.type);
   
   // 增加等待时间和重试机制
   int max_retries = 3;
@@ -63,138 +111,283 @@ TaskActionClient::call_vision_detect(
   bool server_ready = false;
   
   while (retry_count < max_retries && !server_ready) {
-    RCLCPP_INFO(node_->get_logger(), "Waiting for vision action server (attempt %d/%d)...", 
-                retry_count + 1, max_retries);
+    LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "Waiting for vision action server (attempt " << (retry_count + 1) << "/" << max_retries << ")...");
     
-    server_ready = vision_client_->wait_for_action_server(std::chrono::milliseconds(5));
+    server_ready = vision_client_->wait_for_action_server(std::chrono::seconds(5));
     
     if (!server_ready) {
       retry_count++;
       if (retry_count < max_retries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
     }
   }
   
   if (!server_ready) {
-    RCLCPP_ERROR(node_->get_logger(), "Vision action server timeout after %d attempts", max_retries);
-    RCLCPP_INFO(node_->get_logger(), "---------call_vision_detect End--------");
-    return false;
+    LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision action server timeout after " << max_retries << " attempts");
+    return ActionCallResult::FAIL_SERVER_TIMEOUT;
   }
   
-  RCLCPP_INFO(node_->get_logger(), "Vision action server connected successfully");
-  
-
+  LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "Vision action server connected successfully");
 
   // 5. 配置异步回调选项 (SendGoalOptions)
   auto send_goal_options = rclcpp_action::Client<VisionDet>::SendGoalOptions();
   
-  // 目标响应回调：当服务器接受或拒绝目标时触发
+  // 目标响应回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.goal_response_callback =
-    std::bind(&TaskActionClient::goal_response_callback, this, std::placeholders::_1);
+    [this, state_key](GoalHandleVisionDetection::SharedPtr goal_handle)
+    {
+      auto goal = goal_handle.get();
+      if (!goal) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Goal was rejected by server [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+      } else {
+        LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "Goal accepted by server [" << state_key << "], waiting for result...");
+      }
+    };
     
   // 反馈回调：服务器周期性发送进度时触发
   send_goal_options.feedback_callback =
     std::bind(&TaskActionClient::feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
     
-  // 结果回调：任务完成时触发
+  // 结果回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.result_callback =
-    std::bind(&TaskActionClient::result_callback, this, std::placeholders::_1);
+    [this, state_key](const GoalHandleVisionDetection::WrappedResult & result)
+    {
+      if(result.result->success)
+      {
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION, "Vision detect succeeded [" << state_key << "]");
+        print_vision_result(node_->get_logger(), *result.result);
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
+      }
+      else
+      {
+        if (result.result->status_code == 3)
+        {
+          LOG_WARN(node_->get_logger(), task_log::Tag::VISION, "Vision detect server busy [" << state_key << "]: " << result.result->error_message);
+          auto& ctx = get_ctx(state_key);
+          ctx.call_result = ActionCallResult::FAIL_SERVER_BUSY;
+        }
+        else
+        {
+          LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision detect failed [" << state_key << "]: " << result.result->error_message);
+          auto& ctx = get_ctx(state_key);
+          ctx.call_result = ActionCallResult::FAIL_GENERAL;
+        }
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+      }
+
+      // 释放该 action 占用的资源（遍历所有 context）
+      {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        for (auto& [key, ctx] : action_contexts_)
+        {
+          if (!ctx.acquired_resources.empty())
+          {
+            for (const auto& res : ctx.acquired_resources)
+            {
+              release_resource(res);
+            }
+            ctx.acquired_resources.clear();
+          }
+        }
+      }
+    };
   auto send_goal_future = vision_client_->async_send_goal(goal, send_goal_options);
-  current_state_ = ActionRunState::RUNNING;
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-  execution_time_ = 60000;
-  return true;
+  LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::VISION, "===== Vision Detect End =====");
+  return ActionCallResult::SUCCESS;
 
 }
 void TaskActionClient::goal_response_callback(GoalHandleVisionDetection::SharedPtr goal_handle)
 {
     auto goal = goal_handle.get();
     if (!goal) {
-        RCLCPP_ERROR(node_->get_logger(), "Goal was rejected by server");
-        current_state_ = ActionRunState::RUNNING;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Goal was rejected by server");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
     } else {
-        RCLCPP_INFO(node_->get_logger(), "Goal accepted by server, waiting for result...");
+        LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "Goal accepted by server, waiting for result...");
     }
 }
 
 void TaskActionClient::feedback_callback(GoalHandleVisionDetection::SharedPtr, const std::shared_ptr<const VisionDet::Feedback> feedback)
 {
-  RCLCPP_INFO(node_->get_logger(), "Received feedback: %.2f", feedback->progress_rate);
+  LOG_DEBUG(node_->get_logger(), task_log::Tag::VISION, "Feedback: progress=" << (feedback ? std::to_string(feedback->progress_rate) : "N/A"));
 }
 
 void TaskActionClient::result_callback(const GoalHandleVisionDetection::WrappedResult & result)
 {
   if(result.result->success)
   {
-    RCLCPP_INFO(node_->get_logger(), "---------call_vision_detect End: success--------");
+    LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION, "Vision detect succeeded");
     print_vision_result(node_->get_logger(), *result.result);
-    current_state_ = ActionRunState::SUCCESS;
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::SUCCESS;
+    ctx.call_result = ActionCallResult::SUCCESS;
     
   }
   else
   {
-    RCLCPP_INFO(node_->get_logger(), "---------call_vision_detect End: failed:%s--------", result.result->error_message.c_str());
-    current_state_ = ActionRunState::FAILURE;
+    // 根据错误码区分失败原因
+    if (result.result->status_code == 3)
+    {
+      LOG_WARN(node_->get_logger(), task_log::Tag::VISION, "Vision detect server busy: " << result.result->error_message);
+      auto& ctx = get_ctx("default");
+      ctx.call_result = ActionCallResult::FAIL_SERVER_BUSY;
+    }
+    else
+    {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision detect failed: " << result.result->error_message);
+      auto& ctx = get_ctx("default");
+      ctx.call_result = ActionCallResult::FAIL_GENERAL;
+    }
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::FAILURE;
+  }
+
+  // 释放该 action 占用的资源（遍历所有 context，释放 vision 类型的资源）
+  {
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    for (auto& [key, ctx] : action_contexts_)
+    {
+      if (!ctx.acquired_resources.empty())
+      {
+        for (const auto& res : ctx.acquired_resources)
+        {
+          release_resource(res);
+        }
+        ctx.acquired_resources.clear();
+      }
+    }
   }
 }
 
 void TaskActionClient::print_vision_result(rclcpp::Logger logger, const VisionDet::Result & res)
 {
-  RCLCPP_INFO(logger, "==================== VisionDetection Result ====================");
-  RCLCPP_INFO(logger, "success: %s", res.success ? "true" : "false");
-
-  // Header
-  RCLCPP_INFO(logger, "header.stamp: sec=%d, nanosec=%u, frame_id=%s",
-              res.header.stamp.sec,
-              res.header.stamp.nanosec,
-              res.header.frame_id.c_str());
+  LOG_INFO_TITLE(logger, task_log::Tag::VISION, "===== VisionDetection Result =====");
+  LOG_INFO(logger, task_log::Tag::VISION, "success: " << (res.success ? "true" : "false"));
 
   // status_code 文字解析
   std::string status_str;
   switch (res.status_code)
   {
-    case 0: status_str = "0: OK"; break;
-    case 1: status_str = "1: FAILED (硬件故障)"; break;
-    case 2: status_str = "2: TIMEOUT (超时未响应)"; break;
-    case 3: status_str = "3: BUSY (正在执行其他高优先级任务)"; break;
-    default: status_str = std::to_string(res.status_code) + ": Unknown code";
+    case 0: status_str = "OK"; break;
+    case 1: status_str = "FAILED (hardware fault)"; break;
+    case 2: status_str = "TIMEOUT"; break;
+    case 3: status_str = "BUSY (high priority task running)"; break;
+    default: status_str = "Unknown(" + std::to_string(res.status_code) + ")";
   }
-  RCLCPP_INFO(logger, "status_code: %s", status_str.c_str());
-
-  RCLCPP_INFO(logger, "error_message: [%s]", res.error_message.c_str());
-  RCLCPP_INFO(logger, "execution_time: %.4f s", res.execution_time);
+  LOG_INFO(logger, task_log::Tag::VISION, "status_code: " << status_str);
+  LOG_INFO(logger, task_log::Tag::VISION, "error_message: " << res.error_message);
+  LOG_INFO(logger, task_log::Tag::VISION, "execution_time: " << res.execution_time << " s");
 
   // 6D PoseStamped
   const auto & pose = res.target_6d_pose;
-  RCLCPP_INFO(logger, "target_6d_pose.frame_id: %s", pose.header.frame_id.c_str());
-  RCLCPP_INFO(logger, "target_6d_pose.position: x=%.4f, y=%.4f, z=%.4f",
-              pose.pose.position.x,
-              pose.pose.position.y,
-              pose.pose.position.z);
-  RCLCPP_INFO(logger, "target_6d_pose.orientation: qx=%.4f, qy=%.4f, qz=%.4f, qw=%.4f",
-              pose.pose.orientation.x,
-              pose.pose.orientation.y,
-              pose.pose.orientation.z,
-              pose.pose.orientation.w);
-
-  RCLCPP_INFO(logger, "pose_confidence: %.4f", res.pose_confidence);
+  LOG_INFO(logger, task_log::Tag::VISION, "target_6d_pose.frame_id: " << pose.header.frame_id);
+  LOG_INFO(logger, task_log::Tag::VISION, "target_6d_pose.position: x=" << pose.pose.position.x
+    << ", y=" << pose.pose.position.y << ", z=" << pose.pose.position.z);
+  LOG_INFO(logger, task_log::Tag::VISION, "target_6d_pose.orientation: qx=" << pose.pose.orientation.x
+    << ", qy=" << pose.pose.orientation.y << ", qz=" << pose.pose.orientation.z << ", qw=" << pose.pose.orientation.w);
+  LOG_INFO(logger, task_log::Tag::VISION, "pose_confidence: " << res.pose_confidence);
 
   // 点云信息（只打印基础信息，不打印海量点）
-  RCLCPP_INFO(logger, "env_point_cloud.header.frame_id: %s", res.env_point_cloud.header.frame_id.c_str());
-  RCLCPP_INFO(logger, "env_point_cloud width=%u, height=%u, point_step=%u",
-              res.env_point_cloud.width,
-              res.env_point_cloud.height,
-              res.env_point_cloud.point_step);
-  RCLCPP_INFO(logger, "point_cloud_frame_id: %s", res.point_cloud_frame_id.c_str());
-  RCLCPP_INFO(logger, "================================================================\n");
+  LOG_INFO(logger, task_log::Tag::VISION, "env_point_cloud.frame_id: " << res.env_point_cloud.header.frame_id
+    << ", width=" << res.env_point_cloud.width << ", height=" << res.env_point_cloud.height
+    << ", point_step=" << res.env_point_cloud.point_step);
+  LOG_INFO(logger, task_log::Tag::VISION, "point_cloud_frame_id: " << res.point_cloud_frame_id);
+
+  // 额外打印 XYZABC 格式（四元数转欧拉角）
+  print_vision_result_xyzabc(logger, res);
 }
 
-bool TaskActionClient::call_move_arm(
+// ============================================================================
+// 四元数转欧拉角（静态工具函数）
+// ============================================================================
+void TaskActionClient::quaternion_to_rpy(double qx, double qy, double qz, double qw,
+                                          double& roll, double& pitch, double& yaw)
+{
+    // roll (绕 X 轴)
+    double sinr_cosp = 2.0 * (qw * qx + qy * qz);
+    double cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy);
+    roll = std::atan2(sinr_cosp, cosr_cosp);
+
+    // pitch (绕 Y 轴)
+    double sinp = 2.0 * (qw * qy - qz * qx);
+    if (std::abs(sinp) >= 1.0)
+        pitch = std::copysign(M_PI / 2.0, sinp);
+    else
+        pitch = std::asin(sinp);
+
+    // yaw (绕 Z 轴)
+    double siny_cosp = 2.0 * (qw * qz + qx * qy);
+    double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+    yaw = std::atan2(siny_cosp, cosy_cosp);
+
+    // 转换为度
+    roll  = roll * 180.0 / M_PI;
+    pitch = pitch * 180.0 / M_PI;
+    yaw   = yaw * 180.0 / M_PI;
+}
+
+// ============================================================================
+// print_vision_result_xyzabc - 打印视觉检测结果的 XYZABC 格式
+// ============================================================================
+void TaskActionClient::print_vision_result_xyzabc(rclcpp::Logger logger, const VisionDet::Result & res)
+{
+  const auto & pose = res.target_6d_pose;
+  double x = pose.pose.position.x;
+  double y = pose.pose.position.y;
+  double z = pose.pose.position.z;
+  double qx = pose.pose.orientation.x;
+  double qy = pose.pose.orientation.y;
+  double qz = pose.pose.orientation.z;
+  double qw = pose.pose.orientation.w;
+
+  double roll_deg, pitch_deg, yaw_deg;
+  quaternion_to_rpy(qx, qy, qz, qw, roll_deg, pitch_deg, yaw_deg);
+
+  LOG_INFO_TITLE(logger, task_log::Tag::VISION, "===== 6D Pose (XYZABC) =====");
+  LOG_INFO(logger, task_log::Tag::VISION, "Frame ID: " << pose.header.frame_id);
+  LOG_INFO(logger, task_log::Tag::VISION, "X (mm): " << std::fixed << std::setprecision(2) << x * 1000.0
+    << ", Y (mm): " << y * 1000.0 << ", Z (mm): " << z * 1000.0);
+  LOG_INFO(logger, task_log::Tag::VISION, "A (RotX/deg): " << std::fixed << std::setprecision(2) << roll_deg
+    << ", B (RotY/deg): " << pitch_deg << ", C (RotZ/deg): " << yaw_deg);
+  LOG_INFO(logger, task_log::Tag::VISION, "XYZABC: [" << std::fixed << std::setprecision(2)
+    << x * 1000.0 << ", " << y * 1000.0 << ", " << z * 1000.0 << ", "
+    << roll_deg << ", " << pitch_deg << ", " << yaw_deg << "]");
+  LOG_INFO(logger, task_log::Tag::VISION, "Confidence: " << std::fixed << std::setprecision(2) << res.pose_confidence * 100.0 << "%");
+}
+
+
+
+// ============================================================================
+// call_move_arm
+// ============================================================================
+
+ActionCallResult TaskActionClient::call_move_arm(
   const std::string& task_id, const task_cfg::MoveArmParam& param,
   const geometry_msgs::msg::PoseStamped& target_pose,
-  const sensor_msgs::msg::PointCloud2& cloud, const std::string& frame_id)
+  const sensor_msgs::msg::PointCloud2& cloud, const std::string& frame_id,
+  const std::string& state_key)
 {
+  // 参数校验
+  if (task_id.empty())
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "task_id is empty");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+  if (param.arm_id.empty())
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "arm_id is empty");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+
   auto goal = MoveArm::Goal();
   goal.header.stamp = node_->now();
   goal.task_id = task_id;
@@ -207,9 +400,10 @@ bool TaskActionClient::call_move_arm(
   {
     goal.arm_id = 1;
   }
-  else 
+  else
   {
-    goal.arm_id = 2;
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "unknown arm_id: " << param.arm_id);
+    return ActionCallResult::FAIL_PARAM_INVALID;
   }
   
   goal.use_planning = param.use_planning;
@@ -228,10 +422,13 @@ bool TaskActionClient::call_move_arm(
       goal.target_pose.pose.orientation.z = param.config_pose[5];
       goal.target_pose.pose.orientation.w = param.config_pose[6];
     }
-    
+    else
+    {
+      LOG_WARN(node_->get_logger(), task_log::Tag::ARM, "config_pose size < 7, using target_pose directly");
+    }
 
   }
-  else 
+  else
   {
     goal.target_pose = target_pose;
   }
@@ -247,48 +444,86 @@ bool TaskActionClient::call_move_arm(
   bool server_ready = false;
   
   while (retry_count < max_retries && !server_ready) {
-    RCLCPP_INFO(node_->get_logger(), "Waiting for ArmMove action server (attempt %d/%d)...", 
-                retry_count + 1, max_retries);
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Waiting for ArmMove action server (attempt " << (retry_count + 1) << "/" << max_retries << ")...");
     
-    server_ready = arm_client_->wait_for_action_server(std::chrono::milliseconds(5));
+    server_ready = arm_client_->wait_for_action_server(std::chrono::seconds(5));
     
     if (!server_ready) {
       retry_count++;
       if (retry_count < max_retries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
     }
   }
   
   if (!server_ready) {
-    RCLCPP_ERROR(node_->get_logger(), "move arm action server timeout after %d attempts", max_retries);
-    RCLCPP_INFO(node_->get_logger(), "---------call_move_arm End--------");
-    return false;
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "move arm action server timeout after " << max_retries << " attempts");
+    return ActionCallResult::FAIL_SERVER_TIMEOUT;
   }
   
-  RCLCPP_INFO(node_->get_logger(), "move arm action server connected successfully");
-  
+  LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "move arm action server connected successfully");
+
 
 
   // 5. 配置异步回调选项 (SendGoalOptions)
   auto send_goal_options = rclcpp_action::Client<MoveArm>::SendGoalOptions();
   
-  // 目标响应回调：当服务器接受或拒绝目标时触发
+  // 目标响应回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.goal_response_callback =
-    std::bind(&TaskActionClient::arm_goal_response_callback, this, std::placeholders::_1);
+    [this, state_key](GoalHandleMoveArm::SharedPtr goal_handle)
+    {
+      auto goal = goal_handle.get();
+      if (!goal) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Goal was rejected by server [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+      } else {
+        LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Goal accepted by server [" << state_key << "], waiting for result...");
+      }
+    };
     
   // 反馈回调：服务器周期性发送进度时触发
   send_goal_options.feedback_callback =
     std::bind(&TaskActionClient::arm_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
     
-  // 结果回调：任务完成时触发
+  // 结果回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.result_callback =
-    std::bind(&TaskActionClient::arm_result_callback, this, std::placeholders::_1);
+    [this, state_key](const GoalHandleMoveArm::WrappedResult & result)
+    {
+      if(result.result->success)
+      {
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "Move arm succeeded [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
+      }
+      else
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Move arm failed [" << state_key << "]: " << result.result->error_message);
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GENERAL;
+      }
+
+      // 释放该 action 占用的资源（遍历所有 context）
+      {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        for (auto& [key, ctx] : action_contexts_)
+        {
+          if (!ctx.acquired_resources.empty())
+          {
+            for (const auto& res : ctx.acquired_resources)
+            {
+              release_resource(res);
+            }
+            ctx.acquired_resources.clear();
+          }
+        }
+      }
+    };
   auto send_goal_future = arm_client_->async_send_goal(goal, send_goal_options);
-  current_state_ = ActionRunState::RUNNING;
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-  execution_time_ = 60000;
-  return true;
+  return ActionCallResult::SUCCESS;
  
 }
 
@@ -296,39 +531,85 @@ void TaskActionClient::arm_goal_response_callback(GoalHandleMoveArm::SharedPtr g
 {
     auto goal = goal_handle.get();
     if (!goal) {
-        RCLCPP_ERROR(node_->get_logger(), "Goal was rejected by server");
-        current_state_ = ActionRunState::RUNNING;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Goal was rejected by server");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
     } else {
-        RCLCPP_INFO(node_->get_logger(), "Goal accepted by server, waiting for result...");
+        LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Goal accepted by server, waiting for result...");
     }
 }
 
 void TaskActionClient::arm_feedback_callback(GoalHandleMoveArm::SharedPtr, const std::shared_ptr<const MoveArm::Feedback> feedback)
 {
-  RCLCPP_INFO(node_->get_logger(), "arm Received feedback: %.2f", feedback->progress_rate);
+  LOG_DEBUG(node_->get_logger(), task_log::Tag::ARM, "Feedback: progress=" << (feedback ? std::to_string(feedback->progress_rate) : "N/A"));
 }
 
 void TaskActionClient::arm_result_callback(const GoalHandleMoveArm::WrappedResult & result)
 {
   if(result.result->success)
   {
-    RCLCPP_INFO(node_->get_logger(), "---------arm_result_callback End: success--------");
-    current_state_ = ActionRunState::SUCCESS;
+    LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "Move arm succeeded");
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::SUCCESS;
+    ctx.call_result = ActionCallResult::SUCCESS;
     
   }
   else
   {
-    RCLCPP_INFO(node_->get_logger(), "---------arm_result_callback End: failed--------");
-    current_state_ = ActionRunState::FAILURE;
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Move arm failed: " << result.result->error_message);
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::FAILURE;
+    ctx.call_result = ActionCallResult::FAIL_GENERAL;
+  }
+
+  // 释放该 action 占用的资源（遍历所有 context）
+  {
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    for (auto& [key, ctx] : action_contexts_)
+    {
+      if (!ctx.acquired_resources.empty())
+      {
+        for (const auto& res : ctx.acquired_resources)
+        {
+          release_resource(res);
+        }
+        ctx.acquired_resources.clear();
+      }
+    }
   }
 }
 
 
-bool TaskActionClient::call_gripper(
-  const std::string& task_id, const task_cfg::GripperParam& param)
+// ============================================================================
+// call_gripper
+// ============================================================================
+
+ActionCallResult TaskActionClient::call_gripper(
+  const std::string& task_id, const task_cfg::GripperParam& param,
+  const std::string& state_key)
 {
 
-  RCLCPP_INFO(node_->get_logger(), "--------call_gripper start---------");
+  LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::GRIPPER, "===== Gripper Control Start =====");
+  
+  // 参数校验
+  if (task_id.empty())
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "task_id is empty");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+  if (param.position.size() < 2)
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "position size < 2");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+
+  // 1. 等待 Server 就绪
+  if(!gripper_client_->wait_for_action_server(std::chrono::seconds(2))) {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper action server not available");
+    return ActionCallResult::FAIL_SERVER_TIMEOUT;
+  }
+
   // 2. 构造 Goal
   auto goal = CtrlGripper::Goal();
   goal.header.stamp = node_->now();
@@ -345,76 +626,121 @@ bool TaskActionClient::call_gripper(
   goal.block_until_complete = param.block;
   goal.timeout_ms = param.timeout_ms;
 
-  RCLCPP_INFO(node_->get_logger(), "Sending Gripper Goal: Task ID=%s", task_id.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Header Stamp: sec=%d, nanosec=%u", 
-              goal.header.stamp.sec, 
-              goal.header.stamp.nanosec);
+  LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "Goal: task_id=" << task_id
+    << ", gripper_id=" << (int)goal.gripper_id
+    << ", position=[" << (int)goal.position[0] << "," << (int)goal.position[1] << "]"
+    << ", block=" << (goal.block_until_complete ? "true" : "false")
+    << ", timeout=" << goal.timeout_ms << "ms");
+  
   // 增加等待时间和重试机制
   int max_retries = 3;
   int retry_count = 0;
   bool server_ready = false;
   
   while (retry_count < max_retries && !server_ready) {
-    RCLCPP_INFO(node_->get_logger(), "Waiting for gripper action server (attempt %d/%d)...", 
-                retry_count + 1, max_retries);
+    LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "Waiting for gripper action server (attempt " << (retry_count + 1) << "/" << max_retries << ")...");
     
-    server_ready = gripper_client_->wait_for_action_server(std::chrono::milliseconds(5));
+    server_ready = gripper_client_->wait_for_action_server(std::chrono::seconds(5));
     
     if (!server_ready) {
       retry_count++;
       if (retry_count < max_retries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
     }
   }
   
   if (!server_ready) {
-    RCLCPP_ERROR(node_->get_logger(), "gripper action server timeout after %d attempts", max_retries);
-    RCLCPP_INFO(node_->get_logger(), "---------call_gripper End--------");
-    return false;
+    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "gripper action server timeout after " << max_retries << " attempts");
+    return ActionCallResult::FAIL_SERVER_TIMEOUT;
   }
   
-  RCLCPP_INFO(node_->get_logger(), "Vision action server connected successfully");
-  
+  LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper action server connected successfully");
+
 
 
   // 5. 配置异步回调选项 (SendGoalOptions)
   auto send_goal_options = rclcpp_action::Client<CtrlGripper>::SendGoalOptions();
   
-  // 目标响应回调：当服务器接受或拒绝目标时触发
+  // 目标响应回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.goal_response_callback =
-    std::bind(&TaskActionClient::gripper_goal_response_callback, this, std::placeholders::_1);
+    [this, state_key](GoalHandleCtrlGripper::SharedPtr goal_handle)
+    {
+      auto goal = goal_handle.get();
+      if (!goal) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Goal was rejected by server [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+      } else {
+        LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "Goal accepted by server [" << state_key << "], waiting for result...");
+      }
+    };
     
   // 反馈回调：服务器周期性发送进度时触发
   send_goal_options.feedback_callback =
     std::bind(&TaskActionClient::gripper_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
     
-  // 结果回调：任务完成时触发
+  // 结果回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.result_callback =
-    std::bind(&TaskActionClient::gripper_result_callback, this, std::placeholders::_1);
+    [this, state_key](const GoalHandleCtrlGripper::WrappedResult & result)
+    {
+      if(result.result->success)
+      {
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper control succeeded [" << state_key << "]: final_position=["
+          << (int)result.result->final_position[0] << "," << (int)result.result->final_position[1]
+          << "], final_torque=[" << (int)result.result->final_torque[0] << "," << (int)result.result->final_torque[1] << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
+      }
+      else
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper control failed [" << state_key << "]: " << result.result->error_message);
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GENERAL;
+      }
+
+      // 释放该 action 占用的资源（遍历所有 context）
+      {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        for (auto& [key, ctx] : action_contexts_)
+        {
+          if (!ctx.acquired_resources.empty())
+          {
+            for (const auto& res : ctx.acquired_resources)
+            {
+              release_resource(res);
+            }
+            ctx.acquired_resources.clear();
+          }
+        }
+      }
+    };
   gripper_send_future_ = gripper_client_->async_send_goal(goal, send_goal_options);
-  current_state_ = ActionRunState::RUNNING;
-  //StartTimer(goal.timeout_ms);
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-
-
-  execution_time_ = goal.timeout_ms;
-  return true;
+  return ActionCallResult::SUCCESS;
 }
+
 rclcpp::Time TaskActionClient::get_ros_now_time() const
 {
   return node_->now();
 }
 
 
-rclcpp::Time TaskActionClient::get_task_start_time() const
+rclcpp::Time TaskActionClient::get_action_start_time(const std::string& state_key) const
 {
-  return task_start_time_;
+  return get_ctx(state_key).start_time;
 }
 
-uint32_t TaskActionClient::get_task_execution_time() const
+uint32_t TaskActionClient::get_action_execution_time(const std::string& state_key) const
 {
-  return execution_time_;
+  return get_ctx(state_key).execution_time_ms;
+}
+
+ActionCallResult TaskActionClient::get_last_call_result(const std::string& state_key) const
+{
+  return get_ctx(state_key).call_result;
 }
 
 
@@ -422,16 +748,18 @@ void TaskActionClient::gripper_goal_response_callback(GoalHandleCtrlGripper::Sha
 {
     auto goal = goal_handle.get();
     if (!goal) {
-        RCLCPP_ERROR(node_->get_logger(), "Goal was rejected by server");
-        current_state_ = ActionRunState::RUNNING;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Goal was rejected by server");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
     } else {
-        RCLCPP_INFO(node_->get_logger(), "Goal accepted by server, waiting for result...");
+        LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "Goal accepted by server, waiting for result...");
     }
 }
 
 void TaskActionClient::gripper_feedback_callback(GoalHandleCtrlGripper::SharedPtr, const std::shared_ptr<const GoalHandleCtrlGripper::Feedback> feedback)
 {
-  RCLCPP_INFO(node_->get_logger(), "gripper Received feedback: %.2f", feedback->progress_rate);
+  LOG_DEBUG(node_->get_logger(), task_log::Tag::GRIPPER, "Feedback: progress=" << (feedback ? std::to_string(feedback->progress_rate) : "N/A"));
 }
 
 void TaskActionClient::gripper_result_callback(const GoalHandleCtrlGripper::WrappedResult & result)
@@ -439,554 +767,903 @@ void TaskActionClient::gripper_result_callback(const GoalHandleCtrlGripper::Wrap
   //StopTimer();
   if(result.result->success)
   {
-    RCLCPP_INFO(node_->get_logger(), "---------gripper_result_callback End: success--------\nfinal_position[%d %d]. final_torque[%d %d]", 
-    result.result->final_position[0], result.result->final_position[1], result.result->final_torque[0], result.result->final_torque[1]);
-    current_state_ = ActionRunState::SUCCESS;
+    LOG_SUCCESS(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper control succeeded: final_position=["
+      << (int)result.result->final_position[0] << "," << (int)result.result->final_position[1]
+      << "], final_torque=[" << (int)result.result->final_torque[0] << "," << (int)result.result->final_torque[1] << "]");
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::SUCCESS;
+    ctx.call_result = ActionCallResult::SUCCESS;
     
   }
   else
   {
-    RCLCPP_INFO(node_->get_logger(), "---------gripper_result_callback End: failed--------\nerror msg: %s", 
-    result.result->error_message.c_str());
-    current_state_ = ActionRunState::FAILURE;
+    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper control failed: " << result.result->error_message);
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::FAILURE;
+    ctx.call_result = ActionCallResult::FAIL_GENERAL;
   }
-}
 
-
-
-bool TaskActionClient::call_vision_reset(const std::string& task_id, const task_cfg::VisionResetParam& param)
-{
-  RCLCPP_INFO(node_->get_logger(), "--------call_vision_reset start---------");
-  task_start_time_ = rclcpp::Time(node_->now());
-
-  // 2. 构造 Goal
-  auto goal = VisionCheckSelf::Goal();
-  goal.header.stamp = node_->now();
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-  goal.task_id = task_id;
-  goal.timeout_ms = param.timeout_ms;
-  goal.priority = 1;
-
-  RCLCPP_INFO(node_->get_logger(), "Sending vision reset Goal: Task ID=%s", task_id.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Header Stamp: sec=%d, nanosec=%u", 
-              goal.header.stamp.sec, 
-              goal.header.stamp.nanosec);
-  // 增加等待时间和重试机制
-  int max_retries = 3;
-  int retry_count = 0;
-  bool server_ready = false;
-  
-  while (retry_count < max_retries && !server_ready) {
-    RCLCPP_INFO(node_->get_logger(), "Waiting for vision check self action server (attempt %d/%d)...", 
-                retry_count + 1, max_retries);
-    
-    server_ready = vision_check_self_client_->wait_for_action_server(std::chrono::seconds(5));
-    
-    if (!server_ready) {
-      retry_count++;
-      if (retry_count < max_retries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  // 释放该 action 占用的资源（遍历所有 context）
+  {
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    for (auto& [key, ctx] : action_contexts_)
+    {
+      if (!ctx.acquired_resources.empty())
+      {
+        for (const auto& res : ctx.acquired_resources)
+        {
+          release_resource(res);
+        }
+        ctx.acquired_resources.clear();
       }
     }
   }
-  
-  if (!server_ready) {
-    RCLCPP_ERROR(node_->get_logger(), "vision check self action server timeout after %d attempts", max_retries);
-    RCLCPP_INFO(node_->get_logger(), "---------call_gripper End--------");
-    return false;
-  }
-  
-  RCLCPP_INFO(node_->get_logger(), "Vision action server connected successfully");
-  
-
-
-  // 5. 配置异步回调选项 (SendGoalOptions)
-  auto send_goal_options = rclcpp_action::Client<VisionCheckSelf>::SendGoalOptions();
-  
-  // 目标响应回调：当服务器接受或拒绝目标时触发
-  send_goal_options.goal_response_callback =
-    std::bind(&TaskActionClient::vision_self_goal_response_callback, this, std::placeholders::_1);
-    
-  // 反馈回调：服务器周期性发送进度时触发
-  send_goal_options.feedback_callback =
-    std::bind(&TaskActionClient::vision_self_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
-    
-  // 结果回调：任务完成时触发
-  send_goal_options.result_callback =
-    std::bind(&TaskActionClient::vision_self_result_callback, this, std::placeholders::_1);
-  auto vision_check_self_send_future_ = vision_check_self_client_->async_send_goal(goal, send_goal_options);
-  current_state_ = ActionRunState::RUNNING;
-  //StartTimer(goal.timeout_ms);
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-
-
-  execution_time_ = goal.timeout_ms;
-  return true;
 }
 
+// ============================================================================
+// send_goal（串行版本，使用 "default" key）
+// ============================================================================
 
-bool TaskActionClient::call_vision_check_self(const std::string& task_id, const task_cfg::VisionCheckSelfParam& param)
+ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act)
 {
-  RCLCPP_INFO(node_->get_logger(), "--------call_vision_check_self start---------");
-  task_start_time_ = rclcpp::Time(node_->now());
+    const std::string state_key = "default";
+    return send_goal(act, state_key);
+}
 
-  // 2. 构造 Goal
-  auto goal = VisionCheckSelf::Goal();
-  goal.header.stamp = node_->now();
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-  goal.task_id = task_id;
-  goal.timeout_ms = param.timeout_ms;
-  goal.priority = 1;
+// ============================================================================
+// dispatch_action：动作类型分发执行（send_goal 共享逻辑）
+// ============================================================================
 
-  RCLCPP_INFO(node_->get_logger(), "Sending vision check self Goal: Task ID=%s", task_id.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Header Stamp: sec=%d, nanosec=%u", 
-              goal.header.stamp.sec, 
-              goal.header.stamp.nanosec);
-  // 增加等待时间和重试机制
-  int max_retries = 3;
-  int retry_count = 0;
-  bool server_ready = false;
-  
-  while (retry_count < max_retries && !server_ready) {
-    RCLCPP_INFO(node_->get_logger(), "Waiting for vision check self action server (attempt %d/%d)...", 
-                retry_count + 1, max_retries);
-    
-    server_ready = vision_check_self_client_->wait_for_action_server(std::chrono::milliseconds(100));
-    
-    if (!server_ready) {
-      retry_count++;
-      if (retry_count < max_retries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
+ActionCallResult TaskActionClient::dispatch_action(
+    const task_cfg::AtomicAction& act,
+    const std::string& task_id,
+    ActionContext& ctx,
+    const std::string& state_key)
+{
+    const std::string& act_type = act.action_type;
+    const std::string log_prefix = (state_key == "default") ? "" : "[Branch " + state_key + "] ";
+
+    if (act_type == "vision_detect")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = 60000;
+        ActionCallResult res = call_vision_detect(task_id, act.vision_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal vision_detect: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal vision_detect failed: " << action_call_result_to_str(res));
+        return res;
     }
-  }
-  
-  if (!server_ready) {
-    RCLCPP_ERROR(node_->get_logger(), "vision check self action server timeout after %d attempts", max_retries);
-    RCLCPP_INFO(node_->get_logger(), "---------call_gripper End--------");
-    return false;
-  }
-  
-  RCLCPP_INFO(node_->get_logger(), "Vision action server connected successfully");
-  
-
-
-  // 5. 配置异步回调选项 (SendGoalOptions)
-  auto send_goal_options = rclcpp_action::Client<VisionCheckSelf>::SendGoalOptions();
-  
-  // 目标响应回调：当服务器接受或拒绝目标时触发
-  send_goal_options.goal_response_callback =
-    std::bind(&TaskActionClient::vision_self_goal_response_callback, this, std::placeholders::_1);
-    
-  // 反馈回调：服务器周期性发送进度时触发
-  send_goal_options.feedback_callback =
-    std::bind(&TaskActionClient::vision_self_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
-    
-  // 结果回调：任务完成时触发
-  send_goal_options.result_callback =
-    std::bind(&TaskActionClient::vision_self_result_callback, this, std::placeholders::_1);
-  auto vision_check_self_send_future_ = vision_check_self_client_->async_send_goal(goal, send_goal_options);
-  current_state_ = ActionRunState::RUNNING;
-  //StartTimer(goal.timeout_ms);
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-
-
-  execution_time_ = goal.timeout_ms;
-  return true;
-}
-
-
-void TaskActionClient::vision_self_goal_response_callback(GoalHandleVisionCheckSelf::SharedPtr goal_handle)
-{
-  auto goal = goal_handle.get();
-  if (!goal) {
-      RCLCPP_ERROR(node_->get_logger(), "Goal was rejected by server");
-      current_state_ = ActionRunState::RUNNING;
-  } else {
-      RCLCPP_INFO(node_->get_logger(), "Goal accepted by server, waiting for result...");
-  }
-}
-
-void TaskActionClient::vision_self_feedback_callback(GoalHandleVisionCheckSelf::SharedPtr, const std::shared_ptr<const GoalHandleVisionCheckSelf::Feedback> feedback)
-{
-  RCLCPP_INFO(node_->get_logger(), "vision check self Received feedback: %.2f, info: %s", feedback->progress_percent, feedback->current_step.c_str());
-}
-
-void TaskActionClient::vision_self_result_callback(const GoalHandleVisionCheckSelf::WrappedResult & result)
-{
-  if(result.result->success)
-  {
-    RCLCPP_INFO(node_->get_logger(), "---------vision_self_result_callback End: success--------");
-    current_state_ = ActionRunState::SUCCESS;
-    
-  }
-  else
-  {
-    RCLCPP_INFO(node_->get_logger(), "---------vision_self_result_callback End: failed--------\nerror msg: %s", 
-    result.result->error_message.c_str());
-    current_state_ = ActionRunState::FAILURE;
-  }
-}
-
-
-
-
-bool TaskActionClient::call_control_check_self(const std::string& task_id, const task_cfg::ControlCheckSelfParam& param)
-{
-  RCLCPP_INFO(node_->get_logger(), "--------call_control_check_self start---------");
-  task_start_time_ = rclcpp::Time(node_->now());
-
-  // 2. 构造 Goal
-  auto goal = ControlCheckSelf::Goal();
-  goal.header.stamp = node_->now();
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-  goal.task_id = task_id;
-  goal.timeout_ms = param.timeout_ms;
-  goal.priority = 1;
-  goal.com_port[0] = param.com_port[0];
-  goal.com_port[1] = param.com_port[1];
-  RCLCPP_INFO(node_->get_logger(), "Sending control check self Goal: Task ID=%s", task_id.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Header Stamp: sec=%d, nanosec=%u", 
-              goal.header.stamp.sec, 
-              goal.header.stamp.nanosec);
-  // 增加等待时间和重试机制
-  int max_retries = 3;
-  int retry_count = 0;
-  bool server_ready = false;
-  
-  while (retry_count < max_retries && !server_ready) {
-    RCLCPP_INFO(node_->get_logger(), "Waiting for coontrol check self action server (attempt %d/%d)...", 
-                retry_count + 1, max_retries);
-    
-    server_ready = control_check_self_client_->wait_for_action_server(std::chrono::milliseconds(100));
-    
-    if (!server_ready) {
-      retry_count++;
-      if (retry_count < max_retries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
+    else if (act_type == "move_arm")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = 60000;
+        geometry_msgs::msg::PoseStamped dummy_pose = pose;
+        sensor_msgs::msg::PointCloud2 dummy_cloud = cloud;
+        ActionCallResult res = call_move_arm(task_id, act.arm_param, dummy_pose, dummy_cloud, "base_link", state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_arm: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_arm failed: " << action_call_result_to_str(res));
+        return res;
     }
-  }
-  
-  if (!server_ready) {
-    RCLCPP_ERROR(node_->get_logger(), "control check self action server timeout after %d attempts", max_retries);
-    RCLCPP_INFO(node_->get_logger(), "---------call_gripper End--------");
-    return false;
-  }
-  
-  RCLCPP_INFO(node_->get_logger(), "control action server connected successfully");
-  
-
-
-  // 5. 配置异步回调选项 (SendGoalOptions)
-  auto send_goal_options = rclcpp_action::Client<ControlCheckSelf>::SendGoalOptions();
-  
-  // 目标响应回调：当服务器接受或拒绝目标时触发
-  send_goal_options.goal_response_callback =
-    std::bind(&TaskActionClient::control_self_goal_response_callback, this, std::placeholders::_1);
-    
-  // 反馈回调：服务器周期性发送进度时触发
-  send_goal_options.feedback_callback =
-    std::bind(&TaskActionClient::control_self_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
-    
-  // 结果回调：任务完成时触发
-  send_goal_options.result_callback =
-    std::bind(&TaskActionClient::control_self_result_callback, this, std::placeholders::_1);
-  auto control_check_self_send_future_ = control_check_self_client_->async_send_goal(goal, send_goal_options);
-  current_state_ = ActionRunState::RUNNING;
-  //StartTimer(goal.timeout_ms);
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-
-
-  execution_time_ = goal.timeout_ms;
-  return true;
-}
-
-
-void TaskActionClient::control_self_goal_response_callback(GoalHandleControlCheckSelf::SharedPtr goal_handle)
-{
-  auto goal = goal_handle.get();
-  if (!goal) {
-      RCLCPP_ERROR(node_->get_logger(), "Goal was rejected by server");
-      current_state_ = ActionRunState::RUNNING;
-  } else {
-      RCLCPP_INFO(node_->get_logger(), "Goal accepted by server, waiting for result...");
-  }
-}
-
-void TaskActionClient::control_self_feedback_callback(GoalHandleControlCheckSelf::SharedPtr, const std::shared_ptr<const GoalHandleControlCheckSelf::Feedback> feedback)
-{
-  RCLCPP_INFO(node_->get_logger(), "Control check self Received feedback: %.2f, info: %s", feedback->progress_percent, feedback->current_step.c_str());
-}
-
-void TaskActionClient::control_self_result_callback(const GoalHandleControlCheckSelf::WrappedResult & result)
-{
-  if(result.result->success)
-  {
-    RCLCPP_INFO(node_->get_logger(), "---------Control_self_result_callback End: success--------");
-    current_state_ = ActionRunState::SUCCESS;
-    
-  }
-  else
-  {
-    RCLCPP_INFO(node_->get_logger(), "---------Control_self_result_callback End: failed--------\nerror msg: %s", 
-    result.result->error_message.c_str());
-    current_state_ = ActionRunState::FAILURE;
-  }
-}
-
-
-bool TaskActionClient::call_control_reset(const std::string& task_id, const task_cfg::ControlResetParam& param)
-{
-  RCLCPP_INFO(node_->get_logger(), "--------call_control_reset start---------");
-  task_start_time_ = rclcpp::Time(node_->now());
-
-  // 2. 构造 Goal
-  auto goal = ControlReset::Goal();
-  goal.header.stamp = node_->now();
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-  goal.task_id = task_id;
-  goal.timeout_ms = param.timeout_ms;
-  goal.priority = 1;
-
-  RCLCPP_INFO(node_->get_logger(), "Sending control reset Goal: Task ID=%s", task_id.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Header Stamp: sec=%d, nanosec=%u", 
-              goal.header.stamp.sec, 
-              goal.header.stamp.nanosec);
-  // 增加等待时间和重试机制
-  int max_retries = 3;
-  int retry_count = 0;
-  bool server_ready = false;
-  
-  while (retry_count < max_retries && !server_ready) {
-    RCLCPP_INFO(node_->get_logger(), "Waiting for control reset action server (attempt %d/%d)...", 
-                retry_count + 1, max_retries);
-    
-    server_ready = control_reset_client_->wait_for_action_server(std::chrono::milliseconds(100));
-    
-    if (!server_ready) {
-      retry_count++;
-      if (retry_count < max_retries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
+    else if (act_type == "gripper_ctrl")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = act.gripper_param.timeout_ms > 0 ?
+            static_cast<uint32_t>(act.gripper_param.timeout_ms) : 30000;
+        LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal gripper_ctrl: position_size=" << act.gripper_param.position.size());
+        ActionCallResult res = call_gripper(task_id, act.gripper_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal gripper_ctrl: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal gripper_ctrl failed: " << action_call_result_to_str(res));
+        return res;
     }
-  }
-  
-  if (!server_ready) {
-    RCLCPP_ERROR(node_->get_logger(), "control reset action server timeout after %d attempts", max_retries);
-    RCLCPP_INFO(node_->get_logger(), "---------call_gripper End--------");
-    return false;
-  }
-  
-  RCLCPP_INFO(node_->get_logger(), "control reset server connected successfully");
-  
-
-
-  // 5. 配置异步回调选项 (SendGoalOptions)
-  auto send_goal_options = rclcpp_action::Client<ControlReset>::SendGoalOptions();
-  
-  // 目标响应回调：当服务器接受或拒绝目标时触发
-  send_goal_options.goal_response_callback =
-    std::bind(&TaskActionClient::control_reset_goal_response_callback, this, std::placeholders::_1);
-    
-  // 反馈回调：服务器周期性发送进度时触发
-  send_goal_options.feedback_callback =
-    std::bind(&TaskActionClient::control_reset_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
-    
-  // 结果回调：任务完成时触发
-  send_goal_options.result_callback =
-    std::bind(&TaskActionClient::control_reset_result_callback, this, std::placeholders::_1);
-  auto vision_check_self_send_future_ = control_reset_client_->async_send_goal(goal, send_goal_options);
-  current_state_ = ActionRunState::RUNNING;
-  //StartTimer(goal.timeout_ms);
-  task_start_time_ = rclcpp::Time(goal.header.stamp);
-
-
-  execution_time_ = goal.timeout_ms;
-  return true;
+    else if (act_type == "vision_check_self")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = act.vision_check_self_param.timeout_ms > 0 ?
+            static_cast<uint32_t>(act.vision_check_self_param.timeout_ms) : 60000;
+        ActionCallResult res = call_vision_check_self(task_id, act.vision_check_self_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal vision_check_self: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal vision_check_self failed: " << action_call_result_to_str(res));
+        return res;
+    }
+    else if (act_type == "control_check_self")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = act.control_check_self_param.timeout_ms > 0 ?
+            static_cast<uint32_t>(act.control_check_self_param.timeout_ms) : 60000;
+        ActionCallResult res = call_control_check_self(task_id, act.control_check_self_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_check_self: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_check_self failed: " << action_call_result_to_str(res));
+        return res;
+    }
+    else if (act_type == "vision_reset")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = act.vision_reset_param.timeout_ms > 0 ?
+            static_cast<uint32_t>(act.vision_reset_param.timeout_ms) : 60000;
+        ActionCallResult res = call_vision_reset(task_id, act.vision_reset_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal vision_reset: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal vision_reset failed: " << action_call_result_to_str(res));
+        return res;
+    }
+    else if (act_type == "control_reset")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = act.control_reset_param.timeout_ms > 0 ?
+            static_cast<uint32_t>(act.control_reset_param.timeout_ms) : 60000;
+        ActionCallResult res = call_control_reset(task_id, act.control_reset_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_reset: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_reset failed: " << action_call_result_to_str(res));
+        return res;
+    }
+    else
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "Unknown action type: " << act_type);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_UNKNOWN_TYPE;
+        return ActionCallResult::FAIL_UNKNOWN_TYPE;
+    }
 }
 
-void TaskActionClient::control_reset_goal_response_callback(GoalHandleHardwareReset::SharedPtr goal_handle)
+// ============================================================================
+// 并行分支专用：带 state_key 的重载函数
+// ============================================================================
+
+bool TaskActionClient::is_action_running(const std::string& state_key) const
 {
-  auto goal = goal_handle.get();
-  if (!goal) 
-  {
-      RCLCPP_ERROR(node_->get_logger(), "Goal was rejected by server");
-      current_state_ = ActionRunState::RUNNING;
-
-  } else {
-
-      RCLCPP_INFO(node_->get_logger(), "Goal accepted by server, waiting for result...");
-
-  }
+    return get_ctx(state_key).state == ActionRunState::RUNNING;
 }
 
-void TaskActionClient::control_reset_feedback_callback(GoalHandleHardwareReset::SharedPtr, const std::shared_ptr<const GoalHandleHardwareReset::Feedback> feedback)
+bool TaskActionClient::is_action_success(const std::string& state_key) const
 {
-  RCLCPP_INFO(node_->get_logger(), "Control reset Received feedback: %.2f, info: %s", feedback->progress_percent, feedback->current_step.c_str());
+    return get_ctx(state_key).state == ActionRunState::SUCCESS;
 }
 
-void TaskActionClient::control_reset_result_callback(const GoalHandleHardwareReset::WrappedResult & result)
+bool TaskActionClient::is_action_failure(const std::string& state_key) const
 {
-  if(result.result->success)
-  {
-    RCLCPP_INFO(node_->get_logger(), "---------control_reset_result_callback End: success--------");
-    current_state_ = ActionRunState::SUCCESS;
-    
-  }
-  else
-  {
-    RCLCPP_INFO(node_->get_logger(), "---------control_reset_result_callback End: failed--------\nerror msg: %s", 
-    result.result->error_message.c_str());
-    current_state_ = ActionRunState::FAILURE;
-  }
+    return get_ctx(state_key).state == ActionRunState::FAILURE;
 }
 
-
-bool TaskActionClient::send_goal(const task_cfg::AtomicAction& act)
+void TaskActionClient::reset_action_state(const std::string& state_key)
 {
-  // 先重置状态
-    reset_state();
+    auto& ctx = get_ctx(state_key);
+    ctx.state = ActionRunState::IDLE;
+    ctx.call_result = ActionCallResult::SUCCESS;
+    ctx.start_time = rclcpp::Time(0, 0);
+    // 释放该 context 占用的资源，防止资源锁泄漏导致下次任务无法获取资源
+    release_acquired_resources(ctx);
+}
+
+void TaskActionClient::reset_all_states()
+{
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    for (auto& [key, ctx] : action_contexts_)
+    {
+        ctx.state = ActionRunState::IDLE;
+        ctx.call_result = ActionCallResult::SUCCESS;
+        ctx.start_time = rclcpp::Time(0, 0);
+        // 释放该 context 占用的所有资源
+        for (const auto& res : ctx.acquired_resources)
+        {
+            release_resource(res);
+        }
+        ctx.acquired_resources.clear();
+    }
+}
+
+ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act, const std::string& state_key)
+{
+    // 先重置该分支状态
+    auto& ctx = get_ctx(state_key);
+    ctx.state = ActionRunState::IDLE;
+    ctx.call_result = ActionCallResult::SUCCESS;
 
     const std::string& act_type = act.action_type;
+
+    // 生成唯一任务 ID
     uuid_t uuid;
     uuid_generate(uuid);
     char buf[40];
     uuid_unparse(uuid, buf);
     std::string current_task_id_ = std::string(buf);
-    bool ret = false;
 
-    // 根据动作类型分支调用
-    if (act_type == "vision_detect")
+    // ========== 资源锁检查：尝试获取所需资源 ==========
+    auto required_res = get_required_resources(act_type, act);
+    for (const auto& res : required_res)
     {
-        current_state_ = ActionRunState::RUNNING;
-        
-        bool res = call_vision_detect(current_task_id_, act.vision_param);
-
-        if (res)
+        if (!acquire_resource(res))
         {
-          RCLCPP_INFO(node_->get_logger(), "Detect vision result: true");
-          current_state_ = ActionRunState::RUNNING;
-
-          ret = true;
-        } 
-        else 
-        {
-          current_state_ = ActionRunState::FAILURE;
-
-          ret = false;
+            LOG_WARN(node_->get_logger(), task_log::Tag::ACTION,
+                "[Branch " << state_key << "] send_goal " << act_type
+                << " failed: resource " << resource_type_to_str(res) << " is busy, will retry");
+            ctx.state = ActionRunState::IDLE;
+            ctx.call_result = ActionCallResult::FAIL_RESOURCE_BUSY;
+            return ActionCallResult::FAIL_RESOURCE_BUSY;
         }
-        
     }
-    else if (act_type == "move_arm")
+    ctx.acquired_resources = required_res;
+    ctx.start_time = node_->now();
+
+    // ========== 动作类型分发 ==========
+    ActionCallResult ret = dispatch_action(act, current_task_id_, ctx, state_key);
+
+    // 如果发送失败（非资源锁原因），释放已获取的资源
+    if (!action_call_result_is_ok(ret))
     {
-      current_state_ = ActionRunState::RUNNING;
-      // 此处根据你实际业务补充 pose / pointcloud 等参数
-      geometry_msgs::msg::PoseStamped dummy_pose = pose;
-      sensor_msgs::msg::PointCloud2 dummy_cloud = cloud;
-        
-      bool res = call_move_arm(current_task_id_, act.arm_param, dummy_pose, dummy_cloud, "base_link");
-      if (res)
-      {
-        RCLCPP_INFO(node_->get_logger(), "move arm result: true");
-        current_state_ = ActionRunState::RUNNING;
-        ret = true;
-      }
-      else
-      {
-          current_state_ = ActionRunState::FAILURE;
-      }
-    }
-    else if (act_type == "gripper_ctrl")
-    {
-      current_state_ = ActionRunState::RUNNING;
-      RCLCPP_INFO(node_->get_logger(), "---------act.gripper_param position size:%ld--------------", act.gripper_param.position.size());    
-      bool res = call_gripper(current_task_id_, act.gripper_param);
-      if (res)
-      {
-        RCLCPP_INFO(node_->get_logger(), "gripper control result: true");
-        current_state_ = ActionRunState::RUNNING;
-        ret = true;
-      }
-      else
-      {
-        current_state_ = ActionRunState::FAILURE;
-      }
-    }
-    else if (act_type == "vision_reset")
-    {
-      current_state_ = ActionRunState::RUNNING;
-      
-      bool res = call_vision_reset(current_task_id_, act.vision_reset_param);
-      if (res)
-      {
-        RCLCPP_INFO(node_->get_logger(), "gripper control result: true");
-        current_state_ = ActionRunState::RUNNING;
-        ret = true;
-      }
-      else
-      {
-        current_state_ = ActionRunState::FAILURE;
-      }
-    }
-    else if (act_type == "vision_check_self")
-    {
-      current_state_ = ActionRunState::RUNNING;
-      
-      bool res = call_vision_check_self(current_task_id_, act.vision_check_self_param);
-      if (res)
-      {
-        RCLCPP_INFO(node_->get_logger(), "vision check self: true");
-        current_state_ = ActionRunState::RUNNING;
-        ret = true;
-        RCLCPP_INFO(node_->get_logger(), "vision check self: true");
-      }
-      else
-      {
-        current_state_ = ActionRunState::FAILURE;
-      }
-    }
-    else if (act_type == "control_check_self")
-    {
-      current_state_ = ActionRunState::RUNNING;
-      
-      bool res = call_control_check_self(current_task_id_, act.control_check_self_param);
-      if (res)
-      {
-        RCLCPP_INFO(node_->get_logger(), "control check self: true");
-        current_state_ = ActionRunState::RUNNING;
-        ret = true;
-        RCLCPP_INFO(node_->get_logger(), "control check self: true");
-      }
-      else
-      {
-        current_state_ = ActionRunState::FAILURE;
-      }
-    }
-    else if (act_type == "control_reset")
-    {
-      current_state_ = ActionRunState::RUNNING;
-      
-      bool res = call_control_reset(current_task_id_, act.control_reset_param);
-      if (res)
-      {
-        RCLCPP_INFO(node_->get_logger(), "control check self: true");
-        current_state_ = ActionRunState::RUNNING;
-        ret = true;
-        RCLCPP_INFO(node_->get_logger(), "control check self: true");
-      }
-      else
-      {
-        current_state_ = ActionRunState::FAILURE;
-      }
-    }
-    else
-    {
-      RCLCPP_ERROR(node_->get_logger(), "Unknown  action type: %s", act_type.c_str());
-      current_state_ = ActionRunState::FAILURE;
-      ret = false;
+        release_acquired_resources(ctx);
     }
 
     return ret;
 }
+
+// ============================================================================
+// 资源锁实现
+// ============================================================================
+
+void TaskActionClient::release_acquired_resources(ActionContext& ctx)
+{
+    for (const auto& res : ctx.acquired_resources)
+    {
+        release_resource(res);
+    }
+    ctx.acquired_resources.clear();
 }
+
+bool TaskActionClient::acquire_resource(ResourceType res)
+{
+    size_t idx = static_cast<size_t>(res);
+    if (idx >= static_cast<size_t>(ResourceType::COUNT))
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "acquire_resource: invalid resource index " << idx);
+        return false;
+    }
+    // atomic 的 test-and-set：期望 false（未占用），设置为 true（占用）
+    bool expected = false;
+    bool acquired = resource_locks_[idx].compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+    if (acquired)
+    {
+        LOG_DEBUG(node_->get_logger(), task_log::Tag::ACTION, "Resource " << resource_type_to_str(res) << " acquired");
+    }
+    else
+    {
+        LOG_DEBUG(node_->get_logger(), task_log::Tag::ACTION, "Resource " << resource_type_to_str(res) << " is busy");
+    }
+    return acquired;
+}
+
+void TaskActionClient::release_resource(ResourceType res)
+{
+    size_t idx = static_cast<size_t>(res);
+    if (idx >= static_cast<size_t>(ResourceType::COUNT))
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "release_resource: invalid resource index " << idx);
+        return;
+    }
+    resource_locks_[idx].store(false, std::memory_order_release);
+    LOG_DEBUG(node_->get_logger(), task_log::Tag::ACTION, "Resource " << resource_type_to_str(res) << " released");
+}
+
+bool TaskActionClient::is_resource_busy(ResourceType res) const
+{
+    size_t idx = static_cast<size_t>(res);
+    if (idx >= static_cast<size_t>(ResourceType::COUNT))
+    {
+        return true; // 无效资源视为 busy
+    }
+    return resource_locks_[idx].load(std::memory_order_acquire);
+}
+
+std::vector<ResourceType> TaskActionClient::get_required_resources(
+    const std::string& act_type, const task_cfg::AtomicAction& act) const
+{
+    std::vector<ResourceType> resources;
+    if (act_type == "vision_detect" || act_type == "vision_check_self" || act_type == "vision_reset")
+    {
+        resources.push_back(ResourceType::VISION);
+    }
+    else if (act_type == "control_check_self" || act_type == "control_reset")
+    {
+        // 运控自检和复位占用左右臂资源
+        resources.push_back(ResourceType::LEFT_ARM);
+        resources.push_back(ResourceType::RIGHT_ARM);
+    }
+    else if (act_type == "move_arm")
+    {
+        if (act.arm_param.arm_id == "arm0")
+        {
+            resources.push_back(ResourceType::LEFT_ARM);
+        }
+        else if (act.arm_param.arm_id == "arm1")
+        {
+            resources.push_back(ResourceType::RIGHT_ARM);
+        }
+    }
+    else if (act_type == "gripper_ctrl")
+    {
+        if (act.gripper_param.gripper_id == 0)
+        {
+            resources.push_back(ResourceType::LEFT_GRIPPER);
+        }
+        else if (act.gripper_param.gripper_id == 1)
+        {
+            resources.push_back(ResourceType::RIGHT_GRIPPER);
+        }
+    }
+    return resources;
+}
+
+// ============================================================================
+// call_vision_check_self - 调用视觉自检（/vision/Checkself）
+// ============================================================================
+ActionCallResult TaskActionClient::call_vision_check_self(
+    const std::string& task_id, const task_cfg::VisionCheckSelfParam& param,
+    const std::string& state_key)
+{
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::VISION, "===== Vision CheckSelf Start =====");
+
+    if (task_id.empty())
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "task_id is empty");
+        return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+
+    // 等待 server 就绪
+    if (!hw_check_client_->wait_for_action_server(std::chrono::seconds(5)))
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision CheckSelf action server not available");
+        return ActionCallResult::FAIL_SERVER_TIMEOUT;
+    }
+
+    auto goal = HardWareCheck::Goal();
+    goal.header.stamp = node_->now();
+    goal.task_id = task_id;
+    goal.timeout_ms = param.timeout_ms > 0 ? param.timeout_ms : 15000;
+    goal.priority = 1;
+
+    LOG_INFO(node_->get_logger(), task_log::Tag::VISION,
+        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+
+    auto send_goal_options = rclcpp_action::Client<HardWareCheck>::SendGoalOptions();
+
+    send_goal_options.goal_response_callback =
+        [this, state_key](GoalHandleHardWareCheck::SharedPtr goal_handle)
+        {
+            if (!goal_handle)
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision CheckSelf goal rejected [" << state_key << "]");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+            }
+            else
+            {
+                LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "Vision CheckSelf goal accepted [" << state_key << "]");
+            }
+        };
+
+    send_goal_options.feedback_callback =
+        std::bind(&TaskActionClient::hw_check_feedback_callback, this,
+                  std::placeholders::_1, std::placeholders::_2);
+
+    send_goal_options.result_callback =
+        [this, state_key](const GoalHandleHardWareCheck::WrappedResult& result)
+        {
+            if (result.result->success)
+            {
+                LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION,
+                    "Vision CheckSelf succeeded [" << state_key << "], execution_time=" << result.result->execution_time << "s");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::SUCCESS;
+                ctx.call_result = ActionCallResult::SUCCESS;
+            }
+            else
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::VISION,
+                    "Vision CheckSelf failed [" << state_key << "]: " << result.result->error_message);
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GENERAL;
+            }
+
+            // 释放资源
+            {
+                std::lock_guard<std::mutex> lock(ctx_mutex_);
+                for (auto& [key, ctx] : action_contexts_)
+                {
+                    if (!ctx.acquired_resources.empty())
+                    {
+                        for (const auto& res : ctx.acquired_resources)
+                        {
+                            release_resource(res);
+                        }
+                        ctx.acquired_resources.clear();
+                    }
+                }
+            }
+        };
+
+    hw_check_client_->async_send_goal(goal, send_goal_options);
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::VISION, "===== Vision CheckSelf End =====");
+    return ActionCallResult::SUCCESS;
+}
+
+// ============================================================================
+// call_control_check_self - 调用运控自检（/Control/Checkself）
+// ============================================================================
+ActionCallResult TaskActionClient::call_control_check_self(
+    const std::string& task_id, const task_cfg::ControlCheckSelfParam& param,
+    const std::string& state_key)
+{
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ARM, "===== Control CheckSelf Start =====");
+
+    if (task_id.empty())
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "task_id is empty");
+        return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+
+    // 使用成员变量 control_check_client_（已在构造函数中初始化）
+    if (!control_check_client_->wait_for_action_server(std::chrono::seconds(5)))
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Control CheckSelf action server not available");
+        return ActionCallResult::FAIL_SERVER_TIMEOUT;
+    }
+
+    auto goal = HardWareCheck::Goal();
+    goal.header.stamp = node_->now();
+    goal.task_id = task_id;
+    goal.timeout_ms = param.timeout_ms > 0 ? param.timeout_ms : 15000;
+    goal.priority = 1;
+    // 设置 com_port 参数（如果配置了）
+    if (param.com_port.size() >= 2)
+    {
+        goal.com_port[0] = param.com_port[0];
+        goal.com_port[1] = param.com_port[1];
+    }
+
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM,
+        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+
+    auto send_goal_options = rclcpp_action::Client<HardWareCheck>::SendGoalOptions();
+
+    send_goal_options.goal_response_callback =
+        [this, state_key](GoalHandleHardWareCheck::SharedPtr goal_handle)
+        {
+            if (!goal_handle)
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Control CheckSelf goal rejected [" << state_key << "]");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+            }
+            else
+            {
+                LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Control CheckSelf goal accepted [" << state_key << "]");
+            }
+        };
+
+    send_goal_options.feedback_callback =
+        [this](GoalHandleHardWareCheck::SharedPtr, const std::shared_ptr<const HardWareCheck::Feedback> feedback)
+        {
+            if (feedback)
+            {
+                LOG_DEBUG(node_->get_logger(), task_log::Tag::ARM,
+                    "Control CheckSelf feedback: " << feedback->progress_percent << "% - " << feedback->current_step);
+            }
+        };
+
+    send_goal_options.result_callback =
+        [this, state_key](const GoalHandleHardWareCheck::WrappedResult& result)
+        {
+            if (result.result->success)
+            {
+                LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM,
+                    "Control CheckSelf succeeded [" << state_key << "], execution_time=" << result.result->execution_time << "s");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::SUCCESS;
+                ctx.call_result = ActionCallResult::SUCCESS;
+            }
+            else
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+                    "Control CheckSelf failed [" << state_key << "]: " << result.result->error_message);
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GENERAL;
+            }
+
+            // 释放资源
+            {
+                std::lock_guard<std::mutex> lock(ctx_mutex_);
+                for (auto& [key, ctx] : action_contexts_)
+                {
+                    if (!ctx.acquired_resources.empty())
+                    {
+                        for (const auto& res : ctx.acquired_resources)
+                        {
+                            release_resource(res);
+                        }
+                        ctx.acquired_resources.clear();
+                    }
+                }
+            }
+        };
+
+    control_check_client_->async_send_goal(goal, send_goal_options);
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ARM, "===== Control CheckSelf End =====");
+    return ActionCallResult::SUCCESS;
+}
+
+// ============================================================================
+// call_vision_reset - 调用视觉复位（/vision/Reset）
+// ============================================================================
+ActionCallResult TaskActionClient::call_vision_reset(
+    const std::string& task_id, const task_cfg::VisionResetParam& param,
+    const std::string& state_key)
+{
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::VISION, "===== Vision Reset Start =====");
+
+    if (task_id.empty())
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "task_id is empty");
+        return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+
+    if (!hw_reset_client_->wait_for_action_server(std::chrono::seconds(5)))
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision Reset action server not available");
+        return ActionCallResult::FAIL_SERVER_TIMEOUT;
+    }
+
+    auto goal = HardWareReset::Goal();
+    goal.header.stamp = node_->now();
+    goal.task_id = task_id;
+    goal.timeout_ms = param.timeout_ms > 0 ? param.timeout_ms : 15000;
+    goal.priority = 1;
+
+    LOG_INFO(node_->get_logger(), task_log::Tag::VISION,
+        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+
+    auto send_goal_options = rclcpp_action::Client<HardWareReset>::SendGoalOptions();
+
+    send_goal_options.goal_response_callback =
+        [this, state_key](GoalHandleHardWareReset::SharedPtr goal_handle)
+        {
+            if (!goal_handle)
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision Reset goal rejected [" << state_key << "]");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+            }
+            else
+            {
+                LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "Vision Reset goal accepted [" << state_key << "]");
+            }
+        };
+
+    send_goal_options.feedback_callback =
+        std::bind(&TaskActionClient::hw_reset_feedback_callback, this,
+                  std::placeholders::_1, std::placeholders::_2);
+
+    send_goal_options.result_callback =
+        [this, state_key](const GoalHandleHardWareReset::WrappedResult& result)
+        {
+            if (result.result->success)
+            {
+                LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION,
+                    "Vision Reset succeeded [" << state_key << "], duration=" << result.result->duration_sec << "s");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::SUCCESS;
+                ctx.call_result = ActionCallResult::SUCCESS;
+            }
+            else
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::VISION,
+                    "Vision Reset failed [" << state_key << "]: " << result.result->error_message);
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GENERAL;
+            }
+
+            // 释放资源
+            {
+                std::lock_guard<std::mutex> lock(ctx_mutex_);
+                for (auto& [key, ctx] : action_contexts_)
+                {
+                    if (!ctx.acquired_resources.empty())
+                    {
+                        for (const auto& res : ctx.acquired_resources)
+                        {
+                            release_resource(res);
+                        }
+                        ctx.acquired_resources.clear();
+                    }
+                }
+            }
+        };
+
+    hw_reset_client_->async_send_goal(goal, send_goal_options);
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::VISION, "===== Vision Reset End =====");
+    return ActionCallResult::SUCCESS;
+}
+
+// ============================================================================
+// call_control_reset - 调用运控复位（/Control/Reset）
+// ============================================================================
+ActionCallResult TaskActionClient::call_control_reset(
+    const std::string& task_id, const task_cfg::ControlResetParam& param,
+    const std::string& state_key)
+{
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ARM, "===== Control Reset Start =====");
+
+    if (task_id.empty())
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "task_id is empty");
+        return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+
+    // 使用成员变量 control_reset_client_（已在构造函数中初始化）
+    if (!control_reset_client_->wait_for_action_server(std::chrono::seconds(5)))
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Control Reset action server not available");
+        return ActionCallResult::FAIL_SERVER_TIMEOUT;
+    }
+
+    auto goal = HardWareReset::Goal();
+    goal.header.stamp = node_->now();
+    goal.task_id = task_id;
+    goal.timeout_ms = param.timeout_ms > 0 ? param.timeout_ms : 15000;
+    goal.priority = 1;
+
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM,
+        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+
+    auto send_goal_options = rclcpp_action::Client<HardWareReset>::SendGoalOptions();
+
+    send_goal_options.goal_response_callback =
+        [this, state_key](GoalHandleHardWareReset::SharedPtr goal_handle)
+        {
+            if (!goal_handle)
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Control Reset goal rejected [" << state_key << "]");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+            }
+            else
+            {
+                LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Control Reset goal accepted [" << state_key << "]");
+            }
+        };
+
+    send_goal_options.feedback_callback =
+        [this](GoalHandleHardWareReset::SharedPtr, const std::shared_ptr<const HardWareReset::Feedback> feedback)
+        {
+            if (feedback)
+            {
+                LOG_DEBUG(node_->get_logger(), task_log::Tag::ARM,
+                    "Control Reset feedback: " << feedback->progress_percent << "% - " << feedback->current_step);
+            }
+        };
+
+    send_goal_options.result_callback =
+        [this, state_key](const GoalHandleHardWareReset::WrappedResult& result)
+        {
+            if (result.result->success)
+            {
+                LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM,
+                    "Control Reset succeeded [" << state_key << "], duration=" << result.result->duration_sec << "s");
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::SUCCESS;
+                ctx.call_result = ActionCallResult::SUCCESS;
+            }
+            else
+            {
+                LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+                    "Control Reset failed [" << state_key << "]: " << result.result->error_message);
+                auto& ctx = get_ctx(state_key);
+                ctx.state = ActionRunState::FAILURE;
+                ctx.call_result = ActionCallResult::FAIL_GENERAL;
+            }
+
+            // 释放资源
+            {
+                std::lock_guard<std::mutex> lock(ctx_mutex_);
+                for (auto& [key, ctx] : action_contexts_)
+                {
+                    if (!ctx.acquired_resources.empty())
+                    {
+                        for (const auto& res : ctx.acquired_resources)
+                        {
+                            release_resource(res);
+                        }
+                        ctx.acquired_resources.clear();
+                    }
+                }
+            }
+        };
+
+    control_reset_client_->async_send_goal(goal, send_goal_options);
+    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ARM, "===== Control Reset End =====");
+    return ActionCallResult::SUCCESS;
+}
+
+// ============================================================================
+// HardwareCheck 回调函数
+// ============================================================================
+void TaskActionClient::hw_check_goal_response_callback(GoalHandleHardWareCheck::SharedPtr goal_handle)
+{
+    if (!goal_handle)
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "HardwareCheck goal was rejected by server");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+    }
+    else
+    {
+        LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "HardwareCheck goal accepted by server, waiting for result...");
+    }
+}
+
+void TaskActionClient::hw_check_feedback_callback(
+    GoalHandleHardWareCheck::SharedPtr,
+    const std::shared_ptr<const HardWareCheck::Feedback> feedback)
+{
+    if (feedback)
+    {
+        LOG_DEBUG(node_->get_logger(), task_log::Tag::VISION,
+            "HardwareCheck feedback: " << feedback->progress_percent << "% - " << feedback->current_step);
+    }
+}
+
+void TaskActionClient::hw_check_result_callback(const GoalHandleHardWareCheck::WrappedResult& result)
+{
+    if (result.result->success)
+    {
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION,
+            "HardwareCheck succeeded, execution_time=" << result.result->execution_time << "s");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
+    }
+    else
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION,
+            "HardwareCheck failed: " << result.result->error_message);
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GENERAL;
+    }
+
+    // 释放资源
+    {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        for (auto& [key, ctx] : action_contexts_)
+        {
+            if (!ctx.acquired_resources.empty())
+            {
+                for (const auto& res : ctx.acquired_resources)
+                {
+                    release_resource(res);
+                }
+                ctx.acquired_resources.clear();
+            }
+        }
+    }
+}
+
+// ============================================================================
+// HardwareReset 回调函数
+// ============================================================================
+void TaskActionClient::hw_reset_goal_response_callback(GoalHandleHardWareReset::SharedPtr goal_handle)
+{
+    if (!goal_handle)
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "HardwareReset goal was rejected by server");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+    }
+    else
+    {
+        LOG_INFO(node_->get_logger(), task_log::Tag::VISION, "HardwareReset goal accepted by server, waiting for result...");
+    }
+}
+
+void TaskActionClient::hw_reset_feedback_callback(
+    GoalHandleHardWareReset::SharedPtr,
+    const std::shared_ptr<const HardWareReset::Feedback> feedback)
+{
+    if (feedback)
+    {
+        LOG_DEBUG(node_->get_logger(), task_log::Tag::VISION,
+            "HardwareReset feedback: " << feedback->progress_percent << "% - " << feedback->current_step);
+    }
+}
+
+void TaskActionClient::hw_reset_result_callback(const GoalHandleHardWareReset::WrappedResult& result)
+{
+    if (result.result->success)
+    {
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION,
+            "HardwareReset succeeded, duration=" << result.result->duration_sec << "s");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
+    }
+    else
+    {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION,
+            "HardwareReset failed: " << result.result->error_message);
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GENERAL;
+    }
+
+    // 释放资源
+    {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        for (auto& [key, ctx] : action_contexts_)
+        {
+            if (!ctx.acquired_resources.empty())
+            {
+                for (const auto& res : ctx.acquired_resources)
+                {
+                    release_resource(res);
+                }
+                ctx.acquired_resources.clear();
+            }
+        }
+    }
+}
+
+} // namespace task_act

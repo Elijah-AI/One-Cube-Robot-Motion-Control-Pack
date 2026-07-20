@@ -1,66 +1,117 @@
+// Copyright (c) 2026 Robot Control System
+// All rights reserved.
+//
+// Author: gene.wang
+// Date: 2026
+//
+// Description:
+// 任务配置文件解析器实现。
+// 负责加载 YAML 格式的任务配置文件，解析其中的节点配置、
+// Modbus 参数、任务定义（含视觉检测、机械臂移动、夹爪控制等动作），
+// 以及开机自检/复位任务序列。
+
 #include "task_manager/task_config_parser.hpp"
+#include "task_manager/log_helper.hpp"
 #include <rclcpp/rclcpp.hpp>
 
 namespace task_cfg
 {
+
+// 配置解析器统一日志器名称
+static const char* kConfigLogger = "task_config_parser";
+
+/// @brief 加载并解析 YAML 配置文件
+/// @param file_path 配置文件路径
+/// @param out_cfg [输出] 解析后的全局配置
+/// @return true 解析成功，false 解析失败
 bool TaskConfigParser::load_config(const std::string& file_path, GlobalConfig& out_cfg)
 {
   try{
     YAML::Node root = YAML::LoadFile(file_path);
 
-    // 第一步判断文件是否为空 / 根节点无效
+    // 检查根节点是否为有效映射
     if(!root.IsMap())
     {
-      RCLCPP_ERROR(rclcpp::get_logger("config_parser"), "yaml file empty or invalid map");
+      LOG_ERROR(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "YAML file empty or invalid map, path: " << file_path);
       return false;
     }
 
+    // 解析节点 ID
     out_cfg.node_id = root["node_id"].as<int32_t>();
-    RCLCPP_ERROR(rclcpp::get_logger("load_config"), "out_cfg.node_id: %d", out_cfg.node_id);
+    LOG_INFO(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "node_id: " << out_cfg.node_id);
+
+    // 解析 Modbus 从站配置
     auto mb_node = root["modbus_slave"];
     out_cfg.modbus_listen_ip = mb_node["listen_ip"].as<std::string>();
     out_cfg.modbus_port = mb_node["listen_port"].as<uint16_t>();
-    auto reg_map = root["register_map"];
-    out_cfg.task_trigger_base = reg_map["task_trigger_base_addr"].as<uint32_t>();
-    out_cfg.task_status_base = reg_map["task_status_base_addr"].as<uint32_t>();
 
+    // 解析任务列表
     auto tasks_node = root["tasks"];
-
     for(auto it = tasks_node.begin(); it != tasks_node.end(); ++it)
     {
+      auto name = it->first.as<std::string>();
+      LOG_INFO_FLOW(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "Parsing task: " << name);
+
       TaskMapItem item;
+      item.trigger_reg = it->second["trigger_reg"].as<uint32_t>();
+      item.status_reg = it->second["status_reg"].as<uint32_t>();
+
       if(parse_task(it->second, item))
       {
         out_cfg.task_dict[it->first.as<std::string>()] = item;
       }
     }
 
+    // 解析启动任务
     parse_boot(root["boot_task"], out_cfg.boot_tasks);
+
+    LOG_SUCCESS(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+      "Config loaded successfully, tasks: " << out_cfg.task_dict.size());
     return true;
 
   }catch(std::exception& e){
-
-    RCLCPP_ERROR(rclcpp::get_logger("config_parser"), "yaml parse err: %s", e.what());
+    LOG_ERROR_CRITICAL(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "YAML parse error: " << e.what());
     return false;
-    
   }
 }
 
+/// @brief 解析单个动作节点
+/// @param action_node YAML 动作节点
+/// @param act [输出] 解析后的原子动作
+/// @return true 解析成功
 bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
 {
   act.action_type = action_node["action_type"].as<std::string>();
   auto p = action_node["params"];
+  auto c = action_node["condition"];
+
+  // 根据动作类型分别解析对应参数
   if(act.action_type == "vision_detect")
   {
+    // 视觉检测参数
     act.vision_param.target_obj_name = p["target_obj_name"].as<std::string>();
     act.vision_param.expected_frame_id = p["expected_frame_id"].as<std::string>();
     act.vision_param.need_6d_pose = p["need_6d_pose"].as<bool>();
     act.vision_param.need_env_point_cloud = p["need_env_point_cloud"].as<bool>();
     act.vision_param.downsample_res = p["downsample_res"].as<float>();
     act.vision_param.priority = p["priority"].as<int32_t>();
+
+    // 解析执行条件（可选）
+    if (c.IsDefined() && !c.IsNull())
+    {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "Parsing condition for: " << act.action_type);
+      act.action_execut_condition.left_arm_state = c["left_arm_state"].as<std::string>();
+      act.action_execut_condition.power_level = c["power_level"].as<std::string>();
+      act.action_execut_condition.right_arm_state = c["right_arm_state"].as<std::string>();
+      act.action_execut_condition.body_waist_state = c["body_waist_state"].as<std::string>();
+      act.action_execut_condition.vision_state = c["Vision_state"].as<std::string>();
+    } else {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "No condition defined for: " << act.action_type);
+    }
   }
   else if(act.action_type == "move_arm")
   {
+    // 机械臂移动参数
     act.arm_param.arm_id = p["arm_id"].as<std::string>();
     act.arm_param.use_planning = p["use_planning"].as<bool>();
     act.arm_param.collision_check = p["collision_check"].as<bool>();
@@ -69,17 +120,42 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
     act.arm_param.use_config_pose = p["use_config_pose"].as<bool>();
     act.arm_param.config_pose = p["target_pose"].as<std::vector<float>>();
 
+    // 解析执行条件（可选）
+    if (c.IsDefined() && !c.IsNull())
+    {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "Parsing condition for: " << act.action_type);
+      act.action_execut_condition.left_arm_state = c["left_arm_state"].as<std::string>();
+      act.action_execut_condition.power_level = c["power_level"].as<std::string>();
+      act.action_execut_condition.right_arm_state = c["right_arm_state"].as<std::string>();
+      act.action_execut_condition.body_waist_state = c["body_waist_state"].as<std::string>();
+      act.action_execut_condition.vision_state = c["Vision_state"].as<std::string>();
+    } else {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "No condition defined for: " << act.action_type);
+    }
   }
   else if(act.action_type == "gripper_ctrl")
   {
+    // 夹爪控制参数
     act.gripper_param.gripper_id = p["gripper_id"].as<uint8_t>();
     act.gripper_param.com_port = p["comport"].as<std::vector<uint8_t>>();
     act.gripper_param.position = p["position"].as<std::vector<uint8_t>>();
-    RCLCPP_INFO(rclcpp::get_logger("act.gripper_param.position size"), "%d", act.gripper_param.position.size());
     act.gripper_param.speed = p["speed"].as<std::vector<uint8_t>>();
     act.gripper_param.max_torque = p["max_torque"].as<std::vector<uint8_t>>();
     act.gripper_param.block = p["block"].as<bool>();
     act.gripper_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+
+    // 解析执行条件（可选）
+    if (c.IsDefined() && !c.IsNull())
+    {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "Parsing condition for: " << act.action_type);
+      act.action_execut_condition.left_arm_state = c["left_arm_state"].as<std::string>();
+      act.action_execut_condition.power_level = c["power_level"].as<std::string>();
+      act.action_execut_condition.right_arm_state = c["right_arm_state"].as<std::string>();
+      act.action_execut_condition.body_waist_state = c["body_waist_state"].as<std::string>();
+      act.action_execut_condition.vision_state = c["Vision_state"].as<std::string>();
+    } else {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "No condition defined for: " << act.action_type);
+    }
   }
   else if (act.action_type == "vision_check_self")
   {
@@ -101,23 +177,45 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
   return true;
 }
 
+/// @brief 解析单个任务节点
+/// @param task_node YAML 任务节点
+/// @param item [输出] 解析后的任务映射表项
+/// @return true 解析成功
 bool TaskConfigParser::parse_task(YAML::Node task_node, TaskMapItem& item)
 {
-  item.trigger_reg = task_node["trigger_reg"].as<uint32_t>();
-  item.status_reg = task_node["status_reg"].as<uint32_t>();
-  auto seq = task_node["action_sequence"];
-  for(auto a : seq)
+  auto seqnum = task_node["action_sequencenum"].as<uint32_t>();
+  LOG_INFO_FLOW(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+    "Parsing task with " << seqnum << " sequences");
+
+  // 解析每个动作序列
+  for (uint32_t i = 0; i < seqnum; i++)
   {
-    AtomicAction act;
-    RCLCPP_INFO(rclcpp::get_logger("parse_task"), "parse_action");
-    parse_action(a, act);
-    item.action_seq.push_back(act);
+    auto node_name = "action_sequence" + std::to_string(i+1);
+    auto seq = task_node[node_name];
+    LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "Parsing sequence: " << node_name);
+
+    std::vector<AtomicAction> action_list;
+    for(auto a : seq)
+    {
+      AtomicAction act;
+      parse_action(a, act);
+      action_list.push_back(act);
+    }
+    item.action_seq.push_back(action_list);
   }
+
+  LOG_INFO(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+    "Task parsed, sequences: " << item.action_seq.size());
   return true;
 }
 
+/// @brief 解析启动任务节点（自检 + 复位）
+/// @param boot_node YAML 启动任务节点
+/// @param boot [输出] 解析后的启动任务集
+/// @return true 解析成功
 bool TaskConfigParser::parse_boot(YAML::Node boot_node, BootTaskSet& boot)
 {
+  // 解析自检序列
   auto sc_seq = boot_node["self_check"]["action_sequence"];
   for(auto a : sc_seq)
   {
@@ -125,6 +223,8 @@ bool TaskConfigParser::parse_boot(YAML::Node boot_node, BootTaskSet& boot)
     parse_action(a, act);
     boot.self_check_seq.push_back(act);
   }
+
+  // 解析复位序列
   auto rst_seq = boot_node["reset"]["action_sequence"];
   for(auto a : rst_seq)
   {
@@ -132,6 +232,9 @@ bool TaskConfigParser::parse_boot(YAML::Node boot_node, BootTaskSet& boot)
     parse_action(a, act);
     boot.reset_seq.push_back(act);
   }
+
+  LOG_INFO(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+    "Boot tasks parsed: self_check=" << boot.self_check_seq.size() << ", reset=" << boot.reset_seq.size());
   return true;
 }
 }
