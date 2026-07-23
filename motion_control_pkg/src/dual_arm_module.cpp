@@ -119,8 +119,14 @@ rclcpp::Node::SharedPtr DualArmModule::lockNode(const char *context) const
 DualArmModule::~DualArmModule()
 {
     // 安全退出机制：等待正在执行的线程结束
-    if (execution_thread_move_pose_.joinable()) {
-        execution_thread_move_pose_.join();
+    if (execution_thread_move_left_pose_.joinable()) {
+        execution_thread_move_left_pose_.join();
+    }
+    if (execution_thread_move_right_pose_.joinable()) {
+        execution_thread_move_right_pose_.join();
+    }
+    if (execution_thread_move_dual_pose_.joinable()) {
+        execution_thread_move_dual_pose_.join();
     }
     if (execution_thread_control_gripper_.joinable()) {
         execution_thread_control_gripper_.join();
@@ -154,32 +160,51 @@ bool DualArmModule::is_idle(int module_id) const  //根据模块标号返回单�
 
 void DualArmModule::start_execution_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
 {
-    // 如果之前有线程，等待
-    if (execution_thread_move_pose_.joinable()) {
-        execution_thread_move_pose_.join();
-    }
-    
     const auto goal = goal_handle->get_goal();
     // 标记为正在执行,
     if(goal->arm_id==ARM_LEFT)
     {
+        if (execution_thread_move_left_pose_.joinable()) {
+            execution_thread_move_left_pose_.join();
+        }
         is_executing_left_arm_.store(true);
+        execution_thread_move_left_pose_ = std::thread(&DualArmModule::execution_loop_move_left_pose, this, goal_handle);
     }
     else if(goal->arm_id==ARM_RIGHT)
     {
+        if (execution_thread_move_right_pose_.joinable()) {
+            execution_thread_move_right_pose_.join();
+        }
         is_executing_right_arm_.store(true);
+        execution_thread_move_right_pose_ = std::thread(&DualArmModule::execution_loop_move_right_pose, this, goal_handle);
     }
     else if(goal->arm_id==ARM_BOTH)
     {
+        if (execution_thread_move_dual_pose_.joinable()) {
+            execution_thread_move_dual_pose_.join();
+        }
         is_executing_left_arm_.store(true);
         is_executing_right_arm_.store(true);
+        execution_thread_move_dual_pose_ = std::thread(&DualArmModule::execution_loop_move_dual_pose, this, goal_handle);
     }
-
-    // 启动线程（不再使用 detach）
-    execution_thread_move_pose_ = std::thread(&DualArmModule::execution_loop_move_pose, this, goal_handle);
 }
 
-void DualArmModule::execution_loop_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+void DualArmModule::execution_loop_move_left_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+{
+    execution_loop_move_pose_impl(goal_handle);
+}
+
+void DualArmModule::execution_loop_move_right_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+{
+    execution_loop_move_pose_impl(goal_handle);
+}
+
+void DualArmModule::execution_loop_move_dual_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+{
+    execution_loop_move_pose_impl(goal_handle);
+}
+
+void DualArmModule::execution_loop_move_pose_impl(std::shared_ptr<GoalHandleMovePose> goal_handle)
 {
     RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "Received request to cancel MovePose goal");
     const auto goal = goal_handle->get_goal();

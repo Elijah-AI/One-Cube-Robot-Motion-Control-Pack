@@ -263,9 +263,9 @@ install(DIRECTORY launch
 # )
 
 # 安装 action 文件（可选，但推荐，以便其他包引用）
-install(DIRECTORY action/
-  DESTINATION share/${PROJECT_NAME}/action
-)
+# install(DIRECTORY action/
+#   DESTINATION share/${PROJECT_NAME}/action
+# )
 
 # 导出包配置
 ament_package()

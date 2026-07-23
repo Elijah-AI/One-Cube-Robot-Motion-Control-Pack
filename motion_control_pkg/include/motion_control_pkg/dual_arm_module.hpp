@@ -54,7 +54,10 @@ public:
     
 private:
     //一个action対应一个接口
-    void execution_loop_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
+    void execution_loop_move_left_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
+    void execution_loop_move_right_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
+    void execution_loop_move_dual_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
+    void execution_loop_move_pose_impl(std::shared_ptr<GoalHandleMovePose> goal_handle);
 
     void execution_loop_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle);
 
@@ -63,7 +66,9 @@ private:
 
     std::string name_;
     rclcpp::Node::WeakPtr node_;
-    std::thread execution_thread_move_pose_;
+    std::thread execution_thread_move_left_pose_;
+    std::thread execution_thread_move_right_pose_;
+    std::thread execution_thread_move_dual_pose_;
     std::thread execution_thread_control_gripper_;
 
     std::atomic<bool> is_executing_left_arm_;
