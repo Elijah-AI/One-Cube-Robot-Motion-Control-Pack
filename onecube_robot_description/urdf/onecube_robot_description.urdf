@@ -1,0 +1,2333 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="onecube_robot">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0.029527 0.000836 0.078409"
+        rpy="0 0 0" />
+      <mass
+        value="119.42" />
+      <inertia
+        ixx="3.346911"
+        ixy="0.171858"
+        ixz="0.196509"
+        iyy="5.354559"
+        iyz="0.006894"
+        izz="7.325664" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/base_link.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="base_front_camera_link">
+    <inertial>
+      <origin
+        xyz="-0.0133 -0.023489 -0.000273"
+        rpy="0 0 0" />
+      <mass
+        value="0.039427" />
+      <inertia
+        ixx="5E-05"
+        ixy="0"
+        ixz="0"
+        iyy="6E-06"
+        iyz="0"
+        izz="5E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_camera_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_camera_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_front_camera_joint"
+    type="fixed">
+    <origin
+      xyz="0.34392 0.023774 0.215"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="base_front_camera_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="base_rear_camera_link">
+    <inertial>
+      <origin
+        xyz="0.0133 0.023489 -0.000273"
+        rpy="0 0 0" />
+      <mass
+        value="0.039427" />
+      <inertia
+        ixx="5E-05"
+        ixy="0"
+        ixz="0"
+        iyy="6E-06"
+        iyz="0"
+        izz="5E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_camera_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_camera_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_rear_camera_joint"
+    type="fixed">
+    <origin
+      xyz="-0.35578 -0.023726 0.215"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="base_rear_camera_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="base_front_wheel_1_yaw_link">
+    <inertial>
+      <origin
+        xyz="0.000266 -0.00015 0.001118"
+        rpy="0 0 0" />
+      <mass
+        value="1.6568" />
+      <inertia
+        ixx="0.002573"
+        ixy="0"
+        ixz="0"
+        iyy="0.002654"
+        iyz="0"
+        izz="0.00507" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_wheel_1_yaw_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_wheel_1_yaw_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_front_wheel_1_yaw_joint"
+    type="revolute">
+    <origin
+      xyz="0.21057 0.15252 0.153"
+      rpy="-3.1416 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="base_front_wheel_1_yaw_link" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6"
+      velocity="29.3" />
+  </joint>
+  <link
+    name="base_front_wheel_1_pitch_link">
+    <inertial>
+      <origin
+        xyz="-6E-06 -0.027356 0.005205"
+        rpy="0 0 0" />
+      <mass
+        value="5" />
+      <inertia
+        ixx="0.017095"
+        ixy="0"
+        ixz="3E-06"
+        iyy="0.008102"
+        iyz="0.000206"
+        izz="0.018391" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_wheel_1_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_wheel_1_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_front_wheel_1_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="0 -0.009 0.138"
+      rpy="1.5708 0 3.1416" />
+    <parent
+      link="base_front_wheel_1_yaw_link" />
+    <child
+      link="base_front_wheel_1_pitch_link" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="9"
+      velocity="28.3" />
+  </joint>
+  <link
+    name="base_rear_wheel_1_yaw_link">
+    <inertial>
+      <origin
+        xyz="0.000266 -0.00015 0.001118"
+        rpy="0 0 0" />
+      <mass
+        value="1.6568" />
+      <inertia
+        ixx="0.002573"
+        ixy="0"
+        ixz="0"
+        iyy="0.002654"
+        iyz="0"
+        izz="0.00507" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_wheel_1_yaw_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.75294 0.75294 0.75294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_wheel_1_yaw_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_rear_wheel_1_yaw_joint"
+    type="revolute">
+    <origin
+      xyz="-0.23263 -0.15248 0.153"
+      rpy="-3.1416 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="base_rear_wheel_1_yaw_link" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="6"
+      velocity="29.3" />
+  </joint>
+  <link
+    name="base_rear_wheel_1_pitch_link">
+    <inertial>
+      <origin
+        xyz="-6E-06 -0.027356 0.005205"
+        rpy="0 0 0" />
+      <mass
+        value="0.90613" />
+      <inertia
+        ixx="0.017095"
+        ixy="0"
+        ixz="3E-06"
+        iyy="0.008102"
+        iyz="0.000206"
+        izz="0.018391" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_wheel_1_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_wheel_1_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_rear_wheel_1_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="0 -0.009 0.138"
+      rpy="1.5708 0 -3.1416" />
+    <parent
+      link="base_rear_wheel_1_yaw_link" />
+    <child
+      link="base_rear_wheel_1_pitch_link" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="9"
+      velocity="28.3" />
+  </joint>
+  <link
+    name="base_front_wheel_2_link">
+    <inertial>
+      <origin
+        xyz="0.0056411 -0.029735 0.02254"
+        rpy="0 0 0" />
+      <mass
+        value="4.86" />
+      <inertia
+        ixx="0.012564"
+        ixy="0"
+        ixz="0.001622"
+        iyy="0.015303"
+        iyz="-2E-06"
+        izz="0.007205" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_wheel_2_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.95686 0.95686 0.95686 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_front_wheel_2_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_front_wheel_2_joint"
+    type="fixed">
+    <origin
+      xyz="0.18887 -0.12273 0.0135"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="base_front_wheel_2_link" />
+    <axis
+      xyz="0 0 0" />
+    <limit
+      effort="9"
+      velocity="29.3" />
+  </joint>
+  <link
+    name="base_rear_wheel_2_link">
+    <inertial>
+      <origin
+        xyz="0.0056411 -0.029735 0.02254"
+        rpy="0 0 0" />
+      <mass
+        value="4.86" />
+      <inertia
+        ixx="0.012564"
+        ixy="0"
+        ixz="0.001622"
+        iyy="0.015303"
+        iyz="-2E-06"
+        izz="0.007205" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_wheel_2_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.95686 0.95686 0.95686 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/base_rear_wheel_2_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="base_rear_wheel_2_joint"
+    type="fixed">
+    <origin
+      xyz="-0.25433 0.18227 0.0135"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="base_rear_wheel_2_link" />
+    <axis
+      xyz="0 0 0" />
+    <limit
+      effort="9"
+      velocity="29.3" />
+  </joint>
+  <link
+    name="leg_link1">
+    <inertial>
+      <origin
+        xyz="1.3E-05 0.140314 0.003279"
+        rpy="0 0 0" />
+      <mass
+        value="15.57" />
+      <inertia
+        ixx="0.539058"
+        ixy="0.000334"
+        ixz="2.2E-05"
+        iyy="0.05043"
+        iyz="0.037342"
+        izz="0.535029" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/leg_link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/leg_link1.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="leg_joint1"
+    type="revolute">
+    <origin
+      xyz="0.20607 2.3163E-05 0.37"
+      rpy="1.5708 0 -3.1416" />
+    <parent
+      link="base_link" />
+    <child
+      link="leg_link1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="557"
+      velocity="1.31" />
+  </joint>
+  <link
+    name="leg_link2">
+    <inertial>
+      <origin
+        xyz="0.001981 0.205376 -0.016774"
+        rpy="0 0 0" />
+      <mass
+        value="22.16" />
+      <inertia
+        ixx="1.203224"
+        ixy="0.008888"
+        ixz="0.000705"
+        iyy="0.252135"
+        iyz="0.030632"
+        izz="1.04222" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/leg_link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/leg_link2.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="leg_joint2"
+    type="revolute">
+    <origin
+      xyz="0 0.395 0"
+      rpy="0 0 0" />
+    <parent
+      link="leg_link1" />
+    <child
+      link="leg_link2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="557"
+      velocity="1.31" />
+  </joint>
+  <link
+    name="leg_link3">
+    <inertial>
+      <origin
+        xyz="-2.4E-05 0.007082 0.017631"
+        rpy="0 0 0" />
+      <mass
+        value="9.18" />
+      <inertia
+        ixx="0.039129"
+        ixy="-6E-06"
+        ixz="1.7E-05"
+        iyy="0.034685"
+        iyz="-0.001055"
+        izz="0.031353" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/leg_link3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.89804 0.91765 0.92941 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/leg_link3.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="leg_joint3"
+    type="revolute">
+    <origin
+      xyz="0 0.56 0"
+      rpy="3.1416 0 3.1416" />
+    <parent
+      link="leg_link2" />
+    <child
+      link="leg_link3" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-2.09"
+      upper="2.09"
+      effort="557"
+      velocity="1.31" />
+  </joint>
+  <link
+    name="body_link">
+    <inertial>
+      <origin
+        xyz="-0.055016 0.006693 0.218264"
+        rpy="0 0 0" />
+      <mass
+        value="19.42" />
+      <inertia
+        ixx="0.456892"
+        ixy="0.006228"
+        ixz="-0.082929"
+        iyy="0.551017"
+        iyz="-0.02095"
+        izz="0.281043" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/body_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/body_link.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="body_joint"
+    type="revolute">
+    <origin
+      xyz="0 0.16195 0"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="leg_link3" />
+    <child
+      link="body_link" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="-3.11"
+      upper="3.11"
+      effort="133"
+      velocity="0.61" />
+  </joint>
+  <link
+    name="body_camera_link">
+    <inertial>
+      <origin
+        xyz="-0.013554 -0.023237 -0.000293"
+        rpy="0 0 0" />
+      <mass
+        value="0.028395" />
+      <inertia
+        ixx="4E-05"
+        ixy="0"
+        ixz="0"
+        iyy="5E-06"
+        iyz="0"
+        izz="4E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/body_camera_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/body_camera_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="body_camera_joint"
+    type="fixed">
+    <origin
+      xyz="0.1221 0.02375 0.045689"
+      rpy="0 0 0" />
+    <parent
+      link="body_link" />
+    <child
+      link="body_camera_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="body_imu_link">
+    <inertial>
+      <origin
+        xyz="-0.005983 -1.3E-05 0.0080653"
+        rpy="0 0 0" />
+      <mass
+        value="0.01039" />
+      <inertia
+        ixx="1E-06"
+        ixy="0"
+        ixz="0"
+        iyy="3E-06"
+        iyz="0"
+        izz="4E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/body_imu_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/body_imu_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="body_imu_joint"
+    type="fixed">
+    <origin
+      xyz="7.995E-05 0 0.39495"
+      rpy="0 0 0" />
+    <parent
+      link="body_link" />
+    <child
+      link="body_imu_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="head_yaw_link">
+    <inertial>
+      <origin
+        xyz="0.000693 0.000118 0.019662"
+        rpy="0 0 0" />
+      <mass
+        value="0.29" />
+      <inertia
+        ixx="0.000518"
+        ixy="0"
+        ixz="2E-06"
+        iyy="0.000502"
+        iyz="0"
+        izz="0.000325" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/head_yaw_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/head_yaw_link.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="head_yaw_joint"
+    type="revolute">
+    <origin
+      xyz="-0.0081 0 0.49345"
+      rpy="0 0 0" />
+    <parent
+      link="body_link" />
+    <child
+      link="head_yaw_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.88"
+      upper="2.88"
+      effort="8.9"
+      velocity="0.08" />
+  </joint>
+  <link
+    name="head_pitch_link">
+    <inertial>
+      <origin
+        xyz="0.029417 0.077037 0.00079"
+        rpy="0 0 0" />
+      <mass
+        value="0.91" />
+      <inertia
+        ixx="0.005202"
+        ixy="-5E-05"
+        ixz="2.8E-05"
+        iyy="0.00479"
+        iyz="-1.9E-05"
+        izz="0.006118" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/head_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/head_pitch_link.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="head_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="0 0.00175 0.071"
+      rpy="1.5708 0 0" />
+    <parent
+      link="head_yaw_link" />
+    <child
+      link="head_pitch_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.7"
+      upper="0.7"
+      effort="8.9"
+      velocity="0.05" />
+  </joint>
+  <link
+    name="head_camera_link">
+    <inertial>
+      <origin
+        xyz="-0.012981 -0.023238 0.0039104"
+        rpy="0 0 0" />
+      <mass
+        value="0.028394" />
+      <inertia
+        ixx="4.0091E-05"
+        ixy="0"
+        ixz="0"
+        iyy="5E-06"
+        iyz="0"
+        izz="4E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/head_camera_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/head_camera_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="head_camera_joint"
+    type="fixed">
+    <origin
+      xyz="0.11093 0.12714 -0.022"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="head_pitch_link" />
+    <child
+      link="head_camera_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="head_imu_link">
+    <inertial>
+      <origin
+        xyz="-0.0059832 -1.336E-05 0.0080653"
+        rpy="0 0 0" />
+      <mass
+        value="0.01039" />
+      <inertia
+        ixx="1.3104E-06"
+        ixy="0"
+        ixz="0"
+        iyy="3E-06"
+        iyz="0"
+        izz="4E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/head_imu_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/head_imu_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="head_imu_joint"
+    type="fixed">
+    <origin
+      xyz="0.00044844 0.1085 0.00175"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="head_pitch_link" />
+    <child
+      link="head_imu_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="Base_R">
+    <inertial>
+      <origin
+        xyz="0.00032267 4.798E-05 0.04066353"
+        rpy="0 0 0" />
+      <mass
+        value="1.1962" />
+      <inertia
+        ixx="0.00107329"
+        ixy="-1.68E-06"
+        ixz="-1.05E-05"
+        iyy="0.00107003"
+        iyz="-3.43E-06"
+        izz="0.00127315" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Base_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Base_R.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="arm-r-base_joint"
+    type="fixed">
+    <origin
+      xyz="4.1323E-05 -0.051083 0.39228"
+      rpy="1.3962 0 0" />
+    <parent
+      link="body_link" />
+    <child
+      link="Base_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Link1_R">
+    <inertial>
+      <origin
+        xyz="0.00002347 0.00557150 -0.03075998"
+        rpy="0 0 0" />
+      <mass
+        value="1.9705" />
+      <inertia
+        ixx="0.00492293"
+        ixy="0.00000550"
+        ixz="0.00000193"
+        iyy="0.00526513"
+        iyz="0.00033232"
+        izz="0.00188107" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link1_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link1.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint1_R"
+    type="revolute">
+    <origin
+      xyz="0 0 0.1745"
+      rpy="0 0 0" />
+    <parent
+      link="Base_R" />
+    <child
+      link="Link1_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1067"
+      upper="3.1067"
+      effort="108"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link2_R">
+    <inertial>
+      <origin
+        xyz="0.00013483 0.06170460 0.00950639"
+        rpy="0 0 0" />
+      <mass
+        value="2.24398" />
+      <inertia
+        ixx="0.01194933"
+        ixy="0.00000336"
+        ixz="0.00000091"
+        iyy="0.00361581"
+        iyz="-0.00132804"
+        izz="0.01098356" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link2_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link2.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint2_R"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="1.5708 0 0" />
+    <parent
+      link="Link1_R" />
+    <child
+      link="Link2_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.0944"
+      upper="2.0944"
+      effort="108"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link3_R">
+    <inertial>
+      <origin
+        xyz="0.00968562 0.00246599 -0.04627302"
+        rpy="0 0 0" />
+      <mass
+        value="1.9242" />
+      <inertia
+        ixx="0.00718224"
+        ixy="0.00004413"
+        ixz="0.00089552"
+        iyy="0.00762563"
+        iyz="0.00022096"
+        izz="0.00178597" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link3_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link3.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint3_R"
+    type="revolute">
+    <origin
+      xyz="0 0.287 0"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="Link2_R" />
+    <child
+      link="Link3_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1067"
+      upper="3.1067"
+      effort="66"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link4_R">
+    <inertial>
+      <origin
+        xyz="0.00850411 -0.04718223 0.00941509"
+        rpy="0 0 0" />
+      <mass
+        value="1.6085" />
+      <inertia
+        ixx="0.00580480"
+        ixy="-0.00066669"
+        ixz="-0.00012722"
+        iyy="0.00223807"
+        iyz="0.00070523"
+        izz="0.00533060" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link4_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link4.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint4_R"
+    type="revolute">
+    <origin
+      xyz="0.018 0 0"
+      rpy="-1.5708 0 3.1416" />
+    <parent
+      link="Link3_R" />
+    <child
+      link="Link4_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.5307"
+      upper="1.0472"
+      effort="66"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link5_R">
+    <inertial>
+      <origin
+        xyz="-0.00051127 -0.00101064 -0.11271739"
+        rpy="0 0 0" />
+      <mass
+        value="2.0883" />
+      <inertia
+        ixx="0.00626603"
+        ixy="0.00004009"
+        ixz="-0.00005338"
+        iyy="0.00564387"
+        iyz="0.00006193"
+        izz="0.00243632" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link5_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link5.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint5_R"
+    type="revolute">
+    <origin
+      xyz="0.018 -0.314 0"
+      rpy="-1.5708 0 3.1416" />
+    <parent
+      link="Link4_R" />
+    <child
+      link="Link5_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1067"
+      upper="3.1067"
+      effort="18"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link6_R">
+    <inertial>
+      <origin
+        xyz="0.00032659 -0.00531336 0.00030182"
+        rpy="0 0 0" />
+      <mass
+        value="0.72496" />
+      <inertia
+        ixx="0.00046040"
+        ixy="-0.00000189"
+        ixz="-0.00000083"
+        iyy="0.00051716"
+        iyz="-0.00000346"
+        izz="0.00042521" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link6_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link6.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint6_R"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="Link5_R" />
+    <child
+      link="Link6_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.0472"
+      upper="1.0472"
+      effort="18"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link7_R">
+    <inertial>
+      <origin
+        xyz="-0.00009108 -0.03153255 0.00889371"
+        rpy="0 0 0" />
+      <mass
+        value="0.68606" />
+      <inertia
+        ixx="0.00173687"
+        ixy="-0.00000345"
+        ixz="-0.00000116"
+        iyy="0.00089035"
+        iyz="0.00030680"
+        izz="0.00139406" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link7_R.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link7.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint7_R"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="Link6_R" />
+    <child
+      link="Link7_R" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.5708"
+      upper="1.5708"
+      effort="18"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="gripper_base_r_link">
+    <inertial>
+      <origin
+        xyz="0 -0.067615 0.00060404"
+        rpy="0 0 0" />
+      <mass
+        value="1.5" />
+      <inertia
+        ixx="0.003167"
+        ixy="0"
+        ixz="-1.4E-05"
+        iyy="0.001198"
+        iyz="-1E-05"
+        izz="0.002868" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/gripper_base_r.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/gripper_base_r.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="gripper_base_r_joint"
+    type="fixed">
+    <origin
+      xyz="-0.00036386 -0.095 0"
+      rpy="-1.5708 1.5708 -1.5708" />
+    <parent
+      link="Link7_R" />
+    <child
+      link="gripper_base_r_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="gripper_r_link1">
+    <inertial>
+      <origin
+        xyz="-0.033913 -0.012157 -0.024384"
+        rpy="0 0 0" />
+      <mass
+        value="0.1" />
+      <inertia
+        ixx="6.5E-05"
+        ixy="-9E-06"
+        ixz="-2E-06"
+        iyy="8.1E-05"
+        iyz="-2E-06"
+        izz="0.000135" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/gripper_r_link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/gripper_r_link1.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="gripper_r_joint1"
+    type="prismatic">
+    <origin
+      xyz="0.01475 -0.1343 0.025114"
+      rpy="-3.1416 0 1.5708" />
+    <parent
+      link="gripper_base_r_link" />
+    <child
+      link="gripper_r_link1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="2"
+      velocity="0.05" />
+  </joint>
+  <link
+    name="gripper_r_link2">
+    <inertial>
+      <origin
+        xyz="0.033913 0.012157 -0.024384"
+        rpy="0 0 0" />
+      <mass
+        value="0.1" />
+      <inertia
+        ixx="6.5E-05"
+        ixy="-9E-06"
+        ixz="2E-06"
+        iyy="0.00015755"
+        iyz="2E-06"
+        izz="0.000135" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/gripper_r_link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/gripper_r_link2.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="gripper_r_joint2"
+    type="prismatic">
+    <origin
+      xyz="-0.01475 -0.1343 -0.024386"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="gripper_base_r_link" />
+    <child
+      link="gripper_r_link2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="2"
+      velocity="0.05" />
+  </joint>
+  <link
+    name="Base_L">
+    <inertial>
+      <origin
+        xyz="0.00032267 4.798E-05 0.04066353"
+        rpy="0 0 0" />
+      <mass
+        value="1.1962" />
+      <inertia
+        ixx="0.00107329"
+        ixy="-1.68E-06"
+        ixz="-1.05E-05"
+        iyy="0.00107003"
+        iyz="-3.43E-06"
+        izz="0.00127315" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Base_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Base_L.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="arm-l-base_joint"
+    type="fixed">
+    <origin
+      xyz="4.1222E-05 0.051041 0.39228"
+      rpy="1.3962 0 -3.1416" />
+    <parent
+      link="body_link" />
+    <child
+      link="Base_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="Link1_L">
+    <inertial>
+      <origin
+        xyz="0.00002347 0.00557150 -0.03075998"
+        rpy="0 0 0" />
+      <mass
+        value="1.9705" />
+      <inertia
+        ixx="0.00492293"
+        ixy="0.00000550"
+        ixz="0.00000193"
+        iyy="0.00526513"
+        iyz="0.00033232"
+        izz="0.00188107" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link1_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link1.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint1_L"
+    type="revolute">
+    <origin
+      xyz="0 0 0.1745"
+      rpy="0 0 0" />
+    <parent
+      link="Base_L" />
+    <child
+      link="Link1_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1067"
+      upper="3.1067"
+      effort="108"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link2_L">
+    <inertial>
+      <origin
+        xyz="0.00013483 0.06170460 0.00950639"
+        rpy="0 0 0" />
+      <mass
+        value="2.24398" />
+      <inertia
+        ixx="0.01194933"
+        ixy="0.00000336"
+        ixz="0.00000091"
+        iyy="0.00361581"
+        iyz="-0.00132804"
+        izz="0.01098356" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link2_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link2.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint2_L"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="1.5708 0 0" />
+    <parent
+      link="Link1_L" />
+    <child
+      link="Link2_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.0944"
+      upper="2.0944"
+      effort="108"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link3_L">
+    <inertial>
+      <origin
+        xyz="0.00968562 0.00246599 -0.04627302"
+        rpy="0 0 0" />
+      <mass
+        value="1.9242" />
+      <inertia
+        ixx="0.00718224"
+        ixy="0.00004413"
+        ixz="0.00089552"
+        iyy="0.00762563"
+        iyz="0.00022096"
+        izz="0.00178597" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link3_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link3.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint3_L"
+    type="revolute">
+    <origin
+      xyz="0 0.287 0"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="Link2_L" />
+    <child
+      link="Link3_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1067"
+      upper="3.1067"
+      effort="66"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link4_L">
+    <inertial>
+      <origin
+        xyz="0.00850411 -0.04718223 0.00941509"
+        rpy="0 0 0" />
+      <mass
+        value="1.6085" />
+      <inertia
+        ixx="0.00580480"
+        ixy="-0.00066669"
+        ixz="-0.00012722"
+        iyy="0.00223807"
+        iyz="0.00070523"
+        izz="0.00533060" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link4_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link4.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint4_L"
+    type="revolute">
+    <origin
+      xyz="0.018 0 0"
+      rpy="-1.5708 0 3.1416" />
+    <parent
+      link="Link3_L" />
+    <child
+      link="Link4_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.5307"
+      upper="1.0472"
+      effort="66"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link5_L">
+    <inertial>
+      <origin
+        xyz="0.00051127 0.00101064 -0.11271739"
+        rpy="0 0 0" />
+      <mass
+        value="2.0883" />
+      <inertia
+        ixx="0.00626603"
+        ixy="0.00004009"
+        ixz="0.00005338"
+        iyy="0.00564387"
+        iyz="-0.00006193"
+        izz="0.00243632" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link5_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 0 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link5.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint5_L"
+    type="revolute">
+    <origin
+      xyz="0.018 -0.314 0"
+      rpy="-1.5708 0 3.1416" />
+    <parent
+      link="Link4_L" />
+    <child
+      link="Link5_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1067"
+      upper="3.1067"
+      effort="18"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link6_L">
+    <inertial>
+      <origin
+        xyz="0.00032659 0.00531336 -0.00030182"
+        rpy="0 0 0" />
+      <mass
+        value="0.72496" />
+      <inertia
+        ixx="0.00046040"
+        ixy="0.00000189"
+        ixz="0.00000083"
+        iyy="0.00051716"
+        iyz="-0.00000346"
+        izz="0.00042521" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link6_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 0 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link6.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint6_L"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="Link5_L" />
+    <child
+      link="Link6_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.0472"
+      upper="1.0472"
+      effort="18"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="Link7_L">
+    <inertial>
+      <origin
+        xyz="-0.00009108 -0.03153255 0.00889371"
+        rpy="0 0 0" />
+      <mass
+        value="0.68606" />
+      <inertia
+        ixx="0.00173687"
+        ixy="-0.00000345"
+        ixz="-0.00000116"
+        iyy="0.00089035"
+        iyz="0.00030680"
+        izz="0.00139406" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/Link7_L.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/Link7.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Joint7_L"
+    type="revolute">
+    <origin
+      xyz="0 0 0"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="Link6_L" />
+    <child
+      link="Link7_L" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.5708"
+      upper="1.5708"
+      effort="18"
+      velocity="3.1416" />
+  </joint>
+  <link
+    name="gripper_base_l_link">
+    <inertial>
+      <origin
+        xyz="0 -0.067615 0.00060404"
+        rpy="0 0 0" />
+      <mass
+        value="1.5" />
+      <inertia
+        ixx="0.003167"
+        ixy="0"
+        ixz="-1.4E-05"
+        iyy="0.001198"
+        iyz="-1E-05"
+        izz="0.002868" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/gripper_base_l.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/gripper_base_l.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="gripper_base_l_joint"
+    type="fixed">
+    <origin
+      xyz="-0.00036386 -0.095 0"
+      rpy="1.5708 1.5708 1.5708" />
+    <parent
+      link="Link7_L" />
+    <child
+      link="gripper_base_l_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="gripper_l_link1">
+    <inertial>
+      <origin
+        xyz="-0.033913 -0.012157 -0.024384"
+        rpy="0 0 0" />
+      <mass
+        value="0.1" />
+      <inertia
+        ixx="6.5E-05"
+        ixy="-9E-06"
+        ixz="-2E-06"
+        iyy="8.1E-05"
+        iyz="-2E-06"
+        izz="0.000135" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/gripper_l_link1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/gripper_l_link1.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="gripper_l_joint1"
+    type="prismatic">
+    <origin
+      xyz="0.01475 -0.1343 0.025114"
+      rpy="-3.1416 0 1.5708" />
+    <parent
+      link="gripper_base_l_link" />
+    <child
+      link="gripper_l_link1" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="2"
+      velocity="0.05" />
+  </joint>
+  <link
+    name="gripper_l_link2">
+    <inertial>
+      <origin
+        xyz="0.033913 0.012157 -0.024384"
+        rpy="0 0 0" />
+      <mass
+        value="0.1" />
+      <inertia
+        ixx="6.5E-05"
+        ixy="-9E-06"
+        ixz="2E-06"
+        iyy="0.00015755"
+        iyz="2E-06"
+        izz="0.000135" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/gripper_l_link2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://onecube_robot_description/meshes/collision/gripper_l_link2.dae" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="gripper_l_joint2"
+    type="prismatic">
+    <origin
+      xyz="-0.01475 -0.1343 -0.024386"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="gripper_base_l_link" />
+    <child
+      link="gripper_l_link2" />
+    <axis
+      xyz="0 0 -1" />
+    <limit
+      lower="0"
+      upper="0"
+      effort="2"
+      velocity="0.05" />
+  </joint>
+</robot>

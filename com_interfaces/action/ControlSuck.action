@@ -1,0 +1,16 @@
+# Goal
+std_msgs/Header header
+string task_id
+uint8 suck_id        #0：左吸盘，1：右吸盘，2：双吸盘
+bool[] active        #打开/关闭
+int64 timeout_ms
+
+---
+# Result
+bool success
+string error_message
+
+---
+# Feedback
+std_msgs/Header header
+float32 progress_rate

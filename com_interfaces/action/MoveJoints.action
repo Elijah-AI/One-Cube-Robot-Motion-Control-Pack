@@ -1,0 +1,19 @@
+std_msgs/Header header                     
+string task_id                             
+uint8 arm_id              
+string[] joint_name
+float64[] position            #目标位置，弧度       
+bool enable_collision_check   
+float32 speed                    #控制速度，0～1
+int64 timeout_ms           
+---
+bool success
+string error_message        
+float64 execution_time      
+float64 final_distance_error 
+---
+std_msgs/Header header
+string task_status                  
+float32 progress_rate                 
+string current_step_info              
+                

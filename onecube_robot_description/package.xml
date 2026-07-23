@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>onecube_robot_description</name>
+  <version>3.1.1</version>
+  <description>
+    OneCube robot description package provides the description of the robot models,
+    include urdf,xacro models.
+  </description>
+
+  <maintainer email="lvjinqiu@163.com">lv</maintainer>
+  <license>All Rights Reserved</license>
+  <author email="lvjinqiu@163.com">lv</author>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+      <build_type>ament_cmake</build_type>
+  </export>
+
+</package>

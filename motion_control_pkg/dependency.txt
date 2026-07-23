@@ -1,0 +1,42 @@
+sudo apt install ros-humble-kdl-parser ros-humble-urdf ros-humble-xacro ros-humble-ruckig ros-humble-hpp-fcl
+
+#安装trac-ik所需依赖
+sudo apt install libnlopt-dev libnlopt-cxx-dev pkg-config
+
+使用tf2_ros
+sudo apt install ros-humble-tf2-ros ros-humble-tf2-msgs ros-humble-geometry-msgs
+
+
+ros2跨用户通信环境变量 
+export ROS_DOMAIN_ID=0
+export FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+
+支持apt安装的三方库
+必须安装：
+libeigen3-dev
+libboost-all-dev
+ros-jazzy-ompl（根据安装的ros2版本修改）
+ros-jazzy-octomap(如有版本冲突，安装liboctomap-dev)
+ros-jazzy-pinocchio
+ros-jazzy-ruckig
+libccd-dev (FCL 的碰撞检测底层依赖)
+libfcl-dev
+liburdfdom-dev （或者liburdfdom-headers-dev）
+libjsoncpp-dev
+
+
+可选安装
+libglfw3-dev
+libconsole-bridge-dev
+libtinyxml-dev / libtinyxml2-dev
+
+
+添加ros2官方源
+1.添加 Key:
+  sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+  (若 raw.githubusercontent.com 打不开，可跳过此步直接使用清华源提供的 keyring 方式，或者手动下载)
+2. 修改源地址为清华源:
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+3.更新并安装:
+  sudo apt update
+  sudo apt install ros-humble-ompl ros-humble-ruckig ros-humble-pinocchio等
