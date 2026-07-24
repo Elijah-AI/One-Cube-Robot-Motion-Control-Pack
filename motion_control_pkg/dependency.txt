@@ -40,3 +40,9 @@ libtinyxml-dev / libtinyxml2-dev
 3.更新并安装:
   sudo apt update
   sudo apt install ros-humble-ompl ros-humble-ruckig ros-humble-pinocchio等
+
+
+
+rsync -avz --progress /home/lv/ylfrobot/src/com_interfaces neardi@172.16.20.136:/home/neardi/ros2_ws/src/
+
+rsync -avz --progress /home/lv/ylfrobot/src/motion_control_pkg neardi@172.16.20.136:/home/neardi/ros2_ws/src/

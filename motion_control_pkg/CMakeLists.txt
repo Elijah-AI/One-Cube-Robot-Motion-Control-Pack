@@ -87,11 +87,14 @@ link_directories(
 add_library(toppra_lib SHARED IMPORTED)
 
 
-if(${CMAKE_CXX_COMPILER} MATCHES "aarch64" OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+if(CMAKE_CXX_COMPILER MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
 	message("linux arm64架构")
+    set(TOPPRA_LIB_PATH "${dirToppRA}/lib/aarch64/libtoppra.so")
     set_target_properties(toppra_lib PROPERTIES
-        IMPORTED_LOCATION "${dirToppRA}/lib/aarch64/libtoppra.so"
+        IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
     )
+    set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/aarch64")
+
 	foreach(lib ${corLibs})
 		list(APPEND sysCoreLibs ${lib}_lin_arm64)
 	endforeach()
@@ -101,9 +104,11 @@ if(${CMAKE_CXX_COMPILER} MATCHES "aarch64" OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES 
 	list(APPEND sysSimLibs dl)#arm 需要 -ldl
 else()
 	message("linux x64架构")
+    set(TOPPRA_LIB_PATH "${dirToppRA}/lib/x64/libtoppra.so")
     set_target_properties(toppra_lib PROPERTIES
-        IMPORTED_LOCATION "${dirToppRA}/lib/x64/libtoppra.so"
+        IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
     )
+    set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/x64")
 	foreach(lib ${corLibs})
 		list(APPEND sysCoreLibs ${lib}_lin_x64)
 	endforeach()
@@ -115,7 +120,7 @@ message(${sysCoreLibs})
 
 
 # --- 3.2 配置 MarvinSDK 和 Kine (动态库) ---
-set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib")
+
 
 # 导入 libMarvinSDK.so
 add_library(marvin_sdk SHARED IMPORTED)
@@ -245,7 +250,7 @@ install(TARGETS motion_control_node
 install(FILES
     ${SDK_LIB_DIR}/libMarvinSDK.so
     ${SDK_LIB_DIR}/libKine.so
-    ${dirToppRA}/lib/x64/libtoppra.so
+    ${TOPPRA_LIB_PATH}
     DESTINATION lib/${PROJECT_NAME})
    
 # 安装配置文件
