@@ -131,6 +131,12 @@ namespace miracle {
             m_joint_dir.push_back(static_cast<int8_t>(value));
         }
 
+        joint_state_pub_ = node_ptr->create_publisher<sensor_msgs::msg::JointState>("/head_joint_states", 10);
+        joint_state_msg_.name = {"head_yaw_joint", "head_pitch_joint"};
+        joint_state_msg_.position.resize(HEAD_JOINTNUM, 0.0);
+        joint_state_msg_.velocity.resize(HEAD_JOINTNUM, 0.0);
+        joint_state_msg_.effort.resize(HEAD_JOINTNUM, 0.0);
+
         // m_cloud_collision_run_stop = false;
         is_executing_head_.store(false);
     }
@@ -208,6 +214,23 @@ namespace miracle {
 
     }
 
+    void MiracleHeadModule::publishJointState() {
+        if (!joint_state_pub_) {
+            return;
+        }
+
+        auto node_ptr = lockNode(__func__);
+        if (!node_ptr) {
+            return;
+        }
+
+        joint_state_msg_.header.stamp = node_ptr->get_clock()->now();
+        joint_state_msg_.position = m_joints_cur_pos;
+        joint_state_msg_.velocity = m_joints_cur_speed;
+        joint_state_msg_.effort = m_joints_cur_current;
+        joint_state_pub_->publish(joint_state_msg_);
+    }
+
     void MiracleHeadModule::headRevCallBack() {
         
         int loop_cnt = 0;
@@ -226,11 +249,7 @@ namespace miracle {
             }
             //48ms周期
             if(loop_cnt == 0) {
-                if (m_joints_data_cb) {
-                    m_joints_data_cb(m_joints_cur_pos, m_joints_cur_speed, m_joints_cur_current);
-                }
-                // RCLCPP_INFO(rclcpp::get_logger("head module"),"%s angle: %f:%f:%f:%f", m_module_name, m_joints_cur_pos[0], m_joints_cur_pos[1], m_joints_cur_pos[2],
-                //             m_joints_cur_pos[3]);
+                publishJointState();
             }
 
             //500ms周期
@@ -273,6 +292,7 @@ namespace miracle {
                 
                 actu_pos[i] = status_data[m_jointID[i]].pos;
                 actu_vel[i] = status_data[m_jointID[i]].vel;
+                // m_joints_cur_current[i] = status_data[m_jointID[i]].tor;
 
                 error_code[i] = status_data[m_jointID[i]].errorCode;
                 m_module_enabled[i] = status_data[m_jointID[i]].statusWord;

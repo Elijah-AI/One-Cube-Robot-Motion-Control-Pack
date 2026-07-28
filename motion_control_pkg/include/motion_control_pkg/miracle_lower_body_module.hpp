@@ -39,6 +39,7 @@
 #include <vector>
 #include <memory>
 #include <thread>
+#include "sensor_msgs/msg/joint_state.hpp"
 #include "miracle_module.hpp"
 #include "jsoncpp/json/json.h"
 #include "main_node.hpp"
@@ -174,6 +175,7 @@ namespace miracle {
         void execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
 
         void execution_loop_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
+        void publishJointState();
 
 
         // bool isRunMode(CallbackResult &r);
@@ -212,6 +214,8 @@ namespace miracle {
         std::thread execution_thread_move_pose_;
         std::thread execution_thread_move_joints_;
         std::atomic<bool> is_executing_leg_;
+        rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
+        sensor_msgs::msg::JointState joint_state_msg_;
         
         // devices
         // Leg *m_leg;    ///< 底层机械臂类，用于控制电机模组
