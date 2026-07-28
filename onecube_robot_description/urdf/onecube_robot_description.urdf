@@ -1054,8 +1054,11 @@
     <axis
       xyz="0 0 0" />
   </joint>
+
+  
+  <!-- 右臂 开始-->
   <link
-    name="Base_R">
+    name="arm-r-base_link">
     <inertial>
       <origin
         xyz="0.00032267 4.798E-05 0.04066353"
@@ -1076,12 +1079,12 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/Base_R.STL" />
+          filename="package://onecube_robot_description/meshes/arm-r-base_link.STL" />
       </geometry>
       <material
         name="">
         <color
-          rgba="1 0 0 1" />
+          rgba="1 1 1 1" />
       </material>
     </visual>
     <collision>
@@ -1090,7 +1093,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/Base_R.STL" />
+          filename="package://onecube_robot_description/meshes/arm-r-base_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1103,14 +1106,7 @@
     <parent
       link="body_link" />
     <child
-      link="Base_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="0"
-      upper="0"
-      effort="0"
-      velocity="0" />
+      link="arm-r-base_link" />
   </joint>
   <link
     name="Link1_R">
@@ -1159,14 +1155,14 @@
       xyz="0 0 0.1745"
       rpy="0 0 0" />
     <parent
-      link="Base_R" />
+      link="arm-r-base_link" />
     <child
       link="Link1_R" />
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-3.1067"
-      upper="3.1067"
+      lower="-2.967"
+      upper="2.967"
       effort="108"
       velocity="3.1416" />
   </joint>
@@ -1281,8 +1277,8 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-3.1067"
-      upper="3.1067"
+      lower="-2.967"
+      upper="2.967"
       effort="66"
       velocity="3.1416" />
   </joint>
@@ -1397,8 +1393,8 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-3.1067"
-      upper="3.1067"
+      lower="-2.967"
+      upper="2.967"
       effort="18"
       velocity="3.1416" />
   </joint>
@@ -1522,17 +1518,17 @@
     name="gripper_base_r_link">
     <inertial>
       <origin
-        xyz="0 -0.067615 0.00060404"
+        xyz="0 -0.000124 0.068615"
         rpy="0 0 0" />
       <mass
         value="1.5" />
       <inertia
         ixx="0.003167"
-        ixy="0"
-        ixz="-1.4E-05"
-        iyy="0.001198"
+        ixy="1.4E-05"
+        ixz="0"
+        iyy="0.002868"
         iyz="-1E-05"
-        izz="0.002868" />
+        izz="0.001198" />
     </inertial>
     <visual>
       <origin
@@ -1540,7 +1536,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/gripper_base_r.STL" />
+          filename="package://onecube_robot_description/meshes/gripper_base_r_link.STL" />
       </geometry>
       <material
         name="">
@@ -1554,7 +1550,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_base_r.dae" />
+          filename="package://onecube_robot_description/meshes/collision/gripper_base_r_link.dae" />
       </geometry>
     </collision>
   </link>
@@ -1562,8 +1558,8 @@
     name="gripper_base_r_joint"
     type="fixed">
     <origin
-      xyz="-0.00036386 -0.095 0"
-      rpy="-1.5708 1.5708 -1.5708" />
+      xyz="0.00036386 -0.095 0"
+      rpy="1.5708 -1.5708 0" />
     <parent
       link="Link7_R" />
     <child
@@ -1580,17 +1576,17 @@
     name="gripper_r_link1">
     <inertial>
       <origin
-        xyz="-0.033913 -0.012157 -0.024384"
+        xyz="-0.002593 0.008537 -0.011634"
         rpy="0 0 0" />
       <mass
-        value="0.1" />
+        value="0.05" />
       <inertia
-        ixx="6.5E-05"
-        ixy="-9E-06"
-        ixz="-2E-06"
-        iyy="8.1E-05"
-        iyz="-2E-06"
-        izz="0.000135" />
+        ixx="4E-05"
+        ixy="-5E-06"
+        ixz="-1E-06"
+        iyy="3.3E-05"
+        iyz="1E-06"
+        izz="6.8E-05" />
     </inertial>
     <visual>
       <origin
@@ -1620,35 +1616,35 @@
     name="gripper_r_joint1"
     type="prismatic">
     <origin
-      xyz="0.01475 -0.1343 0.025114"
-      rpy="-3.1416 0 1.5708" />
+      xyz="0 0.037136 0.17875"
+      rpy="-1.5708 0 -3.1416" />
     <parent
       link="gripper_base_r_link" />
     <child
       link="gripper_r_link1" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
       lower="0"
       upper="0"
-      effort="2"
-      velocity="0.05" />
+      effort="0"
+      velocity="0" />
   </joint>
   <link
     name="gripper_r_link2">
     <inertial>
       <origin
-        xyz="0.033913 0.012157 -0.024384"
+        xyz="-0.002593 0.008537 -0.011634"
         rpy="0 0 0" />
       <mass
-        value="0.1" />
+        value="0.05" />
       <inertia
-        ixx="6.5E-05"
-        ixy="-9E-06"
-        ixz="2E-06"
-        iyy="0.00015755"
-        iyz="2E-06"
-        izz="0.000135" />
+        ixx="4E-05"
+        ixy="-5E-06"
+        ixz="-1E-06"
+        iyy="3.3E-05"
+        iyz="1E-06"
+        izz="6.8E-05" />
     </inertial>
     <visual>
       <origin
@@ -1678,8 +1674,8 @@
     name="gripper_r_joint2"
     type="prismatic">
     <origin
-      xyz="-0.01475 -0.1343 -0.024386"
-      rpy="0 0 -1.5708" />
+      xyz="0 -0.037864 0.17875"
+      rpy="-1.5708 0 0" />
     <parent
       link="gripper_base_r_link" />
     <child
@@ -1689,11 +1685,16 @@
     <limit
       lower="0"
       upper="0"
-      effort="2"
-      velocity="0.05" />
+      effort="0"
+      velocity="0" />
   </joint>
+
+
+  <!-- 左臂 开始 -->
+  <!-- 左臂 基础链接 -->
+
   <link
-    name="Base_L">
+    name="arm-l-base_link">
     <inertial>
       <origin
         xyz="0.00032267 4.798E-05 0.04066353"
@@ -1714,12 +1715,12 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/Base_L.STL" />
+          filename="package://onecube_robot_description/meshes/arm-l-base_link.STL" />
       </geometry>
       <material
         name="">
         <color
-          rgba="1 0 0 1" />
+          rgba="1 1 1 1" />
       </material>
     </visual>
     <collision>
@@ -1728,7 +1729,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/Base_L.STL" />
+          filename="package://onecube_robot_description/meshes/arm-l-base_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1737,18 +1738,11 @@
     type="fixed">
     <origin
       xyz="4.1222E-05 0.051041 0.39228"
-      rpy="1.3962 0 -3.1416" />
+      rpy="-1.3962 0 0" />
     <parent
       link="body_link" />
     <child
-      link="Base_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="0"
-      upper="0"
-      effort="0"
-      velocity="0" />
+      link="arm-l-base_link" />
   </joint>
   <link
     name="Link1_L">
@@ -1797,14 +1791,14 @@
       xyz="0 0 0.1745"
       rpy="0 0 0" />
     <parent
-      link="Base_L" />
+      link="arm-l-base_link" />
     <child
       link="Link1_L" />
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-3.1067"
-      upper="3.1067"
+      lower="-2.967"
+      upper="2.967"
       effort="108"
       velocity="3.1416" />
   </joint>
@@ -1919,8 +1913,8 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-3.1067"
-      upper="3.1067"
+      lower="-2.967"
+      upper="2.967"
       effort="66"
       velocity="3.1416" />
   </joint>
@@ -2035,8 +2029,8 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-3.1067"
-      upper="3.1067"
+      lower="-2.967"
+      upper="2.967"
       effort="18"
       velocity="3.1416" />
   </joint>
@@ -2160,17 +2154,17 @@
     name="gripper_base_l_link">
     <inertial>
       <origin
-        xyz="0 -0.067615 0.00060404"
+        xyz="0 0.000124 0.068615"
         rpy="0 0 0" />
       <mass
         value="1.5" />
       <inertia
         ixx="0.003167"
-        ixy="0"
-        ixz="-1.4E-05"
-        iyy="0.001198"
-        iyz="-1E-05"
-        izz="0.002868" />
+        ixy="1.4E-05"
+        ixz="0"
+        iyy="0.002868"
+        iyz="1E-05"
+        izz="0.001198" />
     </inertial>
     <visual>
       <origin
@@ -2178,7 +2172,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/gripper_base_l.STL" />
+          filename="package://onecube_robot_description/meshes/gripper_base_l_link.STL" />
       </geometry>
       <material
         name="">
@@ -2192,7 +2186,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_base_l.dae" />
+          filename="package://onecube_robot_description/meshes/collision/gripper_base_l_link.dae" />
       </geometry>
     </collision>
   </link>
@@ -2200,8 +2194,8 @@
     name="gripper_base_l_joint"
     type="fixed">
     <origin
-      xyz="-0.00036386 -0.095 0"
-      rpy="1.5708 1.5708 1.5708" />
+      xyz="0.00036386 -0.095 0"
+      rpy="1.5708 -1.5708 0" />
     <parent
       link="Link7_L" />
     <child
@@ -2218,17 +2212,17 @@
     name="gripper_l_link1">
     <inertial>
       <origin
-        xyz="-0.033913 -0.012157 -0.024384"
+        xyz="0.002593 -0.008537 -0.011634"
         rpy="0 0 0" />
       <mass
-        value="0.1" />
+        value="0.05" />
       <inertia
-        ixx="6.5E-05"
-        ixy="-9E-06"
-        ixz="-2E-06"
-        iyy="8.1E-05"
-        iyz="-2E-06"
-        izz="0.000135" />
+        ixx="4E-05"
+        ixy="-5E-06"
+        ixz="1E-06"
+        iyy="3.3E-05"
+        iyz="-1E-06"
+        izz="6.8E-05" />
     </inertial>
     <visual>
       <origin
@@ -2258,35 +2252,35 @@
     name="gripper_l_joint1"
     type="prismatic">
     <origin
-      xyz="0.01475 -0.1343 0.025114"
-      rpy="-3.1416 0 1.5708" />
+      xyz="0 -0.037136 0.17875"
+      rpy="1.5708 0 -3.1416" />
     <parent
       link="gripper_base_l_link" />
     <child
       link="gripper_l_link1" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
       lower="0"
       upper="0"
-      effort="2"
-      velocity="0.05" />
+      effort="0"
+      velocity="0" />
   </joint>
   <link
     name="gripper_l_link2">
     <inertial>
       <origin
-        xyz="0.033913 0.012157 -0.024384"
+        xyz="0.002593 -0.008537 -0.011634"
         rpy="0 0 0" />
       <mass
-        value="0.1" />
+        value="0.05" />
       <inertia
-        ixx="6.5E-05"
-        ixy="-9E-06"
-        ixz="2E-06"
-        iyy="0.00015755"
-        iyz="2E-06"
-        izz="0.000135" />
+        ixx="4E-05"
+        ixy="-5E-06"
+        ixz="1E-06"
+        iyy="3.3E-05"
+        iyz="-1E-06"
+        izz="6.8E-05" />
     </inertial>
     <visual>
       <origin
@@ -2316,8 +2310,8 @@
     name="gripper_l_joint2"
     type="prismatic">
     <origin
-      xyz="-0.01475 -0.1343 -0.024386"
-      rpy="0 0 -1.5708" />
+      xyz="0 0.037864 0.17875"
+      rpy="1.5708 0 0" />
     <parent
       link="gripper_base_l_link" />
     <child
@@ -2327,7 +2321,10 @@
     <limit
       lower="0"
       upper="0"
-      effort="2"
-      velocity="0.05" />
+      effort="0"
+      velocity="0" />
   </joint>
+
+  <!-- 左臂结束 -->
+
 </robot>
