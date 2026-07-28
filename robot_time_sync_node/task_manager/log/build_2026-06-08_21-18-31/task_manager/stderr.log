@@ -1,4 +1,0 @@
-[31mCMake Error at CMakeLists.txt:32 (message):
-  libmodbus not found! Install: sudo apt install libmodbus-dev
-
-[0m

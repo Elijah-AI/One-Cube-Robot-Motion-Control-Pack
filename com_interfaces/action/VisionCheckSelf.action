@@ -1,5 +1,5 @@
 #
-std_msgs/Header header
+std_msgs/Header header              # 时间戳
 string task_id                      # 唯一请求ID
 int32 priority                      # 优先级
 int64 timeout_ms                    # 超时时长

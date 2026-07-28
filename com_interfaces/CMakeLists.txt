@@ -18,16 +18,17 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HeartBeat.msg"
   "msg/NodeStatus.msg"
   "msg/MotorStatus.msg"
+  "msg/MotorInfo.msg"
+  "msg/CameraDriver.msg"
+  "msg/SyncedRobotVision.msg"
   "action/ControlGripper.action"
-  "action/ControlSuck.action"
-  "action/MovePose.action"
+  "action/MoveArm.action"
   "action/HardwareCheck.action"
   "action/HardwareReset.action"
   "action/VisionDetection.action"
   "action/VisionCheckSelf.action"
   "action/PickAndPlace.action"
   "action/AdjustBasePose.action"
-  "action/MoveJoints.action"
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs
 )
 
