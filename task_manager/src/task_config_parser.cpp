@@ -109,16 +109,43 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
       LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "No condition defined for: " << act.action_type);
     }
   }
-  else if(act.action_type == "move_arm")
+  else if(act.action_type == "move_pose" || act.action_type == "move_arm")
   {
-    // 机械臂移动参数
+    // 机械臂位姿移动参数（对应 MovePose.action）
     act.arm_param.arm_id = p["arm_id"].as<std::string>();
-    act.arm_param.use_planning = p["use_planning"].as<bool>();
-    act.arm_param.collision_check = p["collision_check"].as<bool>();
-    act.arm_param.safety_distance = p["safety_distance"].as<std::vector<float>>();
-    act.arm_param.avoid_obstacle =  p["avoid_obstacle"].as<bool>();
-    act.arm_param.use_config_pose = p["use_config_pose"].as<bool>();
-    act.arm_param.config_pose = p["target_pose"].as<std::vector<float>>();
+    act.arm_param.enable_collision_check = p["enable_collision_check"].as<bool>();
+    act.arm_param.use_config_pose = p["use_config_pose"] ?
+      p["use_config_pose"].as<bool>() : true;
+    act.arm_param.frame_id = p["frame_id"] ?
+      p["frame_id"].as<std::string>() : "base_link";
+    act.arm_param.use_force_control = p["use_force_control"].as<bool>();
+    act.arm_param.speed = p["speed"] ? p["speed"].as<float>() : 0.5f;
+    act.arm_param.hand_action_type = p["hand_action_type"] ?
+      p["hand_action_type"].as<std::vector<uint8_t>>() :
+      std::vector<uint8_t>{};
+    act.arm_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+
+    if (act.arm_param.arm_id == "2")
+    {
+      act.arm_param.left_target_pose =
+        p["left_target_pose"].as<std::vector<float>>();
+      act.arm_param.right_target_pose =
+        p["right_target_pose"].as<std::vector<float>>();
+      act.arm_param.left_bound_size = p["left_bound_size"] ?
+        p["left_bound_size"].as<std::vector<float>>() :
+        std::vector<float>{0.0F, 0.0F, 0.0F};
+      act.arm_param.right_bound_size = p["right_bound_size"] ?
+        p["right_bound_size"].as<std::vector<float>>() :
+        std::vector<float>{0.0F, 0.0F, 0.0F};
+      act.arm_param.synchronization_mode = p["synchronization_mode"] ?
+        p["synchronization_mode"].as<uint8_t>() : 0U;
+    }
+    else
+    {
+      act.arm_param.config_pose = p["target_pose"].as<std::vector<float>>();
+      act.arm_param.bound_size = p["bound_size"] ?
+        p["bound_size"].as<std::vector<float>>() : std::vector<float>{};
+    }
 
     // 解析执行条件（可选）
     if (c.IsDefined() && !c.IsNull())
@@ -164,7 +191,11 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
   else if (act.action_type == "control_check_self")
   {
     act.control_check_self_param.timeout_ms = p["timeout_ms"].as<int64_t>();
-    act.control_check_self_param.com_port = p["comport"].as<std::vector<uint8_t>>();
+    // HardwareCheck.action 定义 com_port 为 int32[]，使用 int32_t 解析
+    if (p["comport"].IsDefined() && !p["comport"].IsNull())
+    {
+      act.control_check_self_param.com_port = p["comport"].as<std::vector<int32_t>>();
+    }
   }
   else if (act.action_type == "control_reset")
   {
@@ -173,6 +204,68 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
   else if (act.action_type == "vision_reset")
   {
     act.vision_reset_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+  }
+  else if (act.action_type == "move_joints")
+  {
+    // 关节空间移动参数
+    act.move_joints_param.arm_id = p["arm_id"].as<std::string>();
+    act.move_joints_param.enable_collision_check = p["enable_collision_check"].as<bool>();
+    act.move_joints_param.speed = p["speed"].as<float>();
+    act.move_joints_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+
+    if (act.move_joints_param.arm_id == "2")
+    {
+      act.move_joints_param.left_joint_name =
+        p["left_joint_name"].as<std::vector<std::string>>();
+      act.move_joints_param.left_position =
+        p["left_position"].as<std::vector<double>>();
+      act.move_joints_param.right_joint_name =
+        p["right_joint_name"].as<std::vector<std::string>>();
+      act.move_joints_param.right_position =
+        p["right_position"].as<std::vector<double>>();
+      act.move_joints_param.synchronization_mode = p["synchronization_mode"] ?
+        p["synchronization_mode"].as<uint8_t>() : 0U;
+    }
+    else
+    {
+      act.move_joints_param.joint_name =
+        p["joint_name"].as<std::vector<std::string>>();
+      act.move_joints_param.position =
+        p["position"].as<std::vector<double>>();
+    }
+
+    // 解析执行条件（可选）
+    if (c.IsDefined() && !c.IsNull())
+    {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "Parsing condition for: " << act.action_type);
+      act.action_execut_condition.left_arm_state = c["left_arm_state"].as<std::string>();
+      act.action_execut_condition.power_level = c["power_level"].as<std::string>();
+      act.action_execut_condition.right_arm_state = c["right_arm_state"].as<std::string>();
+      act.action_execut_condition.body_waist_state = c["body_waist_state"].as<std::string>();
+      act.action_execut_condition.vision_state = c["Vision_state"].as<std::string>();
+    } else {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "No condition defined for: " << act.action_type);
+    }
+  }
+  else if (act.action_type == "control_suck")
+  {
+    // 吸盘控制参数
+    act.suck_param.suck_id = p["suck_id"].as<std::string>();
+    act.suck_param.active = p["active"].as<std::vector<bool>>();
+    act.suck_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+
+    // 解析执行条件（可选）
+    if (c.IsDefined() && !c.IsNull())
+    {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "Parsing condition for: " << act.action_type);
+      act.action_execut_condition.left_arm_state = c["left_arm_state"].as<std::string>();
+      act.action_execut_condition.power_level = c["power_level"].as<std::string>();
+      act.action_execut_condition.right_arm_state = c["right_arm_state"].as<std::string>();
+      act.action_execut_condition.body_waist_state = c["body_waist_state"].as<std::string>();
+      act.action_execut_condition.vision_state = c["Vision_state"].as<std::string>();
+    } else {
+      LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "No condition defined for: " << act.action_type);
+    }
   }
   return true;
 }

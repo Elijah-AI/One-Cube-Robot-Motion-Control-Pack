@@ -12,7 +12,6 @@
 #ifndef TASK_MANAGER__TASK_CONFIG_PARSER_HPP_
 #define TASK_MANAGER__TASK_CONFIG_PARSER_HPP_
 
-#include <rclcpp/rclcpp.hpp>
 #include <yaml-cpp/yaml.h>
 #include <string>
 #include <vector>
@@ -33,16 +32,24 @@ struct VisionActionParam
   int32_t priority;                  ///< 任务优先级
 };
 
-/// @brief 机械臂移动动作参数
-struct MoveArmParam
+/// @brief 机械臂位姿移动动作参数（对应 MovePose.action）
+struct MovePoseParam
 {
-  std::string arm_id;                ///< 机械臂 ID
-  bool use_planning;                 ///< 是否使用运动规划
-  bool collision_check;              ///< 是否启用碰撞检测
-  std::vector<float> safety_distance; ///< 安全距离参数
-  std::vector<float> config_pose;    ///< 配置位姿 [x, y, z, qx, qy, qz, qw]
-  bool avoid_obstacle;               ///< 是否避障
-  bool use_config_pose;              ///< 是否使用配置中的位姿
+  std::string arm_id;                     ///< 机械臂ID (YAML字符串，发送时转为uint8): "0"=左臂, "1"=右臂, "2"=双臂, "3"=头部, "4"=折叠推杆
+  bool enable_collision_check{false};     ///< 是否启用碰撞检测
+  std::vector<float> config_pose;         ///< 配置位姿 [x, y, z, qx, qy, qz, qw]
+  bool use_config_pose{false};            ///< 是否使用配置中的位姿
+  std::vector<float> bound_size;          ///< 包围盒尺寸 [x, y, z]
+  bool use_force_control{false};          ///< 是否使用力控模式
+  float speed{0.5F};                      ///< 控制速度，范围0～1
+  std::vector<uint8_t> hand_action_type;  ///< 灵巧手动作类型
+  int64_t timeout_ms{5000};               ///< 超时时间(毫秒), 默认5000ms
+  std::string frame_id{"base_link"};      ///< 配置位姿所在坐标系
+  std::vector<float> left_target_pose;    ///< 双臂模式左臂 TCP [x,y,z,qx,qy,qz,qw]
+  std::vector<float> right_target_pose;   ///< 双臂模式右臂 TCP [x,y,z,qx,qy,qz,qw]
+  std::vector<float> left_bound_size{0.0F, 0.0F, 0.0F};
+  std::vector<float> right_bound_size{0.0F, 0.0F, 0.0F};
+  uint8_t synchronization_mode{0};        ///< 0=同步开始并同步结束
 };
 
 /// @brief 夹爪控制动作参数
@@ -77,7 +84,7 @@ struct VisionCheckSelfParam
 struct ControlCheckSelfParam
 {
   int64_t timeout_ms;                ///< 超时时间（毫秒）
-  std::vector<uint8_t> com_port;    ///< 串口通道
+  std::vector<int32_t> com_port;    ///< 串口通道（与 HardwareCheck.action 的 int32[] com_port 一致）
 };
 
 /// @brief 视觉复位参数
@@ -92,17 +99,43 @@ struct ControlResetParam
   int64_t timeout_ms;                ///< 超时时间（毫秒）
 };
 
+/// @brief 关节空间移动动作参数
+struct MoveJointsParam
+{
+  std::string arm_id;                     ///< 部件编号：0：左臂，1：右臂，2：双臂，3：头部，4：折叠推
+  std::vector<std::string> joint_name;    ///< 关节名称列表
+  std::vector<double> position;           ///< 关节位置（单位 rad）
+  bool enable_collision_check{false};     ///< 是否启用碰撞检测
+  float speed{0.5F};                      ///< 控制速度，范围0～1
+  int64_t timeout_ms{5000};               ///< 操作超时时间 (毫秒)，默认 5000ms
+  std::vector<std::string> left_joint_name;   ///< 双臂模式左臂七关节名称
+  std::vector<double> left_position;          ///< 双臂模式左臂七关节目标 (rad)
+  std::vector<std::string> right_joint_name;  ///< 双臂模式右臂七关节名称
+  std::vector<double> right_position;         ///< 双臂模式右臂七关节目标 (rad)
+  uint8_t synchronization_mode{0};            ///< 0=同步开始并同步结束
+};
+
+/// @brief 吸盘控制动作参数（对应 ControlSuck.action）
+struct SuckParam
+{
+  std::string suck_id;                    ///< 部件编号 (YAML字符串，发送时转为uint8)：0：左吸盘，1：右吸盘，2：双吸盘
+  std::vector<bool> active;               ///< 打开/关闭
+  int64_t timeout_ms;                     ///< 操作超时时间 (毫秒)，默认 5000ms
+};
+
 /// @brief 原子动作：包含动作类型及所有可能的参数
 struct AtomicAction
 {
   std::string action_type;                    ///< 动作类型标识
   VisionActionParam vision_param;             ///< 视觉检测参数
-  MoveArmParam arm_param;                     ///< 机械臂移动参数
+  MovePoseParam arm_param;                    ///< 机械臂位姿移动参数
   GripperParam gripper_param;                 ///< 夹爪控制参数
   VisionCheckSelfParam vision_check_self_param;   ///< 视觉自检参数
   ControlCheckSelfParam control_check_self_param; ///< 控制自检参数
   VisionResetParam vision_reset_param;         ///< 视觉复位参数
   ControlResetParam control_reset_param;       ///< 控制复位参数
+  MoveJointsParam move_joints_param;           ///< 关节移动参数
+  SuckParam suck_param;                        ///< 吸盘控制参数
   condition action_execut_condition;           ///< 动作执行前置条件
 };
 

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.8)
 project(task_manager)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -15,6 +17,11 @@ find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(com_interfaces REQUIRED)
 
+# 单元测试依赖
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+endif()
+
 # libmodbus /usr/include/modbus 适配
 include_directories("/usr/include")
 set(MODBUS_LIB modbus)
@@ -26,6 +33,7 @@ include_directories(include)
 set(SRC_LIST
   src/fsm_state.cpp
   src/task_config_parser.cpp
+  src/arm_action_adapter.cpp
   src/modbus_slave.cpp
   src/task_action_client.cpp
   src/behavior_tree_engine.cpp
@@ -35,10 +43,11 @@ set(SRC_LIST
 add_executable(task_manager_node ${SRC_LIST})
 
 # 链接库
-target_link_libraries(task_manager_node 
-  yaml-cpp 
+target_link_libraries(task_manager_node
+  yaml-cpp
   ${MODBUS_LIB}
   uuid
+  pthread
 )
 
 # 添加所有必要的依赖
@@ -67,5 +76,72 @@ install(DIRECTORY launch
 install(DIRECTORY include/
   DESTINATION include/
 )
+
+# ============================================================================
+# 单元测试
+# ============================================================================
+if(BUILD_TESTING)
+  # ----- test_fsm_state -----
+  ament_add_gtest(test_fsm_state
+    test/test_fsm_state.cpp
+    src/fsm_state.cpp
+  )
+  target_include_directories(test_fsm_state PRIVATE include)
+  ament_target_dependencies(test_fsm_state
+    rclcpp
+    com_interfaces
+  )
+
+  # ----- test_prioritized_task -----
+  ament_add_gtest(test_prioritized_task
+    test/test_prioritized_task.cpp
+  )
+  target_include_directories(test_prioritized_task PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
+  ament_target_dependencies(test_prioritized_task
+    rclcpp
+    rclcpp_action
+    std_msgs
+    com_interfaces
+  )
+
+  # ----- test_add_task_action -----
+  ament_add_gtest(test_add_task_action
+    test/test_add_task_action.cpp
+  )
+  target_include_directories(test_add_task_action PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
+  ament_target_dependencies(test_add_task_action
+    rclcpp
+    rclcpp_action
+    std_msgs
+    com_interfaces
+  )
+
+  # ----- test_arm_action_adapter -----
+  ament_add_gtest(test_arm_action_adapter
+    test/test_arm_action_adapter.cpp
+    src/arm_action_adapter.cpp
+  )
+  target_include_directories(test_arm_action_adapter PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
+  ament_target_dependencies(test_arm_action_adapter
+    rclcpp
+    rclcpp_action
+    std_msgs
+    geometry_msgs
+    sensor_msgs
+    com_interfaces
+  )
+
+  # ----- test_task_config_parser -----
+  ament_add_gtest(test_task_config_parser
+    test/test_task_config_parser.cpp
+    src/task_config_parser.cpp
+  )
+  target_include_directories(test_task_config_parser PRIVATE include)
+  target_compile_definitions(test_task_config_parser PRIVATE
+    TASK_MANAGER_TEST_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/dual_arm_task_config.yaml"
+  )
+  target_link_libraries(test_task_config_parser yaml-cpp)
+  ament_target_dependencies(test_task_config_parser rclcpp)
+endif()
 
 ament_package()

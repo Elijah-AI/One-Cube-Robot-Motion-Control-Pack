@@ -4,6 +4,25 @@ bin-release/
 [Oo]bj/
 [Bb]in/
 
+# ROS 2 / colcon generated workspaces
+build/
+install/
+log/
+**/build/
+**/install/
+**/log/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Runtime captures and local caches
+.cache/
+.colcon/
+*.bag
+*.db3
+*.mcap
+
 # Other files and folders
 .settings/
 

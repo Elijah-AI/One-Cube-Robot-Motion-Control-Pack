@@ -20,11 +20,14 @@
 
     head_joint_dir: [1, 1]
 
+    dual_arm_planning_frame: base_link
+    tf_lookup_timeout_sec: 0.2
+
     left_arm_tool: gripper  #根据机器人实际配置修改
-    left_arm_tool_tf: [0, 0, 0, 0, 0, 0, 1]   #左臂工具变换矩阵[x,y,z, qx,qy,qz,qw]，从左臂法兰到左臂工具tcp
+    left_arm_tool_tf: [0.0, 0.0, 0.1785, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
     
     right_arm_tool: suck    #根据机器人实际配置修改
-    right_arm_tool_tf: [0, 0, 0, 0, 0, 0, 1]   #右臂工具变换矩阵[x,y,z, qx,qy,qz,qw]，从右臂法兰到右臂工具tcp
+    right_arm_tool_tf: [0.0, 0.0, 0.1785, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
     
     # chassis_joint_dir: [-1, 1]
 

@@ -19,7 +19,7 @@ private:
     Eigen::VectorXd acc_max_;
 
     // toppra网格离散数
-    int grid_num_ = 500;
+    int grid_num_ = 100;
 };
 
 #endif

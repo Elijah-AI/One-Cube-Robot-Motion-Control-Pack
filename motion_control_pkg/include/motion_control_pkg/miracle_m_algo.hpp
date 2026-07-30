@@ -35,6 +35,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <cmath>
 #include <Eigen/Dense>
 #include <mutex>
 
@@ -252,7 +253,9 @@ public:
      * @param cur_joint_angles  模块角度 
      * @return int 7
      */
-    int updateChainJointsAngle(std::string &module_name, std::vector<double> cur_joint_angles);
+    int updateChainJointsAngle(
+        const std::string &module_name,
+        const std::vector<double> &cur_joint_angles);
     /*
     ** update chain joints velocity(rad/s)
     **/
@@ -304,6 +307,29 @@ public:
                                     const std::vector<double>& start_q,
                                     const Eigen::Isometry3d& goal,
                                     std::vector<std::vector<double>>& path);
+
+    // Stage 7 只暴露现有 Pinocchio IK 与按名称建立的 q 索引适配器。
+    // 业务层不得复制 IK、固定切片或直接访问内部全身状态。
+    bool solveSingleArmCartesianIk(bool is_left,
+                                   const std::vector<double>& start_q,
+                                   const Eigen::Isometry3d& goal,
+                                   std::vector<double>& goal_q);
+    // 仅适配现有 solveDualIK：输出 left[0..6], right[7..13]，不复制 IK。
+    bool solveDualArmCartesianIk(const std::vector<double>& start_q,
+                                 const Eigen::Isometry3d& left_goal,
+                                 const Eigen::Isometry3d& right_goal,
+                                 std::vector<double>& goal_q);
+    bool extractSingleArmJoints(bool is_left,
+                                const std::vector<double>& full_q,
+                                std::vector<double>& arm_q) const;
+    bool getFullJointState(std::vector<double>& full_q) const;
+
+    // Pinocchio IK 使用模型根坐标系目标。若中央 planning_frame 不是根帧，
+    // 仍由同一模型按当前全身 q 完成坐标变换，不引入第二套 TF/运动学实现。
+    bool transformPoseToModelRoot(const std::string& source_frame,
+                                  const std::vector<double>& full_q,
+                                  const Eigen::Isometry3d& source_to_target,
+                                  Eigen::Isometry3d& root_to_target);
 
     bool planSingleArmCartesianPath(bool is_left,
                                     const std::vector<double>& start_q,
@@ -728,6 +754,9 @@ private:
     pinocchio::GeometryModel geom_model_;
     std::shared_ptr<pinocchio::Data> data_;
     std::shared_ptr<pinocchio::GeometryData> geom_data_;
+    // Pinocchio Data/GeometryData 是可变工作区。FK、IK、碰撞和 OMPL
+    // 有效性回调共享这些对象，必须通过同一把可重入锁串行访问。
+    mutable std::recursive_mutex pinocchio_data_mutex_;
 
     // Indices in the pinocchio full configuration vector
     std::vector<size_t> left_arm_q_indices_;
@@ -756,7 +785,7 @@ private:
     // urdf::Model robot_model; 
 
     //各关节角度信息
-    std::mutex upadate_joinst_state_msg;
+    mutable std::mutex upadate_joinst_state_msg;
     std::vector<double>  _m_full_joint_state_msg;
     std::vector<double>  _m_left_arm_joint_state_msg;
     std::vector<double>  _m_chassis_joint_state_msg;

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 project(motion_control_pkg)
 
 set(CMAKE_SKIP_INSTALL_RPATH FALSE)
-set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 set(CMAKE_INSTALL_RPATH "\$ORIGIN")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -18,13 +18,17 @@ endif()
 
 # 2. 查找 ROS 2 及第三方依赖
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(com_interfaces REQUIRED)
+find_package(Threads REQUIRED)
 # --- 查找可通过 apt 安装的第三方库 ---
 find_package(Eigen3 REQUIRED)
 # find_package(glfw3 REQUIRED)
@@ -38,6 +42,8 @@ find_package(octomap REQUIRED PATHS /usr NO_DEFAULT_PATH)
 
 find_package(ompl REQUIRED)
 find_package(pinocchio REQUIRED)
+# 新整机框架统一使用 Coal，并与 Pinocchio 的发行版本保持一致。
+find_package(coal REQUIRED CONFIG)
 find_package(ruckig REQUIRED)
 # find_package(glfw3 REQUIRED)
 # find_package(console_bridge REQUIRED)
@@ -87,45 +93,41 @@ link_directories(
 add_library(toppra_lib SHARED IMPORTED)
 
 
-if(CMAKE_CXX_COMPILER MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-	message("linux arm64架构")
-    set(TOPPRA_LIB_PATH "${dirToppRA}/lib/aarch64/libtoppra.so")
-    set_target_properties(toppra_lib PROPERTIES
-        IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
-    )
-    set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/aarch64")
-
-	foreach(lib ${corLibs})
-		list(APPEND sysCoreLibs ${lib}_lin_arm64)
-	endforeach()
-	foreach(lib ${simLibs})
-		list(APPEND sysSimLibs ${lib}_lin_arm64)
-	endforeach()
-	list(APPEND sysSimLibs dl)#arm 需要 -ldl
+if(${CMAKE_CXX_COMPILER} MATCHES "aarch64" OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+  message("linux arm64架构")
+  set(TOPPRA_LIBRARY "${dirToppRA}/lib/aarch64/libtoppra.so")
+  foreach(lib ${corLibs})
+    list(APPEND sysCoreLibs ${lib}_lin_arm64)
+  endforeach()
+  foreach(lib ${simLibs})
+    list(APPEND sysSimLibs ${lib}_lin_arm64)
+  endforeach()
+  list(APPEND sysSimLibs dl)  # arm 需要 -ldl
 else()
-	message("linux x64架构")
-    set(TOPPRA_LIB_PATH "${dirToppRA}/lib/x64/libtoppra.so")
-    set_target_properties(toppra_lib PROPERTIES
-        IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
-    )
-    set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/x64")
-	foreach(lib ${corLibs})
-		list(APPEND sysCoreLibs ${lib}_lin_x64)
-	endforeach()
-	foreach(lib ${simLibs})
-		list(APPEND sysSimLibs ${lib}_lin_x64)
-	endforeach()
+  message("linux x64架构")
+  set(TOPPRA_LIBRARY "${dirToppRA}/lib/x64/libtoppra.so")
+  foreach(lib ${corLibs})
+    list(APPEND sysCoreLibs ${lib}_lin_x64)
+  endforeach()
+  foreach(lib ${simLibs})
+    list(APPEND sysSimLibs ${lib}_lin_x64)
+  endforeach()
 endif()
+set_target_properties(toppra_lib PROPERTIES
+    IMPORTED_LOCATION "${TOPPRA_LIBRARY}"
+)
 message(${sysCoreLibs})
 
 
 # --- 3.2 配置 MarvinSDK 和 Kine (动态库) ---
-
+set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib")
 
 # 导入 libMarvinSDK.so
 add_library(marvin_sdk SHARED IMPORTED)
 set_target_properties(marvin_sdk PROPERTIES
     IMPORTED_LOCATION "${SDK_LIB_DIR}/libMarvinSDK.so"
+    # SDK 库未携带 SONAME，要求链接结果仅记录库名，安装后由 $ORIGIN 定位。
+    IMPORTED_NO_SONAME TRUE
     INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg/MarvinSDK"
 )
 
@@ -133,22 +135,33 @@ set_target_properties(marvin_sdk PROPERTIES
 add_library(kine_lib SHARED IMPORTED)
 set_target_properties(kine_lib PROPERTIES
     IMPORTED_LOCATION "${SDK_LIB_DIR}/libKine.so"
+    # 与 MarvinSDK 保持相同的包内运行时解析规则，避免固化源码绝对路径。
+    IMPORTED_NO_SONAME TRUE
 )
 
 # ==============================================================================
 # 4. 构建当前包的源文件
 # ==============================================================================
 
+# SDK 命令门是厂商无关的内部核心库，便于使用 Fake SDK 做离线事务测试。
+add_library(dual_arm_sdk_core STATIC
+    src/sdk/sdk_command_gate.cpp
+    src/execution/dual_arm_command_coordinator.cpp
+    src/execution/synchronized_trajectory.cpp
+    src/execution/dual_arm_task_arbiter.cpp
+)
+target_include_directories(dual_arm_sdk_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(dual_arm_sdk_core PUBLIC Threads::Threads)
+
 # 收集源文件
 # 注意：这里显式列出文件，或者使用 file(GLOB ...) 但推荐显式列出以避免缓存问题
 set(SOURCES
-    src/loong_driver_sdk_stub.cpp
-    src/ethercat_bus_manager.cpp
     src/main_node.cpp
     src/dual_arm_module.cpp
+    src/sdk/marvin_dual_arm_sdk_adapter.cpp
     src/miracle_module.cpp
-    src/miracle_head_module.cpp
-    src/miracle_lower_body_module.cpp
     src/miracle_m_algo.cpp
     # src/common/ctrl/PVT_ctrl.cpp
     # src/common/mpc/mpc.cpp
@@ -160,7 +173,10 @@ set(SOURCES
     src/common/motion/planner_factory.cpp
     src/common/motion/ruckig_planner.cpp
     src/common/motion/toppra_planner.cpp
-    src/common/motion/ompl_wrapper.cpp
+    # Stage 0-7 的生产节点只负责 Marvin 双臂。头部、下肢和 EtherCAT
+    # 仍保留源码，但在各自完成离线与真机验证前不编入本节点。
+    # MovePose 直接复用 MiracleMAlgo 内部的 Pinocchio/Coal/OMPL 链；
+    # 不再把旧的恒真碰撞 OMPLWrapper 编入生产节点。
     # src/utils/math/bezier_1D.cpp
     # src/utils/math/LPF_fst.cpp
     # src/utils/math/ramp_trajectory.cpp
@@ -169,6 +185,12 @@ set(SOURCES
 
 # 创建可执行节点
 add_executable(motion_control_node ${SOURCES})
+
+# Pinocchio 会把 Boost MPL 容器上限扩展到 30；必须同时禁用 Boost
+# 自带的 20 元素预生成头，否则 OMPL 引入 Boost.MultiIndex 时会模板展开失败。
+target_compile_definitions(motion_control_node PRIVATE
+    BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS
+)
 
 # 设置包含目录
 # 1. 当前包的头文件 (include/motion_control_pkg)
@@ -203,22 +225,29 @@ set_target_properties(motion_control_node PROPERTIES
 # 链接库
 # 1. ROS 2 依赖
 ament_target_dependencies(motion_control_node 
+    ament_index_cpp
     rclcpp
     rclcpp_action
     com_interfaces
     std_msgs
-    geometry_msgs)
+    geometry_msgs
+    sensor_msgs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+)
 
 
 # 2. 第三方库
 target_link_libraries(motion_control_node
+    dual_arm_sdk_core
     marvin_sdk
     kine_lib
     ${sysCoreLibs}
     ${sysSimLibs} 
     toppra_lib  
-    pthread 
-    dl
+    Threads::Threads
+    ${CMAKE_DL_LIBS}
     Eigen3::Eigen
     # glfw
     urdfdom::urdfdom_model
@@ -229,14 +258,81 @@ target_link_libraries(motion_control_node
     octomath
     ompl::ompl
     pinocchio::pinocchio
+    coal::coal
     ruckig::ruckig
     jsoncpp
 )
 
+# ==============================================================================
+# 5. 离线测试：只链接厂商无关核心库和 Fake 设备，禁止链接 MarvinSDK/Kine。
+# ==============================================================================
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  add_library(fake_dual_arm_device STATIC
+    test/fake_dual_arm_device.cpp
+  )
+  target_include_directories(fake_dual_arm_device PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+  )
+  target_link_libraries(fake_dual_arm_device PUBLIC Threads::Threads)
+
+  ament_add_gtest(test_sdk_command_gate
+    test/test_sdk_command_gate.cpp
+  )
+  target_include_directories(test_sdk_command_gate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+  )
+  target_link_libraries(test_sdk_command_gate
+    dual_arm_sdk_core
+    fake_dual_arm_device
+    Threads::Threads
+  )
+
+  ament_add_gtest(test_dual_arm_command_coordinator
+    test/test_dual_arm_command_coordinator.cpp
+  )
+  target_include_directories(test_dual_arm_command_coordinator PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+  )
+  target_link_libraries(test_dual_arm_command_coordinator
+    dual_arm_sdk_core
+    fake_dual_arm_device
+    Threads::Threads
+  )
+
+  ament_add_gtest(test_dual_arm_task_arbiter
+    test/test_dual_arm_task_arbiter.cpp
+  )
+  target_link_libraries(test_dual_arm_task_arbiter
+    dual_arm_sdk_core
+    Threads::Threads
+  )
+
+  ament_add_gtest(test_dual_arm_pose_transforms
+    test/test_dual_arm_pose_transforms.cpp
+  )
+  target_include_directories(test_dual_arm_pose_transforms PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${Eigen3_INCLUDE_DIRS}
+  )
+  ament_target_dependencies(test_dual_arm_pose_transforms
+    rclcpp
+    geometry_msgs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+  target_link_libraries(test_dual_arm_pose_transforms
+    Eigen3::Eigen
+  )
+endif()
+
 # 如果 MarvinSDK 或 Kine 依赖系统库（如 pthread, dl, rt 等），需在此补充
 # target_link_libraries(motion_control_node pthread dl)
 # ==============================================================================
-# 5. 安装规则 (Install Rules)
+# 6. 安装规则 (Install Rules)
 # ==============================================================================
 
 # 安装可执行文件
@@ -250,7 +346,7 @@ install(TARGETS motion_control_node
 install(FILES
     ${SDK_LIB_DIR}/libMarvinSDK.so
     ${SDK_LIB_DIR}/libKine.so
-    ${TOPPRA_LIB_PATH}
+    ${TOPPRA_LIBRARY}
     DESTINATION lib/${PROJECT_NAME})
    
 # 安装配置文件

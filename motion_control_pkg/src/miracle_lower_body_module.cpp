@@ -135,12 +135,6 @@ namespace miracle {
             m_joint_dir.push_back(static_cast<int8_t>(value));
         }
 
-        joint_state_pub_ = node_ptr->create_publisher<sensor_msgs::msg::JointState>("/leg_joint_states", 10);
-        joint_state_msg_.name = {"leg_joint1", "leg_joint2", "leg_joint3", "body_joint"};
-        joint_state_msg_.position.resize(LEG_JOINTNUM, 0.0);
-        joint_state_msg_.velocity.resize(LEG_JOINTNUM, 0.0);
-        joint_state_msg_.effort.resize(LEG_JOINTNUM, 0.0);
-
         // m_cloud_collision_run_stop = false;
         is_executing_leg_.store(false);
     }
@@ -215,23 +209,6 @@ namespace miracle {
 
     }
 
-    void MiracleLowerBodyModule::publishJointState() {
-        if (!joint_state_pub_) {
-            return;
-        }
-
-        auto node_ptr = lockNode(__func__);
-        if (!node_ptr) {
-            return;
-        }
-
-        joint_state_msg_.header.stamp = node_ptr->get_clock()->now();
-        joint_state_msg_.position = m_joints_cur_pos;
-        joint_state_msg_.velocity = m_joints_cur_speed;
-        joint_state_msg_.effort = m_joints_cur_current;
-        joint_state_pub_->publish(joint_state_msg_);
-    }
-
     void MiracleLowerBodyModule::lowerBodyRevCallBack() {
 
         int loop_cnt = 0, loop_cnt2 = 0;
@@ -250,7 +227,9 @@ namespace miracle {
             
             //48ms周期
             if(loop_cnt == 0) {
-                publishJointState();
+                if (m_joints_data_cb) {
+                    m_joints_data_cb(m_joints_cur_pos, m_joints_cur_speed, m_joints_cur_current);
+                }
             }
 
             //500ms周期

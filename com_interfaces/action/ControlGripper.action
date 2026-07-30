@@ -1,20 +1,30 @@
-std_msgs/Header header                     
-string task_id       
-uint8 gripper_id           
-uint8[2] position     
-uint8[2] speed      
-uint8[2] max_torque         
-uint8[2] com_port 
-bool block_until_complete      
-int64 timeout_ms                             
+# Goal
+# 夹爪编号由接口统一定义，避免客户端和服务端重复使用裸数字。
+uint8 GRIPPER_LEFT=0
+uint8 GRIPPER_RIGHT=1
+uint8 GRIPPER_BOTH=2
+
+std_msgs/Header header
+string task_id
+uint8 gripper_id
+uint8[] position     # 改为动态数组，或在代码中确保传入长度为2
+uint8[] speed
+uint8[] max_torque
+uint8[] com_port
+bool block_until_complete
+int64 timeout_ms
+
 ---
+# Result
 bool success
-uint8[2] final_position      
-uint8[2] final_torque      
+uint8[] final_position
+uint8[] final_torque
 string error_message
+
 ---
-uint8[2] current_position    
-uint8[2] current_torque       
-uint8[2] current_speed
-float32 progress_rate                
-std_msgs/Header header          
+# Feedback
+uint8[] current_position
+uint8[] current_torque
+uint8[] current_speed
+float32 progress_rate
+std_msgs/Header header

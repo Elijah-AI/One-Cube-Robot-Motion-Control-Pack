@@ -1,4 +1,5 @@
 #include "toppra_planner.h"
+#include "motion_control_pkg/execution/trajectory_sampling.hpp"
 #include <toppra/algorithm.hpp>
 #include <toppra/algorithm/toppra.hpp>
 #include <toppra/constraint.hpp>
@@ -21,6 +22,12 @@
 
 bool ToppraPlanner::init(int dof, const MotionConstraint& constraint)
 {
+    if (dof <= 0 || !std::isfinite(dt_) || dt_ <= 0.0 ||
+        constraint.max_vel.size() != static_cast<std::size_t>(dof) ||
+        constraint.max_acc.size() != static_cast<std::size_t>(dof)) {
+        std::cerr << "[Toppra] invalid DOF, cycle time or constraints\n";
+        return false;
+    }
     dof_ = dof;
     constraint_ = constraint;
 
@@ -54,6 +61,10 @@ TrajectoryResult ToppraPlanner::plan(const std::vector<Waypoint>& waypoints)
     int nPt = waypoints.size();
     for (const auto& wp : waypoints)
     {
+        if (wp.positions.size() != static_cast<std::size_t>(dof_)) {
+            std::cerr << "[Toppra] waypoint dimension mismatch\n";
+            return res;
+        }
         toppra::Vector p(dof_);
         for (int j = 0; j < dof_; ++j)
             p(j) = wp.positions[j];
@@ -85,7 +96,7 @@ TrajectoryResult ToppraPlanner::plan(const std::vector<Waypoint>& waypoints)
 
     // 3. TOPPRA求解
     toppra::algorithm::TOPPRA opt(cons, path);
-    opt.setN(grid_num_);
+    opt.setN(grid_num_);//默认为100
     auto solver = std::make_shared<toppra::solver::Seidel>();
     opt.solver(solver);
 
@@ -105,17 +116,17 @@ TrajectoryResult ToppraPlanner::plan(const std::vector<Waypoint>& waypoints)
     // 总时间 & 按dt采样
     const toppra::Vector& raw_time = param.getTimes();
     double totalT = raw_time.tail(1)(0);
-    double dt = dt_;
-
-    int sample_cnt = static_cast<int>(std::ceil(totalT / dt)) + 1;
-    sample_cnt = std::max(1, sample_cnt);
-
+    const auto sample_times =
+        motion_control_pkg::execution::makeInclusiveSampleTimes(
+        totalT, dt_);
+    if (sample_times.empty()) {
+        std::cerr << "[Toppra] failed to create 4 ms sample times\n";
+        return res;
+    }
+    const int sample_cnt = static_cast<int>(sample_times.size());
     toppra::Vector samp_t(sample_cnt);
-    for (int i = 0; i < sample_cnt; ++i)
-    {
-        double t = i * dt;
-        if (t > totalT) t = totalT;
-        samp_t(i) = t;
+    for (int i = 0; i < sample_cnt; ++i) {
+        samp_t(i) = sample_times[static_cast<std::size_t>(i)];
     }
 
     // 批量求值 pos/vel/acc
@@ -143,5 +154,7 @@ TrajectoryResult ToppraPlanner::plan(const std::vector<Waypoint>& waypoints)
             res.accelerations[i][j] = acc_buf[i](j);
         }
     }
+    // 多点轨迹同样显式保留输入路径的最终目标点。
+    res.positions.back() = waypoints.back().positions;
     return res;
 }

@@ -1,0 +1,50 @@
+# 单臂和双臂共用同一个 MoveJoints Action。
+uint8 ARM_LEFT=0
+uint8 ARM_RIGHT=1
+uint8 ARM_BOTH=2
+uint8 HEAD=3
+uint8 LEG=4
+
+uint8 SYNC_START_AND_FINISH=0
+uint8 SYNC_START_ONLY=1
+
+std_msgs/Header header
+string task_id
+uint8 arm_id
+
+# ARM_LEFT/ARM_RIGHT 使用下列可变长字段，必须提供完整、唯一的七个关节。
+string[] joint_name
+float64[] position
+
+# ARM_BOTH 使用下列显式左右目标，不使用 joint_name/position。
+string[7] left_joint_name
+float64[7] left_position
+string[7] right_joint_name
+float64[7] right_position
+uint8 synchronization_mode
+
+bool enable_collision_check
+float32 speed                    # 控制速度比例，范围：(0, 1]
+int64 timeout_ms
+---
+bool success
+string error_message
+float64 execution_time
+float64 final_distance_error       # 单臂最大关节误差，ARM_BOTH 时为左右最大值
+float64 left_final_distance_error_rad
+float64 right_final_distance_error_rad
+float64 completion_time_skew_sec
+---
+uint8 STATUS_QUEUED=0
+uint8 STATUS_PLANNING=1
+uint8 STATUS_EXECUTING=2
+uint8 STATUS_WAITING_FOR_COMPLETION=3
+uint8 STATUS_STOPPING=4
+
+std_msgs/Header header
+string task_status
+float32 progress_rate
+string current_step_info
+uint8 dual_task_status
+float32 left_progress_rate
+float32 right_progress_rate

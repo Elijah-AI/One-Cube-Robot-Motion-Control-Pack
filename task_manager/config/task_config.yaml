@@ -6,9 +6,9 @@ tasks:
   move_box:
     trigger_reg: 40001
     status_reg: 50001
-    action_sequencenum: 1
+    action_sequencenum: 2
     action_sequence1:
-      - action_type: move_arm
+      - action_type: move_joints
         condition:                   # 新增执行条件
           left_arm_state: "idle"     # 检查机械臂左臂状态
           power_level: "15"          # 检查电量是否充足
@@ -16,29 +16,14 @@ tasks:
           body_waist_state: "false"  # 确认身体腰部状态
           Vision_state: "false"      # 确认视觉状态
         params:
-          arm_id: "arm0"
-          use_planning: true
-          collision_check: true
-          target_pose: [469.7, 336.3, 795.8, -0.816515, -0.569092, -0.083996, -0.048805]
-          use_config_pose: true
-          safety_distance: [0, 0, 0, 0, 0, 0]
-          avoid_obstacle: true
-      - action_type: gripper_ctrl
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          gripper_id: 0
-          comport: [2, 2]
-          position: [0, 0]
-          speed: [30, 30]
-          max_torque: [80, 80]
-          block: true
+          arm_id: "0"                # 0=左臂, 1=右臂, 2=双臂
+          joint_name: ["Joint1_L", "Joint2_L", "Joint3_L", "Joint4_L", "Joint5_L", "Joint6_L", "Joint7_L"]
+          position: [0.8, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]  # 真机验收目标 (rad)
+          enable_collision_check: false
+          speed: 0.2
           timeout_ms: 10000
-      - action_type: move_arm
+    action_sequence2:
+      - action_type: move_joints
         condition:                   # 新增执行条件
           left_arm_state: "idle"     # 检查机械臂左臂状态
           power_level: "15"          # 检查电量是否充足
@@ -46,381 +31,25 @@ tasks:
           body_waist_state: "false"  # 确认身体腰部状态
           Vision_state: "false"      # 确认视觉状态
         params:
-          arm_id: "arm0"
-          use_planning: true
-          collision_check: true
-          target_pose: [-65.29, -6.15, 86.34, -81.99, 1.17, -9.29, -56.95]
-          use_config_pose: true
-          safety_distance: [0, 0, 0, 0, 0, 0]
-          avoid_obstacle: true
-      - action_type: gripper_ctrl
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          gripper_id: 0
-          comport: [2, 2]
-          position: [255, 255]
-          speed: [30, 30]
-          max_torque: [40, 40]
-          block: true
+          arm_id: "1"                # 0=左臂, 1=右臂, 2=双臂
+          joint_name: ["Joint1_R", "Joint2_R", "Joint3_R", "Joint4_R", "Joint5_R", "Joint6_R", "Joint7_R"]
+          position: [0.8, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]  # 真机验收目标 (rad)
+          enable_collision_check: false
+          speed: 0.2
           timeout_ms: 10000
-      - action_type: move_arm
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "arm0"
-          use_planning: true
-          collision_check: true
-          target_pose: [-0.29, -0.15, 0.34, -0.99, 1.17, -0.29, -0.95]
-          use_config_pose: true
-          safety_distance: [0, 0, 0, 0, 0, 0]
-          avoid_obstacle: true
-      # - action_type: move_arm
-      #   condition:                   # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     arm_id: "arm0"
-      #     use_planning: true
-      #     collision_check: true
-      #     target_pose: [403.817, 512.938, 197.793, 0.0798, 0.7338, 0.6693, -0.0861]
-      #     use_config_pose: false
-      #     safety_distance: [-15.01, 0.01, 150.01, 0.01, 0.01, 0.01]
-      #     avoid_obstacle: true
-      # - action_type: gripper_ctrl
-      #   condition:                   # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     gripper_id: 0
-      #     comport: [2, 2]
-      #     position: [0, 0]
-      #     speed: [30, 30]
-      #     max_torque: [80, 80]
-      #     block: true
-      #     timeout_ms: 10000
-      # - action_type: move_arm
-      #   condition:                   # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     arm_id: "arm0"
-      #     use_planning: true
-      #     collision_check: true
-      #     target_pose: [334.171, 596.153, 187.666, 0.1472, 0.7027, 0.6943, -0.0531]
-      #     use_config_pose: false
-      #     safety_distance: [-15.01, 0.01, 30.01, 0.01, 0.01, 0.01]
-      #     avoid_obstacle: true
-      # - action_type: gripper_ctrl
-      #   condition:                   # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     gripper_id: 0
-      #     comport: [2, 2]
-      #     position: [255, 255]
-      #     speed: [30, 30]
-      #     max_torque: [80, 80]
-      #     block: true
-      #     timeout_ms: 10000
-      # - action_type: move_arm
-      #   condition:                   # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     arm_id: "arm0"
-      #     use_planning: true
-      #     collision_check: true
-      #     target_pose: [0, 0, 1121, 0, 0, 0.2037, 0.6634]
-      #     use_config_pose: true
-      #     safety_distance: [0, 0, 0, 0, 0, 0]
-      #     avoid_obstacle: true
-    # action_sequence2:
-    #   - action_type: vision_detect
-    #     condition:                     # 新增执行条件
-    #       left_arm_state: "idle"     # 检查机械臂左臂状态
-    #       power_level: "15"          # 检查电量是否充足
-    #       right_arm_state: "false"   # 确认机械臂右臂状态
-    #       body_waist_state: "false"  # 确认身体腰部状态
-    #       Vision_state: "false"      # 确认视觉状态
-    #     params:
-    #       target_obj_name: "box"
-    #       expected_frame_id: "camera_link"
-    #       need_6d_pose: true
-    #       need_env_point_cloud: true
-    #       downsample_res: 0.02
-    #       type: 0.02
-    #       priority: 1
-    #   - action_type: vision_detect
-    #     condition:                     # 新增执行条件
-    #       left_arm_state: "idle"     # 检查机械臂左臂状态
-    #       power_level: "15"          # 检查电量是否充足
-    #       right_arm_state: "false"   # 确认机械臂右臂状态
-    #       body_waist_state: "false"  # 确认身体腰部状态
-    #       Vision_state: "false"      # 确认视觉状态
-    #     params:
-    #       target_obj_name: "box"
-    #       expected_frame_id: "camera_link"
-    #       need_6d_pose: true
-    #       need_env_point_cloud: true
-    #       downsample_res: 0.02
-    #       type: 0.02
-    #       priority: 1
-    #   - action_type: move_arm
-    #     condition:                     # 新增执行条件
-    #       left_arm_state: "idle"     # 检查机械臂左臂状态
-    #       power_level: "15"          # 检查电量是否充足
-    #       right_arm_state: "false"   # 确认机械臂右臂状态
-    #       body_waist_state: "false"  # 确认身体腰部状态
-    #       Vision_state: "false"      # 确认视觉状态
-    #     params:
-    #       arm_id: "arm0"
-    #       use_planning: true
-    #       collision_check: true
-    #       target_pose: [0.0, 1089.0, 1121.0, -0.7071, 0.0, 0.0, 0.7071]
-    #       use_config_pose: false
-    #       safety_distance: [0, 0, 0, 0, 0, 0]
-    #       avoid_obstacle: true
-    #   - action_type: gripper_ctrl
-    #     condition:                     # 新增执行条件
-    #       left_arm_state: "idle"     # 检查机械臂左臂状态
-    #       power_level: "15"          # 检查电量是否充足
-    #       right_arm_state: "false"   # 确认机械臂右臂状态
-    #       body_waist_state: "false"  # 确认身体腰部状态
-    #       Vision_state: "false"      # 确认视觉状态
-    #     params:
-    #       gripper_id: 1
-    #       comport: [2, 2]
-    #       position: [0, 0]
-    #       speed: [30, 30]
-    #       max_torque: [80, 80]
-    #       block: true
-    #       timeout_ms: 10000
-      # - action_type: move_arm
-      #   condition:                     # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     arm_id: "arm1"
-      #     use_planning: true
-      #     collision_check: true
-      #     target_pose: [403.817, 512.938, 197.793, 0.0798, 0.7338, 0.6693, -0.0861]
-      #     use_config_pose: false
-      #     safety_distance: [-15.01, 0.01, 150.01, 0.01, 0.01, 0.01]
-      #     avoid_obstacle: true
-      # - action_type: gripper_ctrl
-      #   condition:                     # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     gripper_id: 1
-      #     comport: [2, 2]
-      #     position: [0, 0]
-      #     speed: [30, 30]
-      #     max_torque: [80, 80]
-      #     block: true
-      #     timeout_ms: 10000
-      # - action_type: move_arm
-      #   condition:                     # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     arm_id: "arm1"
-      #     use_planning: true
-      #     collision_check: true
-      #     target_pose: [334.171, 596.153, 187.666, 0.1472, 0.7027, 0.6943, -0.0531]
-      #     use_config_pose: false
-      #     safety_distance: [-15.01, 0.01, 30.01, 0.01, 0.01, 0.01]
-      #     avoid_obstacle: true
-      # - action_type: gripper_ctrl
-      #   condition:                     # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     gripper_id: 1
-      #     comport: [2, 2]
-      #     position: [255, 255]
-      #     speed: [30, 30]
-      #     max_torque: [80, 80]
-      #     block: true
-      #     timeout_ms: 10000
-      # - action_type: move_arm
-      #   condition:                   # 新增执行条件
-      #     left_arm_state: "idle"     # 检查机械臂左臂状态
-      #     power_level: "15"          # 检查电量是否充足
-      #     right_arm_state: "false"   # 确认机械臂右臂状态
-      #     body_waist_state: "false"  # 确认身体腰部状态
-      #     Vision_state: "false"      # 确认视觉状态
-      #   params:
-      #     arm_id: "arm0"
-      #     use_planning: true
-      #     collision_check: true
-      #     target_pose: [0, 0, 1121, 0, 0, 0.2037, 0.6634]
-      #     use_config_pose: true
-      #     safety_distance: [0, 0, 0, 0, 0, 0]
-      #     avoid_obstacle: true
-  move_box1:
+  
+  # 吸盘控制示例任务
+  control_suck_example:
     trigger_reg: 40002
     status_reg: 50002
     action_sequencenum: 1
     action_sequence1:
-      - action_type: move_arm
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
+      - action_type: control_suck
         params:
-          arm_id: "arm0"
-          use_planning: true
-          collision_check: true
-          target_pose: [0.0, 1089.0, 1121.0, -0.7071, 0.0, 0.0, 0.7071]
-          use_config_pose: false
-          safety_distance: [0, 0, 0, 0, 0, 0]
-          avoid_obstacle: true
-      - action_type: gripper_ctrl
-        condition:                     # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          gripper_id: 0
-          comport: [2, 2]
-          position: [0, 0]
-          speed: [30, 30]
-          max_torque: [80, 80]
-          block: true
-          timeout_ms: 10000
-      - action_type: vision_detect
-        condition:                     # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          target_obj_name: "box"
-          expected_frame_id: "camera_link"
-          need_6d_pose: true
-          need_env_point_cloud: true
-          downsample_res: 0.02
-          type: 0.02
-          priority: 1
-      - action_type: move_arm
-        condition:                     # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "arm0"
-          use_planning: true
-          collision_check: true
-          target_pose: [403.817, 512.938, 197.793, 0.0798, 0.7338, 0.6693, -0.0861]
-          use_config_pose: false
-          safety_distance: [-15.01, 0.01, 150.01, 0.01, 0.01, 0.01]
-          avoid_obstacle: true
-      - action_type: gripper_ctrl
-        condition:                     # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          gripper_id: 0
-          comport: [2, 2]
-          position: [0, 0]
-          speed: [30, 30]
-          max_torque: [80, 80]
-          block: true
-          timeout_ms: 10000
-      - action_type: move_arm
-        condition:                     # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "arm0"
-          use_planning: true
-          collision_check: true
-          target_pose: [334.171, 596.153, 187.666, 0.1472, 0.7027, 0.6943, -0.0531]
-          use_config_pose: false
-          safety_distance: [-15.01, 0.01, 30.01, 0.01, 0.01, 0.01]
-          avoid_obstacle: true
-      - action_type: gripper_ctrl
-        condition:                     # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          gripper_id: 0
-          comport: [2, 2]
-          position: [255, 255]
-          speed: [30, 30]
-          max_torque: [80, 80]
-          block: true
-          timeout_ms: 10000
-      - action_type: move_arm
-        condition:                     # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "arm0"
-          use_planning: true
-          collision_check: true
-          target_pose: [0, 0, 1121, 0, 0, 0.2037, 0.6634]
-          use_config_pose: true
-          safety_distance: [0, 0, 0, 0, 0, 0]
-          avoid_obstacle: true      
-      
-      
+          suck_id: "0"           # 部件编号：0：左吸盘，1：右吸盘，2：双吸盘
+          active: [true, false]  # 打开/关闭
+          timeout_ms: 5000       # 操作超时时间 (毫秒)
+   
 boot_task:
   self_check:
     action_sequence:

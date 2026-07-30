@@ -38,7 +38,6 @@
 #include <iostream>
 #include <vector>
 
-#include "sensor_msgs/msg/joint_state.hpp"
 #include "jsoncpp/json/json.h"
 #include "miracle_module.hpp"
 #include "miracle_m_algo.hpp"
@@ -135,7 +134,6 @@ namespace miracle {
     private:
         //一个action対应一个接口
         void execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
-        void publishJointState();
         
         bool checkJointsAngleOk(std::vector<double> angles);
 
@@ -163,8 +161,6 @@ namespace miracle {
 
         std::thread execution_thread_move_joints_;
         std::atomic<bool> is_executing_head_;
-        rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
-        sensor_msgs::msg::JointState joint_state_msg_;
 
     };
 } // namespace miracle
