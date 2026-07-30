@@ -15,12 +15,13 @@ export FASTDDS_BUILTIN_TRANSPORTS=UDPv4
 必须安装：
 libeigen3-dev
 libboost-all-dev
-ros-jazzy-ompl（根据安装的ros2版本修改）
-ros-jazzy-octomap(如有版本冲突，安装liboctomap-dev)
-ros-jazzy-pinocchio
-ros-jazzy-ruckig
-libccd-dev (FCL 的碰撞检测底层依赖)
+ros-humble-ompl
+ros-humble-pinocchio
+ros-humble-ruckig
+
+liboctomap-dev
 libfcl-dev
+libccd-dev (FCL 的碰撞检测底层依赖)
 liburdfdom-dev （或者liburdfdom-headers-dev）
 libjsoncpp-dev
 
@@ -43,6 +44,8 @@ libtinyxml-dev / libtinyxml2-dev
 
 
 
-rsync -avz --progress /home/lv/ylfrobot/src/com_interfaces neardi@172.16.20.136:/home/neardi/ros2_ws/src/
+rsync -avz --progress /home/lv/ylfrobot/src/com_interfaces neardi@172.16.20.141:/home/neardi/ros2_ws/src/
 
-rsync -avz --progress /home/lv/ylfrobot/src/motion_control_pkg neardi@172.16.20.136:/home/neardi/ros2_ws/src/
+rsync -avz --progress /home/lv/ylfrobot/src/motion_control_pkg neardi@172.16.20.141:/home/neardi/ros2_ws/src/
+
+rsync -avz --progress /home/lv/ylfrobot/src/onecube_robot_description neardi@172.16.20.141:/home/neardi/ros2_ws/src/

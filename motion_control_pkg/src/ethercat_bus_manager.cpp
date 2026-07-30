@@ -1,5 +1,6 @@
 #include "ethercat_bus_manager.hpp"
 
+#include <time.h>
 #include <unistd.h>
 #include "rclcpp/rclcpp.hpp"
 // #include "json_server.hpp"
@@ -31,7 +32,7 @@ EthercatBusManager::EthercatBusManager(char const *xmlFile)
         return;
     }
 
-    std::vector<char> mode(motor_number_, static_cast<char>(8));  //现32个电机，每个电机模式为8
+    std::vector<char> mode(motor_number_, static_cast<char>(8));  //每个电机模式为8
     controller_.setMode(mode);
 
     initializeTargetBuffer();
@@ -67,16 +68,21 @@ void EthercatBusManager::initializeTargetBuffer() {
             motor_target_buffer_[i].tor = 0.0f;
             motor_target_buffer_[i].kp = 0.0f;
             motor_target_buffer_[i].kd = 0.0f;
-            motor_target_buffer_[i].enabled = 0;
+            motor_target_buffer_[i].enabled = -1;
         }
     }
 }
 
 void EthercatBusManager::run() {
 
+    std::vector<DriverSDK::motorActualStruct> actual_data(motor_number_);
+    std::vector<DriverSDK::motorTargetStruct> target_data(motor_number_);
+    timespec next_wakeup_time{};
+    clock_gettime(CLOCK_MONOTONIC, &next_wakeup_time);
+
     while (!stop_) {
-        std::vector<DriverSDK::motorActualStruct> actual_data(motor_number_);
-        std::vector<DriverSDK::motorTargetStruct> target_data(motor_number_);
+      
+        bool need_reset_enable_flag = false;
 
         controller_.getMotorActual(actual_data);
         {
@@ -90,11 +96,29 @@ void EthercatBusManager::run() {
 
         if (!target_data.empty()) {
             controller_.setMotorTarget(target_data);
+            need_reset_enable_flag = !clear_error_command_sent_;
         } else {
             RCLCPP_WARN(rclcpp::get_logger("ethercat_bus_manager"), "No motor target set");
         }
+
+        if (need_reset_enable_flag) {
+            std::lock_guard<std::mutex> lock(target_mutex_);
+            for (auto &target : motor_target_buffer_) {
+                if (target.enabled == -1) {
+                    target.enabled = 1;     //启动电机,释放刹车，500ms后才可以动作
+                }
+            }
+            clear_error_command_sent_ = true;
+        }
         controller_.advance();
-        usleep(TRAJ_CYCLE_US);
+
+        next_wakeup_time.tv_nsec += TRAJ_CYCLE_US * 1000;
+        while (next_wakeup_time.tv_nsec >= 1000000000L) {
+            next_wakeup_time.tv_nsec -= 1000000000L;
+            ++next_wakeup_time.tv_sec;
+        }
+
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup_time, nullptr);
     }
 }
 

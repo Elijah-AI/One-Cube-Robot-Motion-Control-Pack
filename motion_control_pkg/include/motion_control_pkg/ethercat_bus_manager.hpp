@@ -42,6 +42,7 @@ private:
     mutable std::mutex target_mutex_;
     std::vector<DriverSDK::motorActualStruct> motor_actual_snapshot_;
     std::vector<DriverSDK::motorTargetStruct> motor_target_buffer_;
+    bool clear_error_command_sent_{false};
 
     std::shared_ptr<std::thread> worker_;
     std::atomic<bool> stop_{false};

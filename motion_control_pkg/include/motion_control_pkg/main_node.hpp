@@ -49,13 +49,13 @@ using NodeStatus = com_interfaces::msg::NodeStatus;
 using MotorStatus = com_interfaces::msg::MotorStatus;
 
 //EtherCAT从站ID号
-#define LEG_JOINT1            4
-#define LEG_JOINT2            5
-#define LEG_JOINT3            6
-#define LEG_JOINT4            7
+constexpr int LEG_JOINT1 = 30 - 1;
+constexpr int LEG_JOINT2 = 29 - 1;
+constexpr int LEG_JOINT3 = 28 - 1;
+constexpr int BODY_JOINT = 27 - 1;
 
-#define HEAD_YAW_MOTOR_ID     1
-#define HEAD_PITCH_MOTOR_ID   2
+constexpr int HEAD_YAW_MOTOR_ID = 32 - 1;
+constexpr int HEAD_PITCH_MOTOR_ID = 31 - 1;
 
 
 //节点间通信枚举
@@ -97,7 +97,7 @@ enum
 };
 
 
-enum
+enum DeviceState
 {
     STATE_UNKNOWN     = 0,   // 未知状态
     STATE_INIT        = 1,   // 初始化
@@ -107,7 +107,7 @@ enum
     STATE_RESET_DONE  = 6,   // 复位完成
     STATE_RUNNING     = 7,   // 运行中
     STATE_ERROR       = 8    // 异常故障
-}DeviceState;
+};
 
 
 //运控节点内，各部件模块枚举0：left_arm - 1：right_arm - 3：head - 4：leg

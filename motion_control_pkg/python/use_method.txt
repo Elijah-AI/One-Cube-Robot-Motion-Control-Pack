@@ -20,12 +20,13 @@ python3 /home/lv/onecube_rotbot_ros/src/motion_control_pkg/python/action_client_
 
  
 发送 MoveJoints
-python3 /home/lv/onecube_rotbot_ros/src/motion_control_pkg/python/action_client_test.py move_joints \
+python3 action_client_test.py move_joints \
   --arm-id 4 \
   --joint-name joint1,joint2,joint3,joint4 \
   --position 0.4,0.2,0.1,-0.3 \
+  --speed 0.5
   --cancel-after-sec 1.0
   --timeout-ms 5000
 
   --collision (：置位 enable_collision_check=True)
-  --speed 0.5
+  

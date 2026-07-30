@@ -19,8 +19,8 @@ def generate_launch_description():
     motion_control_pkg = FindPackageShare('motion_control_pkg').find('motion_control_pkg')
     param_file = os.path.join(motion_control_pkg, 'launch', 'config', 'motion_control_config.yaml')
     
-    eni0_file = "/opt/tq/ethercat/config/NIIC_ENI_M0.xml"
-    # eni1_file = "/opt/tq/ethercat/config/NIIC_ENI_M1.xml"
+    eni0_file = "/opt/onecube/driver_sdk/configuration.xml"
+    
     
 
     return LaunchDescription(

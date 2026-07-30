@@ -1,59 +1,117 @@
+/* Copyright
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Designed and built with love @zhihu by @cjrcl.
+ */
+
 #pragma once
 
-#include <cstdint>
-#include <mutex>
-#include <string>
 #include <vector>
+#include <string>
 
-namespace DriverSDK {
-
-struct motorActualStruct {
-    float pos = 0.0f;
-    float vel = 0.0f;
-    float tor = 0.0f;
-    std::uint64_t errorCode = 0;
-    std::uint16_t statusWord = 0;
+namespace DriverSDK{
+struct imuStruct{
+    float rpy[3], gyr[3], acc[3];
 };
 
-struct motorTargetStruct {
-    float pos = 0.0f;
-    float vel = 0.0f;
-    float tor = 0.0f;
-    float kp = 0.0f;
-    float kd = 0.0f;
-    std::uint8_t enabled = 0;
+struct sensorStruct{
+    float F[3], M[3];
+    unsigned int statusCode;
 };
 
-class DriverSDK {
+struct digitTargetStruct{
+    unsigned short pos = 0;             // 0 ~ 90: relaxed ~ tense
+};
+
+struct digitActualStruct{
+    unsigned short pos = 0;             // 0 ~ 90: relaxed ~ tense
+};
+
+struct motorTargetStruct{
+    float pos = 0.0, vel = 0.0, tor = 0.0, kp = 0.0, kd = 0.0;
+    int enabled = 0;                    // -1: clear error; 0: disable; 1: enable; 2: damp
+};
+
+struct motorActualStruct{
+    float pos = 0.0, vel = 0.0, tor = 0.0;
+    signed char temp[2] = {0, 0};       // temp[0]: temperatureMOS; temp[1]: temperatureRotor
+    unsigned short statusWord = 65535;  // 0: PREOP; 65535: inactive
+    unsigned short errorCode = 0;
+};
+
+unsigned short single2half(float f);
+float half2single(unsigned short u);
+
+class motorSDOClass{
 public:
-    DriverSDK() = default;
-
-    static DriverSDK &instance();
-
-    bool init(char const *xml_file);
-    bool start(const std::string &eni0_file,
-               const std::string &eni1_file,
-               int priority,
-               int interval,
-               std::int64_t cycle_time_0,
-               std::int64_t cycle_time_1,
-               std::int64_t shift_time);
-
-    int getTotalMotorNr() const;
-    bool setMode(const std::vector<char> &mode);
-    bool getMotorActual(std::vector<motorActualStruct> &motor_actual_data);
-    bool setMotorTarget(const std::vector<motorTargetStruct> &motor_target_data);
-    bool advance();
-
-private:
-    void ensureMotorStorageLocked(std::size_t motor_count);
-
-    mutable std::mutex mutex_;
-    int motor_count_ = 32;
-    std::vector<char> mode_;
-    std::vector<motorActualStruct> actual_;
-    std::vector<motorTargetStruct> target_;
-    std::string config_path_;
+    long value;
+    int i;                              // drivers[i]
+    short state;                        // -1: error; 0: pending; 1, 2: processing; 3: completed
+    unsigned short index;
+    unsigned char subindex;
+    unsigned char signed_;              // 0: unsigned; 1: signed
+    unsigned char bitLength;            // 8, 16 or 32
+    unsigned char operation;            // 0: write; 1: read
+    motorSDOClass(int i);
+    ~motorSDOClass();
 };
 
-}  // namespace DriverSDK
+class motorREGClass{
+public:
+    long value;
+    int i;                              // drivers[i]
+    motorREGClass(int i);
+    ~motorREGClass();
+};
+
+class DriverSDK{
+public:
+    static DriverSDK& instance();
+    void setCPU(unsigned short const cpu);
+    int setCPUs(std::vector<unsigned short> const& cpus, std::string const& bus);   // cpus: for EtherCAT0 ~ EtherCAT5 or CAN RX, SocketCAN TX and CANHAL TX; bus: ECAT or CAN
+    void setMaxCurr(std::vector<unsigned short> const& maxCurr);
+    int setMode(std::vector<char> const& mode);
+    void init(char const* xmlFile);
+    int getIMUNr();
+    int getLeftDigitNr();
+    int getRightDigitNr();
+    int getTotalMotorNr();
+    std::vector<int> getActiveMotors();
+    int setCntBias(std::vector<int> const& cntBias);
+    int fillSDO(motorSDOClass& data, char const* object);
+    void getIMU(imuStruct& data);
+    int getIMU(std::vector<imuStruct>& data);
+    int getSensor(std::vector<sensorStruct>& data);
+    int setDigitTarget(std::vector<digitTargetStruct> const& data);
+    int getDigitActual(std::vector<digitActualStruct>& data);
+    int setMotorTarget(std::vector<motorTargetStruct> const& data);
+    int getMotorActual(std::vector<motorActualStruct>& data);
+    int getEncoderCount(std::vector<int>& data);
+    int sendMotorSDORequest(motorSDOClass const& data);
+    int recvMotorSDOResponse(motorSDOClass& data);
+    int sendMotorREGRequest(motorREGClass const& data);
+    int recvMotorREGResponse(motorREGClass& data);
+    int calibrate_(int const i);
+    int calibrate(int const i);
+    void advance();
+    std::string version();
+private:
+    class impClass;
+    impClass& imp;
+    DriverSDK();
+    ~DriverSDK();
+    DriverSDK(DriverSDK const&) = delete;
+    DriverSDK& operator=(DriverSDK const&) = delete;
+};
+}

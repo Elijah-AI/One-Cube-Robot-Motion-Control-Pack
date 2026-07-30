@@ -89,6 +89,8 @@ add_library(toppra_lib SHARED IMPORTED)
 
 if(CMAKE_CXX_COMPILER MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
 	message("linux arm64架构")
+    set(NEED_PSEUDO_DRIVER_SDK OFF)
+    # set(REAL_DRIVER_SDK_LIB_DIR "/opt/onecube/driver_sdk/lib")
     set(TOPPRA_LIB_PATH "${dirToppRA}/lib/aarch64/libtoppra.so")
     set_target_properties(toppra_lib PROPERTIES
         IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
@@ -104,6 +106,7 @@ if(CMAKE_CXX_COMPILER MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch
 	list(APPEND sysSimLibs dl)#arm 需要 -ldl
 else()
 	message("linux x64架构")
+    set(NEED_PSEUDO_DRIVER_SDK ON)
     set(TOPPRA_LIB_PATH "${dirToppRA}/lib/x64/libtoppra.so")
     set_target_properties(toppra_lib PROPERTIES
         IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
@@ -142,7 +145,6 @@ set_target_properties(kine_lib PROPERTIES
 # 收集源文件
 # 注意：这里显式列出文件，或者使用 file(GLOB ...) 但推荐显式列出以避免缓存问题
 set(SOURCES
-    src/loong_driver_sdk_stub.cpp
     src/ethercat_bus_manager.cpp
     src/main_node.cpp
     src/dual_arm_module.cpp
@@ -166,6 +168,10 @@ set(SOURCES
     # src/utils/math/ramp_trajectory.cpp
     # src/utils/math/useful_math.cpp   
 )
+
+if(NEED_PSEUDO_DRIVER_SDK)
+    list(APPEND SOURCES src/loong_driver_sdk_stub.cpp)
+endif()
 
 # 创建可执行节点
 add_executable(motion_control_node ${SOURCES})
@@ -196,6 +202,13 @@ target_include_directories(motion_control_node PRIVATE
 )
 
 target_link_options(motion_control_node PRIVATE "-Wl,--disable-new-dtags")
+
+# if(NOT NEED_PSEUDO_DRIVER_SDK)
+#     target_link_options(motion_control_node PRIVATE
+#         "-Wl,-rpath-link,${REAL_DRIVER_SDK_LIB_DIR}"
+#         "-Wl,-rpath,${REAL_DRIVER_SDK_LIB_DIR}"
+#     )
+# endif()
 
 set_target_properties(motion_control_node PROPERTIES
     INSTALL_RPATH "\$ORIGIN"
@@ -232,6 +245,17 @@ target_link_libraries(motion_control_node
     ruckig::ruckig
     jsoncpp
 )
+
+if(NOT NEED_PSEUDO_DRIVER_SDK)
+    target_link_libraries(motion_control_node
+        /opt/onecube/driver_sdk/lib/libloong_driver_sdk_a64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libmodbus_aarch64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libnetlink_aarch64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libutil_aarch64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libtinyxml2_aarch64.so
+    )
+endif()
+
 
 # 如果 MarvinSDK 或 Kine 依赖系统库（如 pthread, dl, rt 等），需在此补充
 # target_link_libraries(motion_control_node pthread dl)

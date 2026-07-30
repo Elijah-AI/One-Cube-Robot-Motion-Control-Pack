@@ -227,7 +227,11 @@ namespace miracle {
         joint_state_msg_.header.stamp = node_ptr->get_clock()->now();
         joint_state_msg_.position = m_joints_cur_pos;
         joint_state_msg_.velocity = m_joints_cur_speed;
-        joint_state_msg_.effort = m_joints_cur_current;
+        // joint_state_msg_.effort = m_joints_cur_current;
+        joint_state_msg_.effort.assign(HEAD_JOINTNUM, 0.0);
+        for (size_t i = 0; i < joint_state_msg_.effort.size() && i < m_module_status.size(); ++i) {
+            joint_state_msg_.effort[i] = static_cast<double>(m_module_status[i]);
+        }
         joint_state_pub_->publish(joint_state_msg_);
     }
 
@@ -430,6 +434,7 @@ namespace miracle {
             result->error_message = "joint angles out of range";
             goal_handle->abort(result);
             is_executing_head_.store(false);  
+            return;
         }
 
         double plan_dt = 1.0 / TRAJ_FREQ;
@@ -500,7 +505,9 @@ namespace miracle {
             RCLCPP_ERROR(rclcpp::get_logger("head_module"),"%s format %s err:%s", m_module_name, __func__, e.what());
             result->success = ACTION_FAIL;
             result->error_message = "head module parameter error:" + std::string(e.what());
-            goal_handle->abort(result);
+            if (goal_handle->is_active()) {
+                goal_handle->abort(result);
+            }
             is_executing_head_.store(false);  
             return;
         } 

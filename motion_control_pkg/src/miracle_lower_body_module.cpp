@@ -98,7 +98,7 @@ namespace miracle {
             has_logged_error[i] = false;
         }
     
-        m_jointID = {LEG_JOINT1, LEG_JOINT2, LEG_JOINT3, LEG_JOINT4};
+        m_jointID = {LEG_JOINT1, LEG_JOINT2, LEG_JOINT3, BODY_JOINT};
 
         // node_ptr->declare_parameter("leg_chain_start", std::string());
         // node_ptr->declare_parameter("leg_chain_end", std::string());
@@ -228,7 +228,11 @@ namespace miracle {
         joint_state_msg_.header.stamp = node_ptr->get_clock()->now();
         joint_state_msg_.position = m_joints_cur_pos;
         joint_state_msg_.velocity = m_joints_cur_speed;
-        joint_state_msg_.effort = m_joints_cur_current;
+        // joint_state_msg_.effort = m_joints_cur_current;
+        joint_state_msg_.effort.assign(LEG_JOINTNUM, 0.0);
+        for (size_t i = 0; i < joint_state_msg_.effort.size() && i < m_module_status.size(); ++i) {
+            joint_state_msg_.effort[i] = static_cast<double>(m_module_status[i]);
+        }
         joint_state_pub_->publish(joint_state_msg_);
     }
 
@@ -508,6 +512,7 @@ namespace miracle {
             result->error_message = "joint angles out of range";
             goal_handle->abort(result);
             is_executing_leg_.store(false);  
+            return;
         }
 
         double plan_dt = 1.0 / TRAJ_FREQ;
@@ -577,7 +582,9 @@ namespace miracle {
             RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s format %s err:%s", m_module_name, __func__, e.what());
             result->success = ACTION_FAIL;
             result->error_message = "leg module parameter error:" + std::string(e.what());
-            goal_handle->abort(result);
+            if (goal_handle->is_active()) {
+                goal_handle->abort(result);
+            }
             is_executing_leg_.store(false);  
             return;
         } 
@@ -677,7 +684,9 @@ namespace miracle {
             RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s format %s err:%s", m_module_name, __func__, e.what());
             result->success = ACTION_FAIL;
             result->error_message = "leg module parameter error:" + std::string(e.what());
-            goal_handle->abort(result);
+            if (goal_handle->is_active()) {
+                goal_handle->abort(result);
+            }
             is_executing_leg_.store(false);  
             return;
         } 
