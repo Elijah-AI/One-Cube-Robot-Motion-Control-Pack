@@ -12,8 +12,10 @@
   <!-- 运行时和编译时依赖 -->
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
+  <depend>com_interfaces</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

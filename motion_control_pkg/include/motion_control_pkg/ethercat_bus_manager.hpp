@@ -2,6 +2,7 @@
 #define ETHERCAT_BUS_MANAGER_HPP
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -24,7 +25,9 @@ public:
 
     ~EthercatBusManager();
 
+    bool isReady() const noexcept;
     bool getMotorActualSnapshot(std::vector<DriverSDK::motorActualStruct> &motor_actual_data) const;
+    bool enableMotors(const std::vector<uint16_t> &motor_ids, double timeout_seconds = 5.0);
     bool updateMotorTargets(const std::vector<uint16_t> &motor_ids,
                             const std::vector<DriverSDK::motorTargetStruct> &motor_target_data);
     // bool batchSetSoftstop(bool stop);
@@ -33,19 +36,24 @@ private:
     explicit EthercatBusManager(char const *xmlFile);
 
     void run();
-    void initializeTargetBuffer();
+    bool waitForCommunication();
+    bool initializeTargetBuffer();
+    void disableAll();
 
     DriverSDK::DriverSDK& controller_;
-    int motor_number_;
+    int motor_number_{0};
+    std::vector<int> active_motors_;
 
     mutable std::mutex actual_mutex_;
     mutable std::mutex target_mutex_;
+    std::mutex enable_mutex_;
     std::vector<DriverSDK::motorActualStruct> motor_actual_snapshot_;
     std::vector<DriverSDK::motorTargetStruct> motor_target_buffer_;
-    bool clear_error_command_sent_{false};
+    std::vector<bool> motor_enable_ready_;
 
     std::shared_ptr<std::thread> worker_;
     std::atomic<bool> stop_{false};
+    std::atomic<bool> ready_{false};
 
     static std::mutex instance_mutex_;
     static std::weak_ptr<EthercatBusManager> instance_;

@@ -228,11 +228,7 @@ namespace miracle {
         joint_state_msg_.header.stamp = node_ptr->get_clock()->now();
         joint_state_msg_.position = m_joints_cur_pos;
         joint_state_msg_.velocity = m_joints_cur_speed;
-        // joint_state_msg_.effort = m_joints_cur_current;
-        joint_state_msg_.effort.assign(LEG_JOINTNUM, 0.0);
-        for (size_t i = 0; i < joint_state_msg_.effort.size() && i < m_module_status.size(); ++i) {
-            joint_state_msg_.effort[i] = static_cast<double>(m_module_status[i]);
-        }
+        joint_state_msg_.effort = m_joints_cur_current;
         joint_state_pub_->publish(joint_state_msg_);
     }
 
@@ -379,7 +375,13 @@ namespace miracle {
             RCLCPP_INFO(rclcpp::get_logger("leg_module"),"%s %d:%d, check:[%f:%f] cur[%f:%f]", m_module_name, m_traj_point_index, m_traj_point_cnt,
                         m_traj_buffer_pos[0], m_traj_buffer_pos[1], m_joints_cur_pos[0], m_joints_cur_pos[1]);
 
-            setMulJointPos(m_traj_buffer_pos, m_jointID);
+            if (!setMulJointPos(m_traj_buffer_pos, m_jointID)) {
+                result->success = ACTION_FAIL;
+                result->error_message = "leg motor command rejected";
+                goal_handle->abort(result);
+                is_executing_leg_.store(false);
+                return;
+            }
             
             //限流反馈
             if (loop_counter % 100 == 0) {
@@ -552,6 +554,20 @@ namespace miracle {
             return;
         }
 
+        if (!m_bus_manager || !m_bus_manager->enableMotors(m_jointID)) {
+            RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),
+                         "%s refused to start: motor enable safety check failed", m_module_name);
+            result->success = ACTION_FAIL;
+            result->error_message = "leg motor enable safety check failed";
+            goal_handle->abort(result);
+            is_executing_leg_.store(false);
+            return;
+        }
+        for (int i = 0; i < LEG_JOINTNUM; i++) {
+            joint_cur_pos[i] = m_joints_cur_pos[i];
+            joint_cur_vel[i] = m_joints_cur_speed[i];
+        }
+
         try {
 
             RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s %s %f from [%f,%f,%f,%f] to [%f,%f,%f,%f]", m_module_name, __func__, motion_rate, m_joints_cur_pos[0], m_joints_cur_pos[1], m_joints_cur_pos[2], m_joints_cur_pos[3],
@@ -626,6 +642,16 @@ namespace miracle {
             goal_handle->abort(result);
             is_executing_leg_.store(false);  
             return ;
+        }
+
+        if (!m_bus_manager || !m_bus_manager->enableMotors(m_jointID)) {
+            RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),
+                         "%s refused to start: motor enable safety check failed", m_module_name);
+            result->success = ACTION_FAIL;
+            result->error_message = "leg motor enable safety check failed";
+            goal_handle->abort(result);
+            is_executing_leg_.store(false);
+            return;
         }
 
         double plan_dt = 1.0 / TRAJ_FREQ;

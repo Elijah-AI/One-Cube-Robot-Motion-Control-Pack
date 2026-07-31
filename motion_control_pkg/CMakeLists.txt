@@ -92,9 +92,10 @@ if(CMAKE_CXX_COMPILER MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch
     set(NEED_PSEUDO_DRIVER_SDK OFF)
     # set(REAL_DRIVER_SDK_LIB_DIR "/opt/onecube/driver_sdk/lib")
     set(TOPPRA_LIB_PATH "${dirToppRA}/lib/aarch64/libtoppra.so")
-    set_target_properties(toppra_lib PROPERTIES
-        IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
-    )
+set_target_properties(toppra_lib PROPERTIES
+    IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
+    IMPORTED_NO_SONAME TRUE
+)
     set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/aarch64")
 
 	foreach(lib ${corLibs})
@@ -110,6 +111,7 @@ else()
     set(TOPPRA_LIB_PATH "${dirToppRA}/lib/x64/libtoppra.so")
     set_target_properties(toppra_lib PROPERTIES
         IMPORTED_LOCATION "${TOPPRA_LIB_PATH}"
+        IMPORTED_NO_SONAME TRUE
     )
     set(SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/x64")
 	foreach(lib ${corLibs})
@@ -129,6 +131,7 @@ message(${sysCoreLibs})
 add_library(marvin_sdk SHARED IMPORTED)
 set_target_properties(marvin_sdk PROPERTIES
     IMPORTED_LOCATION "${SDK_LIB_DIR}/libMarvinSDK.so"
+    IMPORTED_NO_SONAME TRUE
     INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg/MarvinSDK"
 )
 
@@ -136,6 +139,7 @@ set_target_properties(marvin_sdk PROPERTIES
 add_library(kine_lib SHARED IMPORTED)
 set_target_properties(kine_lib PROPERTIES
     IMPORTED_LOCATION "${SDK_LIB_DIR}/libKine.so"
+    IMPORTED_NO_SONAME TRUE
 )
 
 # ==============================================================================
@@ -276,6 +280,24 @@ install(FILES
     ${SDK_LIB_DIR}/libKine.so
     ${TOPPRA_LIB_PATH}
     DESTINATION lib/${PROJECT_NAME})
+
+if(NOT NEED_PSEUDO_DRIVER_SDK)
+    install(FILES
+        /opt/onecube/driver_sdk/lib/libloong_driver_sdk_a64.so
+        /opt/onecube/driver_sdk/lib/libhbcanhal_aarch64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libmodbus_aarch64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libnetlink_aarch64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libutil_aarch64.so
+        /opt/onecube/driver_sdk/loong_third_party/lib/libtinyxml2_aarch64.so
+        DESTINATION lib/${PROJECT_NAME})
+    install(FILES
+        /opt/onecube/driver_sdk/igh_install/lib/libethercat.so.1.1.0
+        DESTINATION lib/${PROJECT_NAME})
+    install(FILES
+        /opt/onecube/driver_sdk/igh_install/lib/libethercat.so.1.1.0
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME libethercat.so.1)
+endif()
    
 # 安装配置文件
 install(DIRECTORY config

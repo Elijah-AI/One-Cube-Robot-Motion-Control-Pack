@@ -6,14 +6,15 @@ python3 /home/lv/onecube_rotbot_ros/src/motion_control_pkg/python/action_client_
 
 
 发送 MovePose
-python3 /home/lv/onecube_rotbot_ros/src/motion_control_pkg/python/action_client_test.py move_pose \
+python3 action_client_test.py move_pose \
   --arm-id 4 --frame-id base_link \
-  --x 0.0366 --y 0.0 --z 1.2658 \
-  --qx -0.00374 --qy 0.026 --qz -0.1422 --qw 0.9895 \
+  --x 0.4295 --y 0.0 --z 0.8942 \
+  --qx 0.0 --qy 0.05 --qz 0.0 --qw 0.9988 \
+  --speed 0.5
   --cancel-after-sec 1.0
 
-1.0后取消action，0.0表示不取消
-对应角度0.569, -1.341, 0.825, 0.285
+1.0s后取消action，0.0表示不取消
+对应角度-1.0, 2.3, -1.2, 0.0
 
 python3 /home/lv/onecube_rotbot_ros/src/motion_control_pkg/python/action_client_test.py move_pose \
   --arm-id 4 --frame-id base_link   --x 0.206 --y 0.0 --z 1.487   --qx 0.0 --qy 0.0 --qz 0.0 --qw 1.0
@@ -24,8 +25,8 @@ python3 action_client_test.py move_joints \
   --arm-id 4 \
   --joint-name joint1,joint2,joint3,joint4 \
   --position 0.4,0.2,0.1,-0.3 \
-  --speed 0.5
   --cancel-after-sec 1.0
+  --speed 0.5
   --timeout-ms 5000
 
   --collision (：置位 enable_collision_check=True)

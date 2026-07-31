@@ -60,6 +60,8 @@ namespace miracle {
     #define JOINT_THRESHOLD 0.002
     #define JOINT_LIMIT_ADJUST_RAD 0.03
     #define JOINT_MAX_OVER_RAD 0.01
+    #define JOINT_REACH_THRESHOLD 0.01
+   
 
     #define MAX_RETRY_TIMES 6
 

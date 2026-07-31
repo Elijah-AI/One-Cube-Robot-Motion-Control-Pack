@@ -5,6 +5,7 @@
 #include "miracle_head_module.hpp"
 #include "miracle_lower_body_module.hpp"
 
+#include <stdexcept>
 
 using namespace miracle;
 
@@ -26,6 +27,9 @@ public:
             RCLCPP_ERROR(rclcpp::get_logger("robot_control_node"),"Failed to get parameter EtherCAT_bus_config");
         }
         ethercat_bus_manager_ptr_ = EthercatBusManager::getOrCreate(etherat_bus_config.c_str());
+        if (!ethercat_bus_manager_ptr_ || !ethercat_bus_manager_ptr_->isReady()) {
+            throw std::runtime_error("EtherCAT bus manager failed its startup safety checks");
+        }
 
         // 机器人模型类初始化
         std::string urdf_path = "onecube_rotbot.urdf";
@@ -309,10 +313,16 @@ int main(int argc, char ** argv)
     rclcpp::init(argc, argv);
     auto node = std::make_shared<RobotControlNode>();
 
-    //调用 init 初始化模块和 Action Server，安全传递 shared_from_this
-    node->init();
-    
-    rclcpp::spin(node);
+    try {
+        //调用 init 初始化模块和 Action Server，安全传递 shared_from_this
+        node->init();
+        rclcpp::spin(node);
+    } catch (const std::exception &e) {
+        RCLCPP_FATAL(rclcpp::get_logger("robot_control_node"), "Startup failed: %s", e.what());
+        node.reset();
+        rclcpp::shutdown();
+        return 1;
+    }
     rclcpp::shutdown();
     return 0;
 }

@@ -19,12 +19,19 @@ def generate_launch_description():
     motion_control_pkg = FindPackageShare('motion_control_pkg').find('motion_control_pkg')
     param_file = os.path.join(motion_control_pkg, 'launch', 'config', 'motion_control_config.yaml')
     
-    eni0_file = "/opt/onecube/driver_sdk/configuration.xml"
+    driver_config = LaunchConfiguration('driver_config')
     
     
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                'driver_config',
+                default_value=os.environ.get(
+                    'DRIVER_SDK_CONFIG',
+                    '/opt/onecube/driver_sdk/configuration.xml'),
+                description='Driver SDK XML configuration file',
+            ),
             Node(
                 package='motion_control_pkg',
                 namespace="motion_control_ns",           #节点和参数的命名空间匹配，代码中获取时，无需加命名空间
@@ -36,7 +43,7 @@ def generate_launch_description():
                     {
                         'urdf_path': urdf_file,
                         'mesh_dir': mesh_dir,
-                        'EtherCAT_bus_config': eni0_file
+                        'EtherCAT_bus_config': driver_config
                     }
                 ],
             )

@@ -227,11 +227,7 @@ namespace miracle {
         joint_state_msg_.header.stamp = node_ptr->get_clock()->now();
         joint_state_msg_.position = m_joints_cur_pos;
         joint_state_msg_.velocity = m_joints_cur_speed;
-        // joint_state_msg_.effort = m_joints_cur_current;
-        joint_state_msg_.effort.assign(HEAD_JOINTNUM, 0.0);
-        for (size_t i = 0; i < joint_state_msg_.effort.size() && i < m_module_status.size(); ++i) {
-            joint_state_msg_.effort[i] = static_cast<double>(m_module_status[i]);
-        }
+        joint_state_msg_.effort = m_joints_cur_current;
         joint_state_pub_->publish(joint_state_msg_);
     }
 
@@ -465,7 +461,6 @@ namespace miracle {
             }
         }
         if (pos_same) {
-            pthread_mutex_unlock(&m_traj_mutex);
             RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s %s %f from [%f,%f] to [%f,%f] almost same", m_module_name, __func__, motion_rate, m_joints_cur_pos[0], m_joints_cur_pos[1],
                     angles[0], angles[1]);
             result->success = ACTION_SUCCESS;
@@ -473,6 +468,20 @@ namespace miracle {
             goal_handle->succeed(result);
             is_executing_head_.store(false);  
             return;
+        }
+
+        if (!m_bus_manager || !m_bus_manager->enableMotors(m_jointID)) {
+            RCLCPP_ERROR(rclcpp::get_logger("head_module"),
+                         "%s refused to start: motor enable safety check failed", m_module_name);
+            result->success = ACTION_FAIL;
+            result->error_message = "head motor enable safety check failed";
+            goal_handle->abort(result);
+            is_executing_head_.store(false);
+            return;
+        }
+        for (int i = 0; i < HEAD_JOINTNUM; i++) {
+            joint_cur_pos[i] = m_joints_cur_pos[i];
+            joint_cur_vel[i] = m_joints_cur_speed[i];
         }
 
         try {
@@ -546,7 +555,13 @@ namespace miracle {
             RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s %d:%d, check:[%f:%f] cur[%f:%f]", m_module_name, m_traj_point_index, m_traj_point_cnt,
                         m_traj_buffer_pos[0], m_traj_buffer_pos[1], m_joints_cur_pos[0], m_joints_cur_pos[1]);
 
-            setMulJointPos(m_traj_buffer_pos, m_jointID);
+            if (!setMulJointPos(m_traj_buffer_pos, m_jointID)) {
+                result->success = ACTION_FAIL;
+                result->error_message = "head motor command rejected";
+                goal_handle->abort(result);
+                is_executing_head_.store(false);
+                return;
+            }
             
             //限流反馈
             if (loop_counter % 100 == 0) {
@@ -564,8 +579,26 @@ namespace miracle {
             usleep(TRAJ_CYCLE_US);   //按ethercat周期发送
         }
 
-        result->success = ACTION_SUCCESS;
-        goal_handle->succeed(result);
+        double final_error = 0.0;//std::numeric_limits<double>::infinity();
+        std::vector<DriverSDK::motorActualStruct> actual_data;
+        bool motors_healthy = m_bus_manager && m_bus_manager->getMotorActualSnapshot(actual_data);
+        for (int i = 0; i < HEAD_JOINTNUM; ++i) {
+            const auto &actual = actual_data[m_jointID[i]];
+            final_error = std::max(
+                final_error,
+                std::abs(static_cast<double>(m_traj_buffer_pos[i]) - actual.pos));
+        }
+        result->final_distance_error = final_error;
+        if (final_error > JOINT_REACH_THRESHOLD) {
+            result->success = ACTION_FAIL;
+            result->error_message = "head failed to reach final position";
+            goal_handle->abort(result);
+        } else {
+            result->success = ACTION_SUCCESS;
+            result->error_message = "head reached target";
+            goal_handle->succeed(result);
+        }
+
         // 正常结束，恢复空闲状态
         is_executing_head_.store(false);
         RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s -%s %d", m_module_name, __func__, m_traj_point_index);
