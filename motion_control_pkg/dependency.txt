@@ -18,6 +18,9 @@ libboost-all-dev
 ros-humble-ompl
 ros-humble-pinocchio
 ros-humble-ruckig
+ros-humble-tf2
+ros-humble-tf2-ros
+ros-humble-tf2-geometry-msgs
 
 liboctomap-dev
 libfcl-dev
@@ -41,6 +44,7 @@ libtinyxml-dev / libtinyxml2-dev
 3.更新并安装:
   sudo apt update
   sudo apt install ros-humble-ompl ros-humble-ruckig ros-humble-pinocchio等
+  sudo apt install ros-humble-tf2 ros-humble-tf2-ros ros-humble-tf2-geometry-msgs
 
 
 
@@ -49,3 +53,4 @@ rsync -avz --progress /home/lv/ylfrobot/src/com_interfaces neardi@172.16.20.141:
 rsync -avz --progress /home/lv/ylfrobot/src/motion_control_pkg neardi@172.16.20.141:/home/neardi/ros2_ws/src/
 
 rsync -avz --progress /home/lv/ylfrobot/src/onecube_robot_description neardi@172.16.20.141:/home/neardi/ros2_ws/src/
+sudo apt install ros-humble-ompl ros-humble-ruckig ros-humble-pinocchio等

@@ -27,6 +27,7 @@ std::string state_to_str(SystemState state)
     case SystemState::IDLE:       return "IDLE";
     case SystemState::RUNNING:    return "RUNNING";
     case SystemState::ERROR:      return "ERROR";
+    case SystemState::EMERGENCY:  return "EMERGENCY";
     default:                      return "INVALID";
   }
 }
@@ -43,6 +44,8 @@ SystemState str_to_state(const std::string& s)
   if(s == "RESET_DONE") return SystemState::RESET_DONE;
   if(s == "IDLE")       return SystemState::IDLE;
   if(s == "RUNNING")    return SystemState::RUNNING;
+  if(s == "ERROR")      return SystemState::ERROR;
+  if(s == "EMERGENCY")  return SystemState::EMERGENCY;
   return SystemState::UNKNOWN;
 }
 }

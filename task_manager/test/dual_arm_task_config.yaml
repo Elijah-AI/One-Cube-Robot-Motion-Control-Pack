@@ -1,0 +1,48 @@
+node_id: 1
+modbus_slave:
+  listen_ip: "127.0.0.1"
+  listen_port: 12000
+
+tasks:
+  dual_joint_task:
+    trigger_reg: 41001
+    status_reg: 51001
+    action_sequencenum: 1
+    action_sequence1:
+      - action_type: move_joints
+        params:
+          arm_id: "2"
+          left_joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L]
+          left_position: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+          right_joint_name: [Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R]
+          right_position: [0.0, -0.1, -0.2, -0.3, -0.4, -0.5, -0.6]
+          synchronization_mode: 0
+          enable_collision_check: false
+          speed: 0.05
+          timeout_ms: 10000
+
+  dual_pose_task:
+    trigger_reg: 41002
+    status_reg: 51002
+    action_sequencenum: 1
+    action_sequence1:
+      - action_type: move_pose
+        params:
+          arm_id: "2"
+          frame_id: base_link
+          left_target_pose: [0.21, 1.08, 2.06, -0.64, 0.0, 0.0, 0.76]
+          right_target_pose: [0.21, -1.08, 2.06, 0.64, 0.0, 0.0, 0.76]
+          left_bound_size: [0.0, 0.0, 0.0]
+          right_bound_size: [0.0, 0.0, 0.0]
+          synchronization_mode: 0
+          enable_collision_check: false
+          use_force_control: false
+          speed: 0.03
+          hand_action_type: []
+          timeout_ms: 10000
+
+boot_task:
+  self_check:
+    action_sequence: []
+  reset:
+    action_sequence: []

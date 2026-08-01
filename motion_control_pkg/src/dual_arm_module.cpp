@@ -1,18 +1,55 @@
 #include "dual_arm_module.hpp"
+#include "miracle_m_algo.hpp"
 #include <std_msgs/msg/header.hpp>
+#include <algorithm>
+#include <limits>
 #include <memory>
 
 #include <iostream>
+#include <stdexcept>
 
-DualArmModule::DualArmModule(const std::string& arm_name, rclcpp::Node::SharedPtr node)
-: name_(arm_name), node_(node), is_executing_left_arm_(false), is_executing_right_arm_(false), is_executing_left_tool_(false), is_executing_right_tool_(false)
+DualArmModule::DualArmModule(
+    const std::string& arm_name,
+    rclcpp::Node::SharedPtr node,
+    std::shared_ptr<motion_control_pkg::sdk::DualArmDeviceInterface> arm_device,
+    std::shared_ptr<MiracleMAlgo> miracle_algo,
+    motion_control_pkg::sdk::ActiveArmConfiguration arm_configuration,
+    std::string sdk_config_path,
+    std::string planning_frame,
+    Eigen::Isometry3d left_model_end_to_tool_tcp,
+    Eigen::Isometry3d right_model_end_to_tool_tcp)
+: name_(arm_name),
+  node_(node),
+  is_executing_left_arm_(false),
+  is_executing_right_arm_(false),
+  is_executing_left_tool_(false),
+  is_executing_right_tool_(false),
+  arm_device_(std::move(arm_device)),
+  miracle_algo_(std::move(miracle_algo)),
+  arm_configuration_(arm_configuration),
+  sdk_config_path_(std::move(sdk_config_path)),
+  planning_frame_(std::move(planning_frame)),
+  left_model_end_to_tool_tcp_(std::move(left_model_end_to_tool_tcp)),
+  right_model_end_to_tool_tcp_(std::move(right_model_end_to_tool_tcp))
 {
     auto shared_node = lockNode(__func__);
     if (!shared_node) {
         return;
     }
+    if (!arm_device_ || !miracle_algo_) {
+        throw std::invalid_argument(
+            "DualArmModule requires injected SDK adapter and MiracleMAlgo");
+    }
+    sdk_command_gate_ =
+        std::make_unique<motion_control_pkg::sdk::SdkCommandGate>(
+        *arm_device_, arm_configuration_);
+    command_coordinator_ = std::make_unique<
+        motion_control_pkg::execution::DualArmCommandCoordinator>(
+        *sdk_command_gate_);
 
-    RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "Initializing duaml arm module...");
+    RCLCPP_INFO(
+        rclcpp::get_logger("dual_arm_module"),
+        "Constructing dual arm module without hardware connection...");
 
     // 初始化 PickAndPlace Action Server
     // this->pick_and_place_action_server_ = rclcpp_action::create_server<PickAndPlace>(
@@ -65,46 +102,109 @@ DualArmModule::DualArmModule(const std::string& arm_name, rclcpp::Node::SharedPt
     l_v_limit_.resize(arm_dof_),
     l_a_limit_.resize(arm_dof_),
     l_jerk_limit_.resize(arm_dof_);
-    l_init_arm_params_ = init_arm_params();
-    init_set_tcp();
-    std::cout<<"l_init_arm_params"<<static_cast<int>(l_init_arm_params_)<<std::endl;
-    init_robot_link_ = OnLinkTo(192,168,1,190);
-    std::cout<<"3*********"<<std::endl;
-    if(init_robot_link_)
-    {
-       OnLogOff();
-       OnLocalLogOff(); 
-       set_arm_control_mode();
-       std::cout<<"4*********"<<std::endl;
-    }
    
     this->motor_status_pub_ = shared_node->create_publisher<MotorStatus>("/Control/MotorInfo",10);
     joint_feedback_timer_ = shared_node->create_wall_timer(250ms,
     std::bind(&DualArmModule::motor_statu_cb, this));
     motor_status_msg_ = com_interfaces::msg::MotorStatus();
     init_motor_status();
-    MotionConstraint cons;
-    cons.max_vel = l_v_limit_;
-    cons.max_acc = l_a_limit_;
-    cons.max_jerk = l_jerk_limit_;
-    traj_ptr_ = PlannerFactory::createPlanner(PlannerType::RUCKIG);
-    traj_ptr_->init(arm_dof_, cons);
-    traj_ptr_->setCycleTime(CONTROL_TIME); 
-    //
-    l_install_base_inv_[0][0] = 1.0; l_install_base_inv_[0][1] = 0.0; l_install_base_inv_[0][2] = 0.0; l_install_base_inv_[0][3] = 0.0;
-    l_install_base_inv_[1][0] = 0.0; l_install_base_inv_[1][1] = 0.0; l_install_base_inv_[1][2] = -1.0; l_install_base_inv_[1][3] = 1121.0;
-    l_install_base_inv_[2][0] = 0.0; l_install_base_inv_[2][1] = 1.0; l_install_base_inv_[2][2] = 0.0; l_install_base_inv_[2][3] = -40.0;
-    l_install_base_inv_[3][0] = 0.0; l_install_base_inv_[3][1] = 0.0; l_install_base_inv_[3][2] = 0.0; l_install_base_inv_[3][3] = 1.0;
-
-    r_install_base_inv_[0][0] = -1.0;r_install_base_inv_[0][1] = 0.0;r_install_base_inv_[0][2] = 0.0; r_install_base_inv_[0][3] = 0.0;
-    r_install_base_inv_[1][0] = 0.0; r_install_base_inv_[1][1] = 0.0;r_install_base_inv_[1][2] = 1.0; r_install_base_inv_[1][3] = -1121.0;
-    r_install_base_inv_[2][0] = 0.0; r_install_base_inv_[2][1] = 1.0;r_install_base_inv_[2][2] = 0.0; r_install_base_inv_[2][3] = 40.0;
-    r_install_base_inv_[3][0] = 0.0; r_install_base_inv_[3][1] = 0.0;r_install_base_inv_[3][2] = 0.0; r_install_base_inv_[3][3] = 1.0;
- 
-    
 
     // joint_command_timer_ = create_wall_timer(250ms,
     // std::bind(&DualArmModule::joint_command_cb, this));
+}
+
+bool DualArmModule::initialize(std::string& error_message)
+{
+    // 先完成纯本地配置和运动学初始化，失败时不建立任何机器人连接。
+    l_init_arm_params_ = init_arm_params();
+    if (!l_init_arm_params_) {
+        error_message = "Failed to load or initialize Marvin kinematics config: " +
+            sdk_config_path_;
+        return false;
+    }
+    if (!init_set_tcp(error_message)) {
+        return false;
+    }
+
+    const auto initialize_planner =
+        [this](
+        PlannerType planner_type,
+        const std::vector<double> & velocity,
+        const std::vector<double> & acceleration,
+        const std::vector<double> & jerk,
+        std::unique_ptr<TrajectoryPlanner> & planner) {
+          MotionConstraint constraints;
+          constraints.max_vel = velocity;
+          constraints.max_acc = acceleration;
+          constraints.max_jerk = jerk;
+          planner = PlannerFactory::createPlanner(planner_type);
+          if (!planner) {
+            return false;
+          }
+          // Ruckig 必须在 init() 创建内部实例前收到统一 4 ms 周期。
+          planner->setCycleTime(
+              motion_control_pkg::execution::kDualArmControlPeriodSeconds);
+          return planner->init(arm_dof_, constraints);
+        };
+
+    if (motion_control_pkg::sdk::isArmEnabled(
+        arm_configuration_, motion_control_pkg::sdk::ArmChannel::kLeft) &&
+        (!initialize_planner(
+        PlannerType::RUCKIG, l_v_limit_, l_a_limit_, l_jerk_limit_,
+        l_ruckig_planner_) ||
+        !initialize_planner(
+        PlannerType::TOPPRA, l_v_limit_, l_a_limit_, l_jerk_limit_,
+        l_toppra_planner_)))
+    {
+        error_message =
+            "Failed to initialize left arm 4 ms Ruckig/TOPPRA planners";
+        return false;
+    }
+    if (motion_control_pkg::sdk::isArmEnabled(
+        arm_configuration_, motion_control_pkg::sdk::ArmChannel::kRight) &&
+        (!initialize_planner(
+        PlannerType::RUCKIG, r_v_limit_, r_a_limit_, r_jerk_limit_,
+        r_ruckig_planner_) ||
+        !initialize_planner(
+        PlannerType::TOPPRA, r_v_limit_, r_a_limit_, r_jerk_limit_,
+        r_toppra_planner_)))
+    {
+        error_message =
+            "Failed to initialize right arm 4 ms Ruckig/TOPPRA planners";
+        return false;
+    }
+
+    const auto connect_result =
+        sdk_command_gate_->connect({192, 168, 1, 190});
+    if (!connect_result) {
+        error_message = connect_result.error_message;
+        return false;
+    }
+    sdk_connected_ = true;
+    sdk_command_gate_->disableLogging();
+
+    if (!set_arm_control_mode(error_message)) {
+        const auto release_result = sdk_command_gate_->release();
+        sdk_connected_ = false;
+        if (!release_result) {
+            error_message += "; " + release_result.error_message;
+        }
+        return false;
+    }
+
+    if (!command_coordinator_->start()) {
+        error_message = "Failed to start the 4 ms dual arm command coordinator";
+        const auto release_result = sdk_command_gate_->release();
+        sdk_connected_ = false;
+        if (!release_result) {
+            error_message += "; " + release_result.error_message;
+        }
+        return false;
+    }
+
+    init_robot_link_ = true;
+    error_message.clear();
+    return true;
 }
 
 rclcpp::Node::SharedPtr DualArmModule::lockNode(const char *context) const
@@ -118,6 +218,10 @@ rclcpp::Node::SharedPtr DualArmModule::lockNode(const char *context) const
 
 DualArmModule::~DualArmModule()
 {
+    // 先停止 4 ms 协调器并唤醒等待中的 Action，再回收各执行线程。
+    if (command_coordinator_) {
+        command_coordinator_->stop();
+    }
     // 安全退出机制：等待正在执行的线程结束
     if (execution_thread_move_left_pose_.joinable()) {
         execution_thread_move_left_pose_.join();
@@ -125,11 +229,29 @@ DualArmModule::~DualArmModule()
     if (execution_thread_move_right_pose_.joinable()) {
         execution_thread_move_right_pose_.join();
     }
+    if (execution_thread_move_left_joint_.joinable()) {
+        execution_thread_move_left_joint_.join();
+    }
+    if (execution_thread_move_right_joint_.joinable()) {
+        execution_thread_move_right_joint_.join();
+    }
+    if (execution_thread_move_dual_joints_.joinable()) {
+        execution_thread_move_dual_joints_.join();
+    }
     if (execution_thread_move_dual_pose_.joinable()) {
         execution_thread_move_dual_pose_.join();
     }
     if (execution_thread_control_gripper_.joinable()) {
         execution_thread_control_gripper_.join();
+    }
+    if (sdk_connected_ && sdk_command_gate_) {
+        const auto release_result = sdk_command_gate_->release();
+        if (!release_result) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("dual_arm_module"),
+                "Dual arm SDK release failed: %s",
+                release_result.error_message.c_str());
+        }
     }
     RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"),"%s Deconstruct successed", __func__);
 }
@@ -158,8 +280,18 @@ bool DualArmModule::is_idle(int module_id) const  //根据模块标号返回单�
     }
 }
 
-void DualArmModule::start_execution_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+void DualArmModule::start_execution_move_pose(
+    std::shared_ptr<GoalHandleMovePose> goal_handle,
+    geometry_msgs::msg::PoseStamped planning_target,
+    motion_control_pkg::execution::ArmTaskLease task_lease)
 {
+    if (!task_lease.valid()) {
+        auto result = std::make_shared<MovePose::Result>();
+        result->success = ACTION_FAIL;
+        result->error_message = "MovePose dispatch is missing an arm task lease";
+        goal_handle->abort(result);
+        return;
+    }
     const auto goal = goal_handle->get_goal();
     // 标记为正在执行,
     if(goal->arm_id==ARM_LEFT)
@@ -168,7 +300,22 @@ void DualArmModule::start_execution_move_pose(std::shared_ptr<GoalHandleMovePose
             execution_thread_move_left_pose_.join();
         }
         is_executing_left_arm_.store(true);
-        execution_thread_move_left_pose_ = std::thread(&DualArmModule::execution_loop_move_left_pose, this, goal_handle);
+        try {
+            execution_thread_move_left_pose_ = std::thread(
+                [this, goal_handle, planning_target = std::move(planning_target),
+                task_lease = std::move(task_lease)]() mutable {
+                    (void)task_lease;
+                    execution_loop_move_left_pose(
+                        goal_handle, std::move(planning_target));
+                });
+        } catch (const std::exception& error) {
+            is_executing_left_arm_.store(false);
+            auto result = std::make_shared<MovePose::Result>();
+            result->success = ACTION_FAIL;
+            result->error_message =
+                std::string("Failed to start left MovePose worker: ") + error.what();
+            goal_handle->abort(result);
+        }
     }
     else if(goal->arm_id==ARM_RIGHT)
     {
@@ -176,310 +323,2168 @@ void DualArmModule::start_execution_move_pose(std::shared_ptr<GoalHandleMovePose
             execution_thread_move_right_pose_.join();
         }
         is_executing_right_arm_.store(true);
-        execution_thread_move_right_pose_ = std::thread(&DualArmModule::execution_loop_move_right_pose, this, goal_handle);
+        try {
+            execution_thread_move_right_pose_ = std::thread(
+                [this, goal_handle, planning_target = std::move(planning_target),
+                task_lease = std::move(task_lease)]() mutable {
+                    (void)task_lease;
+                    execution_loop_move_right_pose(
+                        goal_handle, std::move(planning_target));
+                });
+        } catch (const std::exception& error) {
+            is_executing_right_arm_.store(false);
+            auto result = std::make_shared<MovePose::Result>();
+            result->success = ACTION_FAIL;
+            result->error_message =
+                std::string("Failed to start right MovePose worker: ") + error.what();
+            goal_handle->abort(result);
+        }
     }
-    else if(goal->arm_id==ARM_BOTH)
-    {
-        if (execution_thread_move_dual_pose_.joinable()) {
-            execution_thread_move_dual_pose_.join();
+}
+
+void DualArmModule::execution_loop_move_left_pose(
+    std::shared_ptr<GoalHandleMovePose> goal_handle,
+    geometry_msgs::msg::PoseStamped planning_target)
+{
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        &is_executing_left_arm_);
+    execution_loop_move_pose_impl(
+        goal_handle, motion_control_pkg::sdk::ArmChannel::kLeft,
+        planning_target);
+}
+
+void DualArmModule::execution_loop_move_right_pose(
+    std::shared_ptr<GoalHandleMovePose> goal_handle,
+    geometry_msgs::msg::PoseStamped planning_target)
+{
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        &is_executing_right_arm_);
+    execution_loop_move_pose_impl(
+        goal_handle, motion_control_pkg::sdk::ArmChannel::kRight,
+        planning_target);
+}
+
+void DualArmModule::start_execution_move_joints(
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle,
+    motion_control_pkg::execution::ArmTaskLease task_lease)
+{
+    if (!task_lease.valid()) {
+        auto result = std::make_shared<MoveJoints::Result>();
+        result->success = ACTION_FAIL;
+        result->error_message = "MoveJoints dispatch is missing an arm task lease";
+        goal_handle->abort(result);
+        return;
+    }
+    const auto goal = goal_handle->get_goal();
+    if (goal->arm_id == ARM_LEFT) {
+        if (execution_thread_move_left_joint_.joinable()) {
+            execution_thread_move_left_joint_.join();
         }
         is_executing_left_arm_.store(true);
+        try {
+            execution_thread_move_left_joint_ = std::thread(
+                [this, goal_handle, task_lease = std::move(task_lease)]() mutable {
+                    (void)task_lease;
+                    execution_loop_move_left_joint(goal_handle);
+                });
+        } catch (const std::exception& error) {
+            is_executing_left_arm_.store(false);
+            auto result = std::make_shared<MoveJoints::Result>();
+            result->success = ACTION_FAIL;
+            result->error_message =
+                std::string("Failed to start left MoveJoints worker: ") + error.what();
+            goal_handle->abort(result);
+        }
+    } else if (goal->arm_id == ARM_RIGHT) {
+        if (execution_thread_move_right_joint_.joinable()) {
+            execution_thread_move_right_joint_.join();
+        }
         is_executing_right_arm_.store(true);
-        execution_thread_move_dual_pose_ = std::thread(&DualArmModule::execution_loop_move_dual_pose, this, goal_handle);
+        try {
+            execution_thread_move_right_joint_ = std::thread(
+                [this, goal_handle, task_lease = std::move(task_lease)]() mutable {
+                    (void)task_lease;
+                    execution_loop_move_right_joint(goal_handle);
+                });
+        } catch (const std::exception& error) {
+            is_executing_right_arm_.store(false);
+            auto result = std::make_shared<MoveJoints::Result>();
+            result->success = ACTION_FAIL;
+            result->error_message =
+                std::string("Failed to start right MoveJoints worker: ") + error.what();
+            goal_handle->abort(result);
+        }
     }
 }
 
-void DualArmModule::execution_loop_move_left_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+void DualArmModule::execution_loop_move_left_joint(
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle)
 {
-    execution_loop_move_pose_impl(goal_handle);
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        &is_executing_left_arm_);
+    execution_loop_move_joint_impl(
+        goal_handle, motion_control_pkg::sdk::ArmChannel::kLeft);
 }
 
-void DualArmModule::execution_loop_move_right_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+void DualArmModule::execution_loop_move_right_joint(
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle)
 {
-    execution_loop_move_pose_impl(goal_handle);
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        &is_executing_right_arm_);
+    execution_loop_move_joint_impl(
+        goal_handle, motion_control_pkg::sdk::ArmChannel::kRight);
 }
 
-void DualArmModule::execution_loop_move_dual_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
+void DualArmModule::start_execution_move_dual_arm_joints(
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle,
+    motion_control_pkg::execution::ArmTaskLease task_lease)
 {
-    execution_loop_move_pose_impl(goal_handle);
+    if (!task_lease.valid()) {
+        auto result = std::make_shared<MoveJoints::Result>();
+        result->success = false;
+        result->error_message =
+            "MoveJoints dispatch is missing a dual-arm task lease";
+        goal_handle->abort(result);
+        return;
+    }
+    if (execution_thread_move_dual_joints_.joinable()) {
+        execution_thread_move_dual_joints_.join();
+    }
+    is_executing_left_arm_.store(true);
+    is_executing_right_arm_.store(true);
+    try {
+        execution_thread_move_dual_joints_ = std::thread(
+            [this, goal_handle, task_lease = std::move(task_lease)]() mutable {
+                (void)task_lease;
+                execution_loop_move_dual_arm_joints(goal_handle);
+            });
+    } catch (const std::exception& error) {
+        is_executing_left_arm_.store(false);
+        is_executing_right_arm_.store(false);
+        auto result = std::make_shared<MoveJoints::Result>();
+        result->success = false;
+        result->error_message =
+            std::string("Failed to start dual-arm worker: ") + error.what();
+        goal_handle->abort(result);
+    }
 }
 
-void DualArmModule::execution_loop_move_pose_impl(std::shared_ptr<GoalHandleMovePose> goal_handle)
+void DualArmModule::execution_loop_move_dual_arm_joints(
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle)
 {
-    RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "Received request to cancel MovePose goal");
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        &is_executing_left_arm_, &is_executing_right_arm_);
+    motion_control_pkg::execution::ActionTerminalGuard<
+        GoalHandleMoveJoints, MoveJoints::Result> terminal(
+        goal_handle);
+    const auto started_at = std::chrono::steady_clock::now();
+    const auto goal = goal_handle->get_goal();
+    auto result = std::make_shared<MoveJoints::Result>();
+    auto feedback = std::make_shared<MoveJoints::Feedback>();
+    result->success = false;
+    result->left_final_distance_error_rad =
+        std::numeric_limits<double>::quiet_NaN();
+    result->right_final_distance_error_rad =
+        std::numeric_limits<double>::quiet_NaN();
+    result->final_distance_error =
+        std::numeric_limits<double>::quiet_NaN();
+    result->completion_time_skew_sec =
+        std::numeric_limits<double>::quiet_NaN();
+
+    const auto update_time = [&]() {
+        result->execution_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started_at).count();
+    };
+    const auto abort_goal = [&](const std::string& message) {
+        result->success = false;
+        result->error_message = message;
+        update_time();
+        terminal.abort(result);
+    };
+    const auto cancel_goal = [&](const std::string& message) {
+        result->success = false;
+        result->error_message = message;
+        update_time();
+        terminal.cancel(result);
+    };
+    const auto publish_feedback = [this, &goal_handle, &feedback](
+        std::uint8_t status, float left, float right,
+        const std::string& step) {
+        feedback->dual_task_status = status;
+        feedback->task_status = "RUNNING";
+        feedback->left_progress_rate = std::clamp(left, 0.0F, 100.0F);
+        feedback->right_progress_rate = std::clamp(right, 0.0F, 100.0F);
+        feedback->progress_rate =
+            std::min(feedback->left_progress_rate,
+            feedback->right_progress_rate);
+        feedback->current_step_info = step;
+        if (auto node = lockNode(__func__)) {
+            feedback->header.stamp = node->get_clock()->now();
+        }
+        goal_handle->publish_feedback(feedback);
+    };
+
+    if (arm_configuration_ !=
+        motion_control_pkg::sdk::ActiveArmConfiguration::kDualArm ||
+        goal->synchronization_mode !=
+        MoveJoints::Goal::SYNC_START_AND_FINISH)
+    {
+        abort_goal(
+            "MoveJoints requires dual_arm configuration and "
+            "SYNC_START_AND_FINISH mode");
+        return;
+    }
+    const auto speed_validation =
+        motion_control_pkg::motion::validateSpeedScale(goal->speed);
+    if (!speed_validation.valid || goal->timeout_ms <= 0) {
+        abort_goal(speed_validation.valid ?
+            "MoveJoints timeout_ms must be positive" :
+            speed_validation.error_message);
+        return;
+    }
+    const auto left_goal_validation =
+        motion_control_pkg::execution::validateAndOrderJointGoal(
+        motion_control_pkg::sdk::ArmChannel::kLeft,
+        std::vector<std::string>(goal->left_joint_name.begin(),
+        goal->left_joint_name.end()),
+        std::vector<double>(goal->left_position.begin(),
+        goal->left_position.end()));
+    const auto right_goal_validation =
+        motion_control_pkg::execution::validateAndOrderJointGoal(
+        motion_control_pkg::sdk::ArmChannel::kRight,
+        std::vector<std::string>(goal->right_joint_name.begin(),
+        goal->right_joint_name.end()),
+        std::vector<double>(goal->right_position.begin(),
+        goal->right_position.end()));
+    if (!left_goal_validation.valid || !right_goal_validation.valid) {
+        abort_goal(left_goal_validation.valid ?
+            right_goal_validation.error_message :
+            left_goal_validation.error_message);
+        return;
+    }
+    if (!init_robot_link_ || !l_init_arm_params_) {
+        abort_goal("Dual-arm robot link or kinematics is not initialized");
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MoveJoints canceled before planning");
+        return;
+    }
+    motion_control_pkg::execution::SteadyDeadline deadline(
+        std::chrono::milliseconds(goal->timeout_ms));
+    publish_feedback(
+        MoveJoints::Feedback::STATUS_PLANNING, 0.0F, 0.0F,
+        "reading one synchronized dual-arm state snapshot");
+
+    motion_control_pkg::sdk::DualArmDeviceState initial_state;
+    const auto state_result = sdk_command_gate_->readState(initial_state);
+    if (!state_result) {
+        abort_goal(state_result.error_message);
+        return;
+    }
+    for (std::size_t arm = 0; arm < 2U; ++arm) {
+        const auto& arm_state = initial_state.arms[arm];
+        if (arm_state.error_code != 0 || arm_state.current_state == 100 ||
+            !arm_state.low_speed)
+        {
+            abort_goal(
+                std::string(arm == 0U ? "left" : "right") +
+                " arm is not stationary and error-free before planning");
+            return;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(arm_status_mtx_);
+        dual_arm_state_ = initial_state;
+    }
+    std::vector<double> left_current;
+    std::vector<double> right_current;
+    std::string model_error;
+    if (!updateArmModelState(
+        initial_state, left_current, right_current, model_error))
+    {
+        abort_goal(model_error);
+        return;
+    }
+    std::vector<double> full_start_q;
+    if (!miracle_algo_->getFullJointState(full_start_q)) {
+        abort_goal("Failed to obtain the full Pinocchio start state");
+        return;
+    }
+
+    const motion_control_pkg::motion::JointVector left_target =
+        left_goal_validation.ordered_positions;
+    const motion_control_pkg::motion::JointVector right_target =
+        right_goal_validation.ordered_positions;
+    motion_control_pkg::motion::JointVector left_start{};
+    motion_control_pkg::motion::JointVector right_start{};
+    std::copy(left_current.begin(), left_current.end(), left_start.begin());
+    std::copy(right_current.begin(), right_current.end(), right_start.begin());
+
+    struct ArmPlanningData
+    {
+        motion_control_pkg::motion::PositionLimitIntersection limits;
+        motion_control_pkg::motion::ScaledMotionLimits motion;
+        motion_control_pkg::motion::CcsJoint67Table joint67{};
+    };
+    std::array<ArmPlanningData, 2> arm_data;
+    const std::array<motion_control_pkg::motion::JointVector, 2> starts{
+        left_start, right_start};
+    const std::array<motion_control_pkg::motion::JointVector, 2> targets{
+        left_target, right_target};
+    for (std::size_t arm = 0; arm < arm_data.size(); ++arm) {
+        std::vector<double> model_lower(arm_dof_);
+        std::vector<double> model_upper(arm_dof_);
+        if (!miracle_algo_->getChainJointsLimt(
+            static_cast<int>(arm), model_lower, model_upper))
+        {
+            abort_goal("Failed to obtain dual-arm Pinocchio joint limits");
+            return;
+        }
+        arm_data[arm].limits =
+            motion_control_pkg::motion::intersectPositionLimits(
+            arm == 0U ? l_q_lower_limits_ : r_q_lower_limits_,
+            arm == 0U ? l_q_upper_limits_ : r_q_upper_limits_,
+            model_lower, model_upper);
+        arm_data[arm].motion = motion_control_pkg::motion::scaleMotionLimits(
+            arm == 0U ? l_v_limit_ : r_v_limit_,
+            arm == 0U ? l_a_limit_ : r_a_limit_,
+            arm == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed);
+        if (!arm_data[arm].limits.valid || !arm_data[arm].motion.valid) {
+            abort_goal(arm_data[arm].limits.valid ?
+                arm_data[arm].motion.error_message :
+                arm_data[arm].limits.error_message);
+            return;
+        }
+        for (std::size_t row = 0; row < arm_data[arm].joint67.size(); ++row) {
+            for (std::size_t column = 0;
+                column < arm_data[arm].joint67[row].size(); ++column)
+            {
+                arm_data[arm].joint67[row][column] = bd_[arm][row][column];
+            }
+        }
+        const auto start_check =
+            motion_control_pkg::motion::validateJointTarget(
+            starts[arm], arm_data[arm].limits.lower,
+            arm_data[arm].limits.upper, arm_data[arm].joint67);
+        const auto target_check =
+            motion_control_pkg::motion::validateJointTarget(
+            targets[arm], arm_data[arm].limits.lower,
+            arm_data[arm].limits.upper, arm_data[arm].joint67);
+        if (!start_check.valid || !target_check.valid) {
+            abort_goal(
+                std::string(arm == 0U ? "left" : "right") +
+                " arm joint constraint failed: " +
+                (start_check.valid ? target_check.error_message :
+                start_check.error_message));
+            return;
+        }
+    }
+
+    std::vector<std::vector<double>> dual_path;
+    if (goal->enable_collision_check) {
+        std::vector<double> dual_goal;
+        dual_goal.insert(dual_goal.end(), left_target.begin(), left_target.end());
+        dual_goal.insert(dual_goal.end(), right_target.begin(), right_target.end());
+        std::vector<std::vector<double>> full_path;
+        if (!miracle_algo_->planDualArmJointSpace(
+            full_start_q, dual_goal, full_path))
+        {
+            abort_goal(
+                "Existing Pinocchio/Coal/OMPL dual-arm collision planner failed");
+            return;
+        }
+        dual_path.reserve(full_path.size());
+        for (const auto& full_q : full_path) {
+            std::vector<double> left;
+            std::vector<double> right;
+            if (!miracle_algo_->extractSingleArmJoints(true, full_q, left) ||
+                !miracle_algo_->extractSingleArmJoints(false, full_q, right))
+            {
+                abort_goal("Dual-arm collision planner returned an invalid waypoint");
+                return;
+            }
+            left.insert(left.end(), right.begin(), right.end());
+            dual_path.push_back(std::move(left));
+        }
+    } else {
+        dual_path = {
+            std::vector<double>(left_start.begin(), left_start.end()),
+            std::vector<double>(left_target.begin(), left_target.end())};
+        dual_path[0].insert(
+            dual_path[0].end(), right_start.begin(), right_start.end());
+        dual_path[1].insert(
+            dual_path[1].end(), right_target.begin(), right_target.end());
+    }
+    if (dual_path.size() < 2U) {
+        abort_goal("Dual-arm planner returned fewer than two waypoints");
+        return;
+    }
+
+    MotionConstraint combined_constraints;
+    for (const auto& data : arm_data) {
+        combined_constraints.max_vel.insert(
+            combined_constraints.max_vel.end(),
+            data.motion.velocity.begin(), data.motion.velocity.end());
+        combined_constraints.max_acc.insert(
+            combined_constraints.max_acc.end(),
+            data.motion.acceleration.begin(), data.motion.acceleration.end());
+        combined_constraints.max_jerk.insert(
+            combined_constraints.max_jerk.end(),
+            data.motion.jerk.begin(), data.motion.jerk.end());
+    }
+    auto planner = PlannerFactory::createPlanner(
+        goal->enable_collision_check ? PlannerType::TOPPRA :
+        PlannerType::RUCKIG);
+    if (!planner) {
+        abort_goal("Failed to create the existing dual-arm trajectory planner");
+        return;
+    }
+    planner->setCycleTime(
+        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
+    if (!planner->init(2 * arm_dof_, combined_constraints)) {
+        abort_goal("Dual-arm trajectory planner rejected the 14-DOF limits");
+        return;
+    }
+    std::vector<Waypoint> waypoints;
+    waypoints.reserve(dual_path.size());
+    for (auto& point : dual_path) {
+        Waypoint waypoint;
+        waypoint.positions = std::move(point);
+        waypoints.push_back(std::move(waypoint));
+    }
+    const auto planned = planner->plan(waypoints);
+    if (!planned.success || planned.positions.empty()) {
+        abort_goal("Dual-arm 14-DOF time parameterization failed");
+        return;
+    }
+
+    std::array<std::vector<std::vector<double>>, 2> trajectories;
+    for (const auto& point : planned.positions) {
+        if (point.size() != 2U * static_cast<std::size_t>(arm_dof_)) {
+            abort_goal("Dual-arm trajectory sample does not contain 14 joints");
+            return;
+        }
+        trajectories[0].emplace_back(point.begin(), point.begin() + arm_dof_);
+        trajectories[1].emplace_back(point.begin() + arm_dof_, point.end());
+    }
+    for (std::size_t arm = 0; arm < trajectories.size(); ++arm) {
+        const auto validation =
+            motion_control_pkg::motion::validateTrajectoryPositions(
+            trajectories[arm], arm_data[arm].limits.lower,
+            arm_data[arm].limits.upper, arm_data[arm].joint67);
+        if (!validation.valid) {
+            abort_goal(
+                std::string(arm == 0U ? "left" : "right") +
+                " synchronized trajectory is invalid: " +
+                validation.error_message);
+            return;
+        }
+    }
+
+    // OMPL 路点经 TOPPRA 参数化后，再用同一个 Pinocchio/Coal 接口检查
+    // 每个 4 ms 联合采样点；不引入第二套防碰撞算法。
+    if (goal->enable_collision_check) {
+        bool collision_free = true;
+        for (std::size_t sample = 0;
+            sample < trajectories[0].size(); ++sample)
+        {
+            if (miracle_algo_->updateChainJointsAngle(
+                "left_arm", trajectories[0][sample]) != 0 ||
+                miracle_algo_->updateChainJointsAngle(
+                "right_arm", trajectories[1][sample]) != 0)
+            {
+                collision_free = false;
+                break;
+            }
+            std::vector<double> full_sample;
+            if (!miracle_algo_->getFullJointState(full_sample) ||
+                !miracle_algo_->isFullQValid(
+                miracle_algo_->toEigenConfig(full_sample)))
+            {
+                collision_free = false;
+                break;
+            }
+        }
+        (void)miracle_algo_->updateChainJointsAngle("left_arm", left_current);
+        (void)miracle_algo_->updateChainJointsAngle("right_arm", right_current);
+        if (!collision_free) {
+            abort_goal(
+                "Pinocchio/Coal rejected a time-parameterized dual-arm sample");
+            return;
+        }
+    }
+
+    std::vector<motion_control_pkg::execution::JointCommand> left_commands;
+    std::vector<motion_control_pkg::execution::JointCommand> right_commands;
+    std::string conversion_error;
+    if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
+        trajectories[0], left_commands, conversion_error) ||
+        !motion_control_pkg::motion::trajectoryToVendorDegrees(
+        trajectories[1], right_commands, conversion_error))
+    {
+        abort_goal(conversion_error);
+        return;
+    }
+    const auto synchronized =
+        motion_control_pkg::execution::synchronizeTrajectoryPair(
+        left_commands, right_commands);
+    if (!synchronized.success) {
+        abort_goal(synchronized.error_message);
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MoveJoints canceled before atomic submission");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MoveJoints timed out during planning");
+        return;
+    }
+    publish_feedback(
+        MoveJoints::Feedback::STATUS_EXECUTING, 20.0F, 20.0F,
+        "submitting synchronized A/B batches at 4 ms");
+    auto enqueue = command_coordinator_->enqueueSynchronizedPair(
+        synchronized.left, synchronized.right);
+    if (!enqueue.success) {
+        abort_goal(enqueue.error_message);
+        return;
+    }
+
+    bool client_canceled = false;
+    bool timed_out = false;
+    auto next_feedback = std::chrono::steady_clock::now();
+    while (true) {
+        const auto left = enqueue.left_ticket.snapshot();
+        const auto right = enqueue.right_ticket.snapshot();
+        if (motion_control_pkg::execution::isTerminal(left.state) &&
+            motion_control_pkg::execution::isTerminal(right.state))
+        {
+            break;
+        }
+        if (goal_handle->is_canceling()) {
+            client_canceled = true;
+            enqueue.left_ticket.requestCancel();
+            enqueue.right_ticket.requestCancel();
+        } else if (deadline.expired()) {
+            timed_out = true;
+            enqueue.left_ticket.requestCancel();
+            enqueue.right_ticket.requestCancel();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            const auto progress = [](const auto& snapshot) {
+                return snapshot.sample_count == 0U ? 0.0F :
+                    20.0F + 70.0F * static_cast<float>(snapshot.samples_sent) /
+                    static_cast<float>(snapshot.sample_count);
+            };
+            publish_feedback(
+                MoveJoints::Feedback::STATUS_EXECUTING,
+                progress(left), progress(right),
+                "streaming one atomic dual-arm batch per cycle");
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        enqueue.left_ticket.waitFor(
+            motion_control_pkg::execution::kDualArmControlPeriod);
+    }
+    const auto left_stream = enqueue.left_ticket.snapshot();
+    const auto right_stream = enqueue.right_ticket.snapshot();
+    if (client_canceled) {
+        cancel_goal(
+            "MoveJoints canceled; future paired samples suppressed");
+        return;
+    }
+    if (timed_out) {
+        abort_goal("MoveJoints command streaming timed out");
+        return;
+    }
+    if (left_stream.state !=
+        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded ||
+        right_stream.state !=
+        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    {
+        abort_goal(!left_stream.error_message.empty() ?
+            left_stream.error_message : right_stream.error_message);
+        return;
+    }
+
+    publish_feedback(
+        MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION,
+        95.0F, 95.0F, "waiting for both arms to report low speed");
+    std::array<std::optional<std::chrono::steady_clock::time_point>, 2>
+        completed_at;
+    while (!completed_at[0] || !completed_at[1]) {
+        if (goal_handle->is_canceling()) {
+            cancel_goal(
+                "MoveJoints canceled during completion wait; no "
+                "physical emergency stop was issued");
+            return;
+        }
+        if (deadline.expired()) {
+            abort_goal("MoveJoints completion wait timed out");
+            return;
+        }
+        motion_control_pkg::sdk::DualArmDeviceState completion;
+        const auto completion_result = sdk_command_gate_->readState(completion);
+        if (!completion_result) {
+            abort_goal(completion_result.error_message);
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        for (std::size_t arm = 0; arm < 2U; ++arm) {
+            if (completion.arms[arm].error_code != 0 ||
+                completion.arms[arm].current_state == 100)
+            {
+                abort_goal(
+                    std::string(arm == 0U ? "left" : "right") +
+                    " arm entered an SDK error during completion wait");
+                return;
+            }
+            if (!completed_at[arm] && completion.arms[arm].low_speed) {
+                completed_at[arm] = now;
+            }
+        }
+        result->left_final_distance_error_rad =
+            motion_control_pkg::motion::maximumJointErrorRadians(
+            completion.arms[0].joint_position, left_target);
+        result->right_final_distance_error_rad =
+            motion_control_pkg::motion::maximumJointErrorRadians(
+            completion.arms[1].joint_position, right_target);
+        if (!completed_at[0] || !completed_at[1]) {
+            std::this_thread::sleep_for(
+                motion_control_pkg::execution::kDualArmControlPeriod);
+        }
+    }
+    result->completion_time_skew_sec = std::chrono::duration<double>(
+        *completed_at[0] - *completed_at[1]).count();
+    result->completion_time_skew_sec =
+        std::abs(result->completion_time_skew_sec);
+    result->final_distance_error = std::max(
+        result->left_final_distance_error_rad,
+        result->right_final_distance_error_rad);
+    result->success = true;
+    result->error_message.clear();
+    update_time();
+    publish_feedback(
+        MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION,
+        100.0F, 100.0F, "dual-arm joint motion completed");
+    terminal.succeed(result);
+}
+
+void DualArmModule::start_execution_move_dual_arm_pose(
+    std::shared_ptr<GoalHandleMovePose> goal_handle,
+    geometry_msgs::msg::PoseStamped left_planning_target,
+    geometry_msgs::msg::PoseStamped right_planning_target,
+    std::chrono::steady_clock::time_point request_started_at,
+    motion_control_pkg::execution::ArmTaskLease task_lease)
+{
+    if (!task_lease.valid()) {
+        auto result = std::make_shared<MovePose::Result>();
+        result->success = false;
+        result->error_message =
+            "MovePose dispatch is missing a dual-arm task lease";
+        goal_handle->abort(result);
+        return;
+    }
+    if (execution_thread_move_dual_pose_.joinable()) {
+        execution_thread_move_dual_pose_.join();
+    }
+    is_executing_left_arm_.store(true);
+    is_executing_right_arm_.store(true);
+    try {
+        execution_thread_move_dual_pose_ = std::thread(
+            [this, goal_handle,
+            left_planning_target = std::move(left_planning_target),
+            right_planning_target = std::move(right_planning_target),
+            request_started_at,
+            task_lease = std::move(task_lease)]() mutable {
+                (void)task_lease;
+                execution_loop_move_dual_arm_pose(
+                    goal_handle, std::move(left_planning_target),
+                    std::move(right_planning_target), request_started_at);
+            });
+    } catch (const std::exception& error) {
+        is_executing_left_arm_.store(false);
+        is_executing_right_arm_.store(false);
+        auto result = std::make_shared<MovePose::Result>();
+        result->success = false;
+        result->error_message =
+            std::string("Failed to start dual-arm pose worker: ") +
+            error.what();
+        goal_handle->abort(result);
+    }
+}
+
+void DualArmModule::execution_loop_move_dual_arm_pose(
+    std::shared_ptr<GoalHandleMovePose> goal_handle,
+    geometry_msgs::msg::PoseStamped left_planning_target,
+    geometry_msgs::msg::PoseStamped right_planning_target,
+    std::chrono::steady_clock::time_point request_started_at)
+{
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        &is_executing_left_arm_, &is_executing_right_arm_);
+    motion_control_pkg::execution::ActionTerminalGuard<
+        GoalHandleMovePose, MovePose::Result> terminal(
+        goal_handle);
+    const auto started_at = request_started_at;
+    const auto goal = goal_handle->get_goal();
+    auto result = std::make_shared<MovePose::Result>();
+    auto feedback = std::make_shared<MovePose::Feedback>();
+    result->success = false;
+    result->left_final_distance_error_m =
+        std::numeric_limits<double>::quiet_NaN();
+    result->right_final_distance_error_m =
+        std::numeric_limits<double>::quiet_NaN();
+    result->final_distance_error =
+        std::numeric_limits<double>::quiet_NaN();
+    result->completion_time_skew_sec =
+        std::numeric_limits<double>::quiet_NaN();
+
+    const auto update_time = [&]() {
+        result->execution_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started_at).count();
+    };
+    const auto abort_goal = [&](const std::string& message) {
+        result->success = false;
+        result->error_message = message;
+        update_time();
+        terminal.abort(result);
+    };
+    const auto cancel_goal = [&](const std::string& message) {
+        result->success = false;
+        result->error_message = message;
+        update_time();
+        terminal.cancel(result);
+    };
+    const auto publish_feedback = [this, &goal_handle, &feedback](
+        std::uint8_t status, float left, float right,
+        const std::string& step) {
+        feedback->dual_task_status = status;
+        feedback->task_status = "RUNNING";
+        feedback->left_progress_rate = std::clamp(left, 0.0F, 100.0F);
+        feedback->right_progress_rate = std::clamp(right, 0.0F, 100.0F);
+        feedback->progress_rate = std::min(
+            feedback->left_progress_rate, feedback->right_progress_rate);
+        feedback->current_step_info = step;
+        if (auto node = lockNode(__func__)) {
+            feedback->header.stamp = node->get_clock()->now();
+        }
+        goal_handle->publish_feedback(feedback);
+    };
+
+    if (arm_configuration_ !=
+        motion_control_pkg::sdk::ActiveArmConfiguration::kDualArm ||
+        goal->synchronization_mode !=
+        MovePose::Goal::SYNC_START_AND_FINISH ||
+        goal->timeout_ms <= 0)
+    {
+        abort_goal("MovePose goal violates the synchronized dual-arm contract");
+        return;
+    }
+    const auto speed_validation =
+        motion_control_pkg::motion::validateSpeedScale(goal->speed);
+    if (!speed_validation.valid) {
+        abort_goal(speed_validation.error_message);
+        return;
+    }
+    const auto unsupported_bound = [](const auto& bound) {
+        return std::any_of(bound.begin(), bound.end(), [](float value) {
+            return !std::isfinite(value) || value != 0.0F;
+        });
+    };
+    if (unsupported_bound(goal->left_bound_size) ||
+        unsupported_bound(goal->right_bound_size))
+    {
+        abort_goal(
+            "Non-zero tool envelopes are unavailable without an existing "
+            "attached collision-object interface");
+        return;
+    }
+    if (!init_robot_link_ || !l_init_arm_params_) {
+        abort_goal("Dual-arm robot link or kinematics is not initialized");
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MovePose canceled before planning");
+        return;
+    }
+    const auto requested_timeout = std::chrono::milliseconds(goal->timeout_ms);
+    const auto elapsed_before_planning =
+        std::chrono::steady_clock::now() - started_at;
+    if (elapsed_before_planning >= requested_timeout) {
+        abort_goal("MovePose overall timeout expired before planning");
+        return;
+    }
+    motion_control_pkg::execution::SteadyDeadline deadline(
+        requested_timeout - elapsed_before_planning);
+    publish_feedback(
+        MovePose::Feedback::STATUS_PLANNING, 0.0F, 0.0F,
+        "reading one synchronized dual-arm state snapshot");
+
+    motion_control_pkg::sdk::DualArmDeviceState initial_state;
+    const auto state_result = sdk_command_gate_->readState(initial_state);
+    if (!state_result) {
+        abort_goal(state_result.error_message);
+        return;
+    }
+    for (std::size_t arm = 0; arm < 2U; ++arm) {
+        const auto& arm_state = initial_state.arms[arm];
+        if (arm_state.error_code != 0 || arm_state.current_state == 100 ||
+            !arm_state.low_speed)
+        {
+            abort_goal(
+                std::string(arm == 0U ? "left" : "right") +
+                " arm is not stationary and error-free before pose planning");
+            return;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(arm_status_mtx_);
+        dual_arm_state_ = initial_state;
+    }
+    std::vector<double> left_current;
+    std::vector<double> right_current;
+    std::string model_error;
+    if (!updateArmModelState(
+        initial_state, left_current, right_current, model_error))
+    {
+        abort_goal(model_error);
+        return;
+    }
+    std::vector<double> full_start_q;
+    if (!miracle_algo_->getFullJointState(full_start_q)) {
+        abort_goal("Failed to obtain the full Pinocchio start state");
+        return;
+    }
+
+    // TF2 已在总节点把两个目标独立转换到中央 planning_frame。这里继续
+    // 复用现有 TCP 固定变换及 Pinocchio 模型帧转换，不建立第二棵 TF 树。
+    const Eigen::Isometry3d left_planning_to_end =
+        motion_control_pkg::kinematics::targetTcpToModelEndPose(
+        left_planning_target.pose, left_model_end_to_tool_tcp_);
+    const Eigen::Isometry3d right_planning_to_end =
+        motion_control_pkg::kinematics::targetTcpToModelEndPose(
+        right_planning_target.pose, right_model_end_to_tool_tcp_);
+    Eigen::Isometry3d left_root_to_end = Eigen::Isometry3d::Identity();
+    Eigen::Isometry3d right_root_to_end = Eigen::Isometry3d::Identity();
+    if (!miracle_algo_->transformPoseToModelRoot(
+        planning_frame_, full_start_q, left_planning_to_end,
+        left_root_to_end) ||
+        !miracle_algo_->transformPoseToModelRoot(
+        planning_frame_, full_start_q, right_planning_to_end,
+        right_root_to_end))
+    {
+        abort_goal("Failed to transform dual TCP targets into the model root frame");
+        return;
+    }
+
+    std::vector<double> dual_goal;
+    std::vector<std::vector<double>> full_path;
+    if (goal->enable_collision_check) {
+        if (!miracle_algo_->planDualArmCartesianGoal(
+            full_start_q, left_root_to_end, right_root_to_end, full_path))
+        {
+            abort_goal(
+                "Existing dual-arm Pinocchio IK/Coal/OMPL pose planner failed");
+            return;
+        }
+        if (full_path.empty() ||
+            !miracle_algo_->extractSingleArmJoints(
+            true, full_path.back(), dual_goal))
+        {
+            abort_goal("Dual-arm pose planner returned an invalid left goal");
+            return;
+        }
+        std::vector<double> right_goal;
+        if (!miracle_algo_->extractSingleArmJoints(
+            false, full_path.back(), right_goal))
+        {
+            abort_goal("Dual-arm pose planner returned an invalid right goal");
+            return;
+        }
+        dual_goal.insert(dual_goal.end(), right_goal.begin(), right_goal.end());
+    } else if (!miracle_algo_->solveDualArmCartesianIk(
+        full_start_q, left_root_to_end, right_root_to_end, dual_goal))
+    {
+        abort_goal("Existing Pinocchio dual-arm IK failed");
+        return;
+    }
+    if (dual_goal.size() != 14U) {
+        abort_goal("Dual-arm IK did not return fourteen arm joints");
+        return;
+    }
+
+    motion_control_pkg::motion::JointVector left_start{};
+    motion_control_pkg::motion::JointVector right_start{};
+    motion_control_pkg::motion::JointVector left_target{};
+    motion_control_pkg::motion::JointVector right_target{};
+    std::copy(left_current.begin(), left_current.end(), left_start.begin());
+    std::copy(right_current.begin(), right_current.end(), right_start.begin());
+    std::copy(dual_goal.begin(), dual_goal.begin() + arm_dof_,
+        left_target.begin());
+    std::copy(dual_goal.begin() + arm_dof_, dual_goal.end(),
+        right_target.begin());
+
+    struct ArmPlanningData
+    {
+        motion_control_pkg::motion::PositionLimitIntersection limits;
+        motion_control_pkg::motion::ScaledMotionLimits motion;
+        motion_control_pkg::motion::CcsJoint67Table joint67{};
+    };
+    std::array<ArmPlanningData, 2> arm_data;
+    const std::array<motion_control_pkg::motion::JointVector, 2> starts{
+        left_start, right_start};
+    const std::array<motion_control_pkg::motion::JointVector, 2> targets{
+        left_target, right_target};
+    for (std::size_t arm = 0; arm < arm_data.size(); ++arm) {
+        std::vector<double> model_lower(arm_dof_);
+        std::vector<double> model_upper(arm_dof_);
+        if (!miracle_algo_->getChainJointsLimt(
+            static_cast<int>(arm), model_lower, model_upper))
+        {
+            abort_goal("Failed to obtain dual-arm Pinocchio joint limits");
+            return;
+        }
+        arm_data[arm].limits =
+            motion_control_pkg::motion::intersectPositionLimits(
+            arm == 0U ? l_q_lower_limits_ : r_q_lower_limits_,
+            arm == 0U ? l_q_upper_limits_ : r_q_upper_limits_,
+            model_lower, model_upper);
+        arm_data[arm].motion =
+            motion_control_pkg::motion::scaleMotionLimits(
+            arm == 0U ? l_v_limit_ : r_v_limit_,
+            arm == 0U ? l_a_limit_ : r_a_limit_,
+            arm == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed);
+        if (!arm_data[arm].limits.valid || !arm_data[arm].motion.valid) {
+            abort_goal(arm_data[arm].limits.valid ?
+                arm_data[arm].motion.error_message :
+                arm_data[arm].limits.error_message);
+            return;
+        }
+        for (std::size_t row = 0; row < arm_data[arm].joint67.size(); ++row) {
+            for (std::size_t column = 0;
+                column < arm_data[arm].joint67[row].size(); ++column)
+            {
+                arm_data[arm].joint67[row][column] = bd_[arm][row][column];
+            }
+        }
+        const auto start_check =
+            motion_control_pkg::motion::validateJointTarget(
+            starts[arm], arm_data[arm].limits.lower,
+            arm_data[arm].limits.upper, arm_data[arm].joint67);
+        const auto target_check =
+            motion_control_pkg::motion::validateJointTarget(
+            targets[arm], arm_data[arm].limits.lower,
+            arm_data[arm].limits.upper, arm_data[arm].joint67);
+        if (!start_check.valid || !target_check.valid) {
+            abort_goal(
+                std::string(arm == 0U ? "left" : "right") +
+                " arm IK constraint failed: " +
+                (start_check.valid ? target_check.error_message :
+                start_check.error_message));
+            return;
+        }
+    }
+
+    std::vector<std::vector<double>> dual_path;
+    if (goal->enable_collision_check) {
+        dual_path.reserve(full_path.size());
+        for (const auto& full_q : full_path) {
+            std::vector<double> left;
+            std::vector<double> right;
+            if (!miracle_algo_->extractSingleArmJoints(true, full_q, left) ||
+                !miracle_algo_->extractSingleArmJoints(false, full_q, right))
+            {
+                abort_goal("Dual-arm pose path contains an invalid full-body waypoint");
+                return;
+            }
+            left.insert(left.end(), right.begin(), right.end());
+            dual_path.push_back(std::move(left));
+        }
+    } else {
+        dual_path = {
+            std::vector<double>(left_start.begin(), left_start.end()),
+            std::vector<double>(left_target.begin(), left_target.end())};
+        dual_path[0].insert(
+            dual_path[0].end(), right_start.begin(), right_start.end());
+        dual_path[1].insert(
+            dual_path[1].end(), right_target.begin(), right_target.end());
+    }
+    if (dual_path.size() < 2U) {
+        abort_goal("Dual-arm pose planner returned fewer than two waypoints");
+        return;
+    }
+
+    MotionConstraint combined_constraints;
+    for (const auto& data : arm_data) {
+        combined_constraints.max_vel.insert(
+            combined_constraints.max_vel.end(),
+            data.motion.velocity.begin(), data.motion.velocity.end());
+        combined_constraints.max_acc.insert(
+            combined_constraints.max_acc.end(),
+            data.motion.acceleration.begin(), data.motion.acceleration.end());
+        combined_constraints.max_jerk.insert(
+            combined_constraints.max_jerk.end(),
+            data.motion.jerk.begin(), data.motion.jerk.end());
+    }
+    auto planner = PlannerFactory::createPlanner(
+        goal->enable_collision_check ? PlannerType::TOPPRA :
+        PlannerType::RUCKIG);
+    if (!planner) {
+        abort_goal("Failed to create the existing dual-arm trajectory planner");
+        return;
+    }
+    planner->setCycleTime(
+        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
+    if (!planner->init(2 * arm_dof_, combined_constraints)) {
+        abort_goal("Dual-arm pose planner rejected the 14-DOF motion limits");
+        return;
+    }
+    std::vector<Waypoint> waypoints;
+    waypoints.reserve(dual_path.size());
+    for (auto& point : dual_path) {
+        Waypoint waypoint;
+        waypoint.positions = std::move(point);
+        waypoints.push_back(std::move(waypoint));
+    }
+    const auto planned = planner->plan(waypoints);
+    if (!planned.success || planned.positions.empty()) {
+        abort_goal("Dual-arm pose 14-DOF time parameterization failed");
+        return;
+    }
+
+    std::array<std::vector<std::vector<double>>, 2> trajectories;
+    for (const auto& point : planned.positions) {
+        if (point.size() != 2U * static_cast<std::size_t>(arm_dof_)) {
+            abort_goal("Dual-arm pose trajectory sample does not contain 14 joints");
+            return;
+        }
+        trajectories[0].emplace_back(point.begin(), point.begin() + arm_dof_);
+        trajectories[1].emplace_back(point.begin() + arm_dof_, point.end());
+    }
+    for (std::size_t arm = 0; arm < trajectories.size(); ++arm) {
+        const auto validation =
+            motion_control_pkg::motion::validateTrajectoryPositions(
+            trajectories[arm], arm_data[arm].limits.lower,
+            arm_data[arm].limits.upper, arm_data[arm].joint67);
+        if (!validation.valid) {
+            abort_goal(
+                std::string(arm == 0U ? "left" : "right") +
+                " pose trajectory is invalid: " + validation.error_message);
+            return;
+        }
+    }
+
+    // 对 TOPPRA 的每个联合采样再次使用同一个 Pinocchio/Coal 碰撞接口。
+    if (goal->enable_collision_check) {
+        bool collision_free = true;
+        for (std::size_t sample = 0;
+            sample < trajectories[0].size(); ++sample)
+        {
+            if (deadline.expired() ||
+                miracle_algo_->updateChainJointsAngle(
+                "left_arm", trajectories[0][sample]) != 0 ||
+                miracle_algo_->updateChainJointsAngle(
+                "right_arm", trajectories[1][sample]) != 0)
+            {
+                collision_free = false;
+                break;
+            }
+            std::vector<double> full_sample;
+            if (!miracle_algo_->getFullJointState(full_sample) ||
+                !miracle_algo_->isFullQValid(
+                miracle_algo_->toEigenConfig(full_sample)))
+            {
+                collision_free = false;
+                break;
+            }
+        }
+        (void)miracle_algo_->updateChainJointsAngle("left_arm", left_current);
+        (void)miracle_algo_->updateChainJointsAngle("right_arm", right_current);
+        if (!collision_free) {
+            abort_goal(deadline.expired() ?
+                "MovePose timed out during sampled collision checking" :
+                "Pinocchio/Coal rejected a time-parameterized pose sample");
+            return;
+        }
+    }
+
+    std::vector<motion_control_pkg::execution::JointCommand> left_commands;
+    std::vector<motion_control_pkg::execution::JointCommand> right_commands;
+    std::string conversion_error;
+    if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
+        trajectories[0], left_commands, conversion_error) ||
+        !motion_control_pkg::motion::trajectoryToVendorDegrees(
+        trajectories[1], right_commands, conversion_error))
+    {
+        abort_goal(conversion_error);
+        return;
+    }
+    const auto synchronized =
+        motion_control_pkg::execution::synchronizeTrajectoryPair(
+        left_commands, right_commands);
+    if (!synchronized.success) {
+        abort_goal(synchronized.error_message);
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MovePose canceled before atomic submission");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MovePose timed out during planning");
+        return;
+    }
+    publish_feedback(
+        MovePose::Feedback::STATUS_EXECUTING, 20.0F, 20.0F,
+        "submitting synchronized pose trajectory batches at 4 ms");
+    auto enqueue = command_coordinator_->enqueueSynchronizedPair(
+        synchronized.left, synchronized.right);
+    if (!enqueue.success) {
+        abort_goal(enqueue.error_message);
+        return;
+    }
+
+    bool client_canceled = false;
+    bool timed_out = false;
+    auto next_feedback = std::chrono::steady_clock::now();
+    while (true) {
+        const auto left = enqueue.left_ticket.snapshot();
+        const auto right = enqueue.right_ticket.snapshot();
+        if (motion_control_pkg::execution::isTerminal(left.state) &&
+            motion_control_pkg::execution::isTerminal(right.state))
+        {
+            break;
+        }
+        if (goal_handle->is_canceling()) {
+            client_canceled = true;
+            enqueue.left_ticket.requestCancel();
+            enqueue.right_ticket.requestCancel();
+        } else if (deadline.expired()) {
+            timed_out = true;
+            enqueue.left_ticket.requestCancel();
+            enqueue.right_ticket.requestCancel();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            const auto progress = [](const auto& snapshot) {
+                return snapshot.sample_count == 0U ? 0.0F :
+                    20.0F + 70.0F * static_cast<float>(snapshot.samples_sent) /
+                    static_cast<float>(snapshot.sample_count);
+            };
+            publish_feedback(
+                MovePose::Feedback::STATUS_EXECUTING,
+                progress(left), progress(right),
+                "streaming one atomic dual-arm pose batch per cycle");
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        enqueue.left_ticket.waitFor(
+            motion_control_pkg::execution::kDualArmControlPeriod);
+    }
+    const auto left_stream = enqueue.left_ticket.snapshot();
+    const auto right_stream = enqueue.right_ticket.snapshot();
+    if (client_canceled) {
+        cancel_goal(
+            "MovePose canceled; future paired samples suppressed");
+        return;
+    }
+    if (timed_out) {
+        abort_goal("MovePose command streaming timed out");
+        return;
+    }
+    if (left_stream.state !=
+        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded ||
+        right_stream.state !=
+        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    {
+        abort_goal(!left_stream.error_message.empty() ?
+            left_stream.error_message : right_stream.error_message);
+        return;
+    }
+
+    publish_feedback(
+        MovePose::Feedback::STATUS_WAITING_FOR_COMPLETION,
+        95.0F, 95.0F, "waiting for both TCP targets to settle");
+    const Eigen::Isometry3d left_target_tcp =
+        motion_control_pkg::kinematics::poseToIsometry(
+        left_planning_target.pose);
+    const Eigen::Isometry3d right_target_tcp =
+        motion_control_pkg::kinematics::poseToIsometry(
+        right_planning_target.pose);
+    std::array<std::optional<std::chrono::steady_clock::time_point>, 2>
+        completed_at;
+    while (!completed_at[0] || !completed_at[1]) {
+        if (goal_handle->is_canceling()) {
+            cancel_goal(
+                "MovePose canceled during completion wait; no "
+                "physical emergency stop was issued");
+            return;
+        }
+        if (deadline.expired()) {
+            abort_goal("MovePose completion wait timed out");
+            return;
+        }
+        motion_control_pkg::sdk::DualArmDeviceState completion;
+        const auto completion_result = sdk_command_gate_->readState(completion);
+        if (!completion_result) {
+            abort_goal(completion_result.error_message);
+            return;
+        }
+        for (std::size_t arm = 0; arm < 2U; ++arm) {
+            if (completion.arms[arm].error_code != 0 ||
+                completion.arms[arm].current_state == 100)
+            {
+                abort_goal(
+                    std::string(arm == 0U ? "left" : "right") +
+                    " arm entered an SDK error during pose completion");
+                return;
+            }
+        }
+        if (!updateArmModelState(
+            completion, left_current, right_current, model_error))
+        {
+            abort_goal(model_error);
+            return;
+        }
+        geometry_msgs::msg::Pose left_tcp_pose;
+        geometry_msgs::msg::Pose right_tcp_pose;
+        if (!computeToolTcpPose(
+            "gripper_base_l_link", left_model_end_to_tool_tcp_,
+            left_tcp_pose, model_error) ||
+            !computeToolTcpPose(
+            "gripper_base_r_link", right_model_end_to_tool_tcp_,
+            right_tcp_pose, model_error))
+        {
+            abort_goal(model_error);
+            return;
+        }
+        result->left_final_distance_error_m =
+            (motion_control_pkg::kinematics::poseToIsometry(left_tcp_pose).
+            translation() - left_target_tcp.translation()).norm();
+        result->right_final_distance_error_m =
+            (motion_control_pkg::kinematics::poseToIsometry(right_tcp_pose).
+            translation() - right_target_tcp.translation()).norm();
+        result->final_distance_error = std::max(
+            result->left_final_distance_error_m,
+            result->right_final_distance_error_m);
+        if (!std::isfinite(result->left_final_distance_error_m) ||
+            !std::isfinite(result->right_final_distance_error_m))
+        {
+            abort_goal("Dual-arm FK returned a non-finite TCP error");
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        for (std::size_t arm = 0; arm < 2U; ++arm) {
+            if (!completed_at[arm] && completion.arms[arm].low_speed) {
+                completed_at[arm] = now;
+            }
+        }
+        if (!completed_at[0] || !completed_at[1]) {
+            std::this_thread::sleep_for(
+                motion_control_pkg::execution::kDualArmControlPeriod);
+        }
+    }
+    result->completion_time_skew_sec = std::abs(
+        std::chrono::duration<double>(
+        *completed_at[0] - *completed_at[1]).count());
+    result->success = true;
+    result->error_message.clear();
+    update_time();
+    publish_feedback(
+        MovePose::Feedback::STATUS_WAITING_FOR_COMPLETION,
+        100.0F, 100.0F, "dual-arm TCP motion completed");
+    terminal.succeed(result);
+}
+
+void DualArmModule::execution_loop_move_joint_impl(
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle,
+    motion_control_pkg::sdk::ArmChannel channel)
+{
+    motion_control_pkg::execution::ActionTerminalGuard<
+        GoalHandleMoveJoints, MoveJoints::Result> terminal(goal_handle);
+    const auto start_time = std::chrono::steady_clock::now();
+    const auto goal = goal_handle->get_goal();
+    auto feedback = std::make_shared<MoveJoints::Feedback>();
+    auto result = std::make_shared<MoveJoints::Result>();
+    result->success = ACTION_FAIL;
+    result->final_distance_error =
+        std::numeric_limits<double>::quiet_NaN();
+
+    const auto update_execution_time = [&]() {
+        result->execution_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - start_time).count();
+    };
+    const auto abort_goal = [&](const std::string& message) {
+        result->success = ACTION_FAIL;
+        result->error_message = message;
+        update_execution_time();
+        terminal.abort(result);
+    };
+    const auto cancel_goal = [&](const std::string& message) {
+        result->success = ACTION_FAIL;
+        result->error_message = message;
+        update_execution_time();
+        terminal.cancel(result);
+    };
+    const auto publish_feedback = [&goal_handle, &feedback, this](
+        float progress, const std::string& step) {
+        feedback->task_status = progress >= 100.0F ? "SUCCEEDED" : "RUNNING";
+        feedback->progress_rate = std::clamp(progress, 0.0F, 100.0F);
+        feedback->current_step_info = step;
+        if (auto node = lockNode(__func__)) {
+            feedback->header.stamp = node->get_clock()->now();
+        }
+        goal_handle->publish_feedback(feedback);
+    };
+
+    const auto expected_channel =
+        motion_control_pkg::execution::armChannelFromId(goal->arm_id);
+    if (!expected_channel || *expected_channel != channel) {
+        abort_goal("MoveJoints requires exactly one matching arm");
+        return;
+    }
+
+    const auto validation =
+        motion_control_pkg::execution::validateAndOrderJointGoal(
+        channel, goal->joint_name, goal->position);
+    if (!validation.valid) {
+        abort_goal(validation.error_message);
+        return;
+    }
+    if (goal->enable_collision_check) {
+        // MoveJoints 尚未接入本阶段的 MiracleMAlgo 碰撞规划链；不能回退
+        // 到恒真的旧占位回调。
+        abort_goal(
+            "Collision-checked MoveJoints is not connected to the validated "
+            "Pinocchio/Coal/OMPL pipeline");
+        return;
+    }
+
+    const auto& base_velocity =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+        l_v_limit_ : r_v_limit_;
+    const auto& base_acceleration =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+        l_a_limit_ : r_a_limit_;
+    const auto& base_jerk =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+        l_jerk_limit_ : r_jerk_limit_;
+    const auto scaled_limits =
+        motion_control_pkg::motion::scaleMotionLimits(
+        base_velocity, base_acceleration, base_jerk,
+        static_cast<double>(goal->speed));
+    if (!scaled_limits.valid) {
+        abort_goal(scaled_limits.error_message);
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MoveJoints goal canceled before execution");
+        return;
+    }
+    if (!init_robot_link_) {
+        abort_goal("Robot link is not initialized");
+        return;
+    }
+
+    const auto timeout = std::chrono::milliseconds(
+        goal->timeout_ms > 0 ? goal->timeout_ms : 5000);
+    motion_control_pkg::execution::SteadyDeadline deadline(timeout);
+    const std::size_t arm_index = static_cast<std::size_t>(channel);
+    const char* arm_name =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+        "left" : "right";
+
+    motion_control_pkg::sdk::DualArmDeviceState initial_state;
+    const auto initial_state_result =
+        sdk_command_gate_->readState(initial_state);
+    if (!initial_state_result) {
+        abort_goal(initial_state_result.error_message);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(arm_status_mtx_);
+        dual_arm_state_ = initial_state;
+    }
+    const auto& selected_initial_state = initial_state.arms[arm_index];
+    if (selected_initial_state.error_code != 0 ||
+        selected_initial_state.current_state == 100)
+    {
+        abort_goal(
+            std::string(arm_name) +
+            " arm reports an SDK state error: error_code=" +
+            std::to_string(selected_initial_state.error_code) +
+            ", current_state=" +
+            std::to_string(selected_initial_state.current_state));
+        return;
+    }
+    if (!selected_initial_state.low_speed) {
+        abort_goal(std::string(arm_name) +
+            " arm is not stationary before MoveJoints planning");
+        return;
+    }
+
+    std::vector<double> current_radians;
+    std::string conversion_error;
+    if (!motion_control_pkg::kinematics::degreesToRadians(
+        selected_initial_state.joint_position, current_radians,
+        conversion_error, std::string(arm_name) + " arm"))
+    {
+        abort_goal(conversion_error);
+        return;
+    }
+    motion_control_pkg::motion::JointVector current_joint{};
+    std::copy(current_radians.begin(), current_radians.end(),
+        current_joint.begin());
+    const motion_control_pkg::motion::JointVector target_joint =
+        validation.ordered_positions;
+    result->final_distance_error =
+        motion_control_pkg::motion::maximumJointErrorRadians(
+        selected_initial_state.joint_position, target_joint);
+    publish_feedback(5.0F, std::string(arm_name) + " arm state acquired");
+
+    // Pinocchio 负责模型关节限位，CCS 配置负责控制器软限位；实际目标取交集。
+    std::vector<double> model_lower(motion_control_pkg::sdk::kArmDof);
+    std::vector<double> model_upper(motion_control_pkg::sdk::kArmDof);
+    if (!miracle_algo_->getChainJointsLimt(
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ? 0 : 1,
+        model_lower, model_upper))
+    {
+        abort_goal(std::string("Failed to obtain ") + arm_name +
+            " arm Pinocchio joint limits");
+        return;
+    }
+    const auto& sdk_lower =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+        l_q_lower_limits_ : r_q_lower_limits_;
+    const auto& sdk_upper =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+        l_q_upper_limits_ : r_q_upper_limits_;
+    const auto effective_limits =
+        motion_control_pkg::motion::intersectPositionLimits(
+        sdk_lower, sdk_upper, model_lower, model_upper);
+    if (!effective_limits.valid) {
+        abort_goal(effective_limits.error_message);
+        return;
+    }
+
+    motion_control_pkg::motion::CcsJoint67Table joint67_table{};
+    for (std::size_t row = 0; row < joint67_table.size(); ++row) {
+        for (std::size_t column = 0;
+            column < joint67_table[row].size(); ++column)
+        {
+            // bd_ 来自当前包的 ccs_m6_40.MvKDCfg，不使用其他工程的常量副本。
+            joint67_table[row][column] = bd_[arm_index][row][column];
+        }
+    }
+    const auto current_validation =
+        motion_control_pkg::motion::validateJointTarget(
+        current_joint, effective_limits.lower, effective_limits.upper,
+        joint67_table);
+    if (!current_validation.valid) {
+        abort_goal(std::string(arm_name) +
+            " arm current state is outside configured constraints: " +
+            current_validation.error_message);
+        return;
+    }
+    const auto target_validation =
+        motion_control_pkg::motion::validateJointTarget(
+        target_joint, effective_limits.lower, effective_limits.upper,
+        joint67_table);
+    if (!target_validation.valid) {
+        abort_goal(std::string(arm_name) +
+            " arm target is invalid: " + target_validation.error_message);
+        return;
+    }
+    publish_feedback(15.0F, std::string(arm_name) +
+        " arm joint constraints validated");
+
+    auto& planner =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+        l_ruckig_planner_ : r_ruckig_planner_;
+    if (!planner) {
+        abort_goal(std::string(arm_name) +
+            " arm Ruckig planner is not initialized");
+        return;
+    }
+    MotionConstraint constraints;
+    constraints.max_vel = scaled_limits.velocity;
+    constraints.max_acc = scaled_limits.acceleration;
+    constraints.max_jerk = scaled_limits.jerk;
+    // 每个手臂持有独立规划器；按 Goal 速度比例重新装载约束，不改变算法。
+    planner->setCycleTime(
+        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
+    if (!planner->init(arm_dof_, constraints)) {
+        abort_goal(std::string(arm_name) +
+            " arm Ruckig planner rejected the scaled constraints");
+        return;
+    }
+
+    Waypoint start_waypoint;
+    Waypoint target_waypoint;
+    start_waypoint.positions.assign(
+        current_joint.begin(), current_joint.end());
+    target_waypoint.positions.assign(
+        target_joint.begin(), target_joint.end());
+    const auto trajectory =
+        planner->plan({start_waypoint, target_waypoint});
+    if (!trajectory.success) {
+        abort_goal(std::string(arm_name) +
+            " arm Ruckig point-to-point planning failed");
+        return;
+    }
+    const auto trajectory_validation =
+        motion_control_pkg::motion::validateTrajectoryPositions(
+        trajectory.positions, effective_limits.lower, effective_limits.upper,
+        joint67_table);
+    if (!trajectory_validation.valid) {
+        abort_goal(trajectory_validation.error_message);
+        return;
+    }
+
+    std::vector<motion_control_pkg::execution::JointCommand> command_points;
+    if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
+        trajectory.positions, command_points, conversion_error))
+    {
+        abort_goal(conversion_error);
+        return;
+    }
+    publish_feedback(25.0F, std::string(arm_name) +
+        " arm Ruckig trajectory ready");
+
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MoveJoints goal canceled before command submission");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MoveJoints timed out before command submission");
+        return;
+    }
+    const auto enqueue_result = command_coordinator_->enqueueTrajectory(
+        channel, std::move(command_points));
+    if (!enqueue_result.success) {
+        abort_goal(enqueue_result.error_message);
+        return;
+    }
+    auto trajectory_ticket = enqueue_result.ticket;
+    bool canceled_by_client = false;
+    bool timed_out = false;
+    auto next_feedback = std::chrono::steady_clock::now();
+
+    while (true) {
+        const auto snapshot = trajectory_ticket.snapshot();
+        if (motion_control_pkg::execution::isTerminal(snapshot.state)) {
+            break;
+        }
+        if (goal_handle->is_canceling()) {
+            canceled_by_client = true;
+            // 协调器取消只抑制后续点，不冒充厂商软急停或物理急停。
+            trajectory_ticket.requestCancel();
+        } else if (deadline.expired()) {
+            timed_out = true;
+            trajectory_ticket.requestCancel();
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            const float command_progress = snapshot.sample_count == 0 ? 0.0F :
+                static_cast<float>(snapshot.samples_sent) /
+                static_cast<float>(snapshot.sample_count);
+            publish_feedback(
+                25.0F + 70.0F * command_progress,
+                std::string(arm_name) +
+                " arm streaming through the 4 ms coordinator");
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        trajectory_ticket.waitFor(
+            motion_control_pkg::execution::kDualArmControlPeriod);
+    }
+
+    const auto trajectory_status = trajectory_ticket.snapshot();
+    if (canceled_by_client) {
+        cancel_goal("MoveJoints goal canceled by client; future samples suppressed");
+        return;
+    }
+    if (timed_out) {
+        abort_goal("MoveJoints command streaming timed out");
+        return;
+    }
+    if (trajectory_status.state !=
+        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    {
+        abort_goal(
+            trajectory_status.error_message.empty() ?
+            "4 ms MoveJoints trajectory execution failed" :
+            trajectory_status.error_message);
+        return;
+    }
+
+    // 所有离散点提交后，用新鲜 SDK 状态等待“低速到位”，并计算最大关节误差。
+    next_feedback = std::chrono::steady_clock::now();
+    while (true) {
+        if (goal_handle->is_canceling()) {
+            cancel_goal(
+                "MoveJoints goal canceled during completion wait; "
+                "no physical emergency stop was issued");
+            return;
+        }
+        if (deadline.expired()) {
+            abort_goal("MoveJoints completion wait timed out");
+            return;
+        }
+
+        motion_control_pkg::sdk::DualArmDeviceState completion_state;
+        const auto completion_state_result =
+            sdk_command_gate_->readState(completion_state);
+        if (!completion_state_result) {
+            abort_goal(completion_state_result.error_message);
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(arm_status_mtx_);
+            dual_arm_state_ = completion_state;
+        }
+        const auto& selected_completion_state =
+            completion_state.arms[arm_index];
+        if (selected_completion_state.error_code != 0 ||
+            selected_completion_state.current_state == 100)
+        {
+            abort_goal(
+                std::string(arm_name) +
+                " arm entered an SDK state error: error_code=" +
+                std::to_string(selected_completion_state.error_code) +
+                ", current_state=" +
+                std::to_string(selected_completion_state.current_state));
+            return;
+        }
+        result->final_distance_error =
+            motion_control_pkg::motion::maximumJointErrorRadians(
+            selected_completion_state.joint_position, target_joint);
+        if (!std::isfinite(result->final_distance_error)) {
+            abort_goal(std::string(arm_name) +
+                " arm returned non-finite completion feedback");
+            return;
+        }
+        if (selected_completion_state.low_speed) {
+            result->success = ACTION_SUCCESS;
+            result->error_message.clear();
+            update_execution_time();
+            publish_feedback(100.0F, std::string(arm_name) +
+                " arm MoveJoints complete");
+            terminal.succeed(result);
+            RCLCPP_INFO(
+                rclcpp::get_logger("dual_arm_module"),
+                "%s arm MoveJoints succeeded; max joint error=%.9f rad",
+                arm_name, result->final_distance_error);
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            publish_feedback(99.0F, std::string(arm_name) +
+                " arm waiting for low-speed completion");
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+void DualArmModule::execution_loop_move_pose_impl(
+    std::shared_ptr<GoalHandleMovePose> goal_handle,
+    motion_control_pkg::sdk::ArmChannel channel,
+    const geometry_msgs::msg::PoseStamped& planning_target)
+{
+    motion_control_pkg::execution::ActionTerminalGuard<
+        GoalHandleMovePose, MovePose::Result> terminal(goal_handle);
+    const auto start_time = std::chrono::steady_clock::now();
     const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<MovePose::Feedback>();
     auto result = std::make_shared<MovePose::Result>();
-    std::cout<<"execute_move_pose***"<<std::endl;
-    std::cout<<"l_init_arm_params_ := "<<l_init_arm_params_<<std::endl;
-    if(!l_init_arm_params_)
-    {
+    result->success = ACTION_FAIL;
+    result->final_distance_error =
+        std::numeric_limits<double>::quiet_NaN();
+
+    const auto update_execution_time = [&]() {
+        result->execution_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - start_time).count();
+    };
+    const auto abort_goal = [&](const std::string& message) {
         result->success = ACTION_FAIL;
-        result->error_message = "Init Robot Arm Paramters failed";
-        goal_handle->abort(result);
-        is_executing_left_arm_.store(false);
-        is_executing_right_arm_.store(false);
-        return;
-    }  
-    RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "l init left arm_params");
-    if(!init_robot_link_)
-    {        
+        result->error_message = message;
+        update_execution_time();
+        terminal.abort(result);
+    };
+    const auto cancel_goal = [&](const std::string& message) {
         result->success = ACTION_FAIL;
-        result->error_message = " Robot Link failed";
-        goal_handle->abort(result);
-        is_executing_left_arm_.store(false);
-        is_executing_right_arm_.store(false);
-        return;
-    }
-    RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "init robot link ");
-    OnGetBuf(&dcss_);
-    int arm_error_a=dcss_.m_State[0].m_ERRCode;
-    int arm_state_a=dcss_.m_State[0].m_CurState;
-    if (arm_error_a!=0 || arm_state_a==100)
-    {
-        result->success = ACTION_FAIL;
-        result->error_message = " left arm exits error";
-        goal_handle->abort(result);
-        is_executing_left_arm_.store(false);
-        is_executing_right_arm_.store(false);
-        return;
-    }
-
-    int arm_error_b=dcss_.m_State[1].m_ERRCode;
-    int arm_state_b=dcss_.m_State[1].m_CurState;
-    if (arm_error_b!=0 || arm_state_b==100)
-    {
-        result->success = ACTION_FAIL;
-        result->error_message = " right arm exits error";
-        goal_handle->abort(result);
-        is_executing_left_arm_.store(false);
-        is_executing_right_arm_.store(false);
-        return;
-    }
-    RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "arm no error ");
-
-          RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), " robot no servo errors ");
-
-    for(int i = 0; i < arm_dof_; i++)
-    {
-        l_current_joint_[i] = dcss_.m_Out[0].m_FB_Joint_Pos[i] ;
-        r_current_joint_[i] = dcss_.m_Out[1].m_FB_Joint_Pos[i] ;
-        l_sp_.m_Input_IK_RefJoint[i] = l_current_joint_[i];
-        r_sp_.m_Input_IK_RefJoint[i] = r_current_joint_[i];
-    }
-    std::cout<<"start pos:="<<l_current_joint_[0]<<","<<l_current_joint_[1]
-      <<","<<l_current_joint_[2]<<","<<l_current_joint_[3]
-      <<","<<l_current_joint_[4]<<","<<l_current_joint_[5]
-      <<","<<l_current_joint_[6]<<std::endl;
-    if(goal->enable_collision_check)
-    {
-        auto tar_pose = goal->target_pose.pose;
-        geometry_msgs::msg::Pose pose;
-        auto safety_distance = goal->bound_size;
-        pose.position.x = tar_pose.position.x + safety_distance[0];
-        pose.position.y = tar_pose.position.y + safety_distance[1];
-        pose.position.z = tar_pose.position.z + safety_distance[2];
-        pose.orientation.x = tar_pose.orientation.x;
-        pose.orientation.y = tar_pose.orientation.y;
-        pose.orientation.z = tar_pose.orientation.z;
-        pose.orientation.w = tar_pose.orientation.w;
-        Matrix4 l_tar_pos,r_tar_pos;
-        
-        if(goal->arm_id==ARM_LEFT)
-        {      
-          pose_to_matrix(pose,l_tar_pos);
-          Matrix4 l_tcp_;
-          matrix_multiply(l_install_base_inv_,l_tar_pos,l_tcp_);
-          print_matrix(l_tcp_);
-          for (int i = 0; i < 4; i++)
-          {
-                for (int j = 0; j < 4; j++)
-                {
-                    l_sp_.m_Input_IK_TargetTCP[i][j] = l_tcp_[i][j];
-                }
-          }
-        //Todo: 任务节点添加目标构型的关节角度
-        // double Ret_joints[7]={0.0,50.0,-30.0,30.0,40.0,10.0,10.0};
-        // for (long i = 0; i < arm_dof_; i++)
-        //   {
-        //     l_sp_.m_Input_IK_RefJoint[i] = Ret_joints[i];
-        //   }
-            l_sp_.m_Input_IK_ZSPType=1;
-            l_sp_.m_Input_IK_ZSPPara[0]=l_tar_pos[0][0];
-            l_sp_.m_Input_IK_ZSPPara[1]=l_tar_pos[1][0];
-            l_sp_.m_Input_IK_ZSPPara[2]=l_tar_pos[2][0];
-            l_sp_.m_Input_ZSP_Angle = 0.0;
-          if (FX_Robot_Kine_IK(0, &l_sp_) == FX_FALSE)
-          {
-              result->success = ACTION_FAIL;
-              result->error_message = "left arm inverse kinamatics error";
-              RCLCPP_ERROR(rclcpp::get_logger("dual_arm_module"), "left arm inverse kinamatics error");
-              goal_handle->abort(result);
-              is_executing_left_arm_.store(false);
-              return;
-          }
-          RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), " arm inverse kinamatics no errors ");
-          double tar_joints[7]={10.0,10.0,20.0,30.0,40.0,10.0,10.0};
-          for (long i = 0; i < arm_dof_; i++)
-          {
-             tar_joints[i] = l_sp_.m_Output_RetJoint[i];
-          }
-          std::cout<<"tar_joints:="<<tar_joints[0]<<","<<tar_joints[1]<<","<<tar_joints[2]<<","<<tar_joints[3]<<","<<tar_joints[4]<<","<<tar_joints[5]<<","<<tar_joints[6]<<std::endl;
-          //运动规划
-          auto& ompl = OMPLWrapper::instance();         
-          std::vector<double>q_start(7);
-          std::vector<double>q_goal(7);
-          for(int i=0;i<arm_dof_;i++)
-          {
-             q_start[i] = l_current_joint_[i]*DEG2RAD;
-             q_goal[i] = tar_joints[i]*DEG2RAD;
-          }
-         ompl.setJointLimits(l_q_lower_limits_, l_q_upper_limits_);
-         ompl.setPlanningGroup(PlanningGroup::LEFT_ARM);
-         ompl.setPlanner(OmplPlanner::RRTConnect);
-         ompl.setEnableColliderCheck(goal->enable_collision_check);  //enable collide check or not
-         auto res = ompl.plan(q_start, q_goal);        
-         if(res.success)
-         {
-            l_current_traj_  = traj_ptr_->plan(res.wayPoints);     
-            std::cout<<"ompl res:="<<res.wayPoints.size()<<std::endl;
-            if (l_current_traj_.success)
-            {
-                while(true)
-                {   
-                    int points = l_current_traj_.positions.size();
-                    std::cout<<"toppra res:="<<points<<std::endl;
-                    arm_status_mtx_.lock();
-                    l_traj_active_ = (arm_status_error_==false)?true:false;
-                    arm_status_mtx_.unlock();
-                    RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), " l_traj_active_ = %s\n", l_traj_active_ ? "true" : "false");
-                    if(l_traj_active_)
-                    {
-                        for(int i =0;i<points;i++)
-                        {
-                            // 检查是否收到了取消请求
-                            if (goal_handle->is_canceling()) {
-                                // ... 执行机械臂急停操作 ...
-                                result->success = ACTION_FAIL;
-                                result->error_message = " Goal canceled by client";
-                                goal_handle->canceled(result);
-                                RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "[%s] Goal canceled by client.", name_.c_str());
-                                
-                                // 结束执行前，释放繁忙标记
-                                is_executing_left_arm_.store(false);
-                                return;
-                            }
-                            //下发运动点位
-                            double joints_a[7] = {0.0};
-                            for(int j=0;j<arm_dof_;j++)
-                            {
-                                joints_a[j] = l_current_traj_.positions[i][j]*RAD2DEG;
-                            }
-                            OnClearSet();
-                            OnSetJointCmdPos_A(joints_a);
-                            OnSetSend();
-                            l_step_++;
-                            feedback->task_status  = 1;
-                            feedback->progress_rate = static_cast<double>(l_step_)/points * 100.0;
-                            if (feedback->progress_rate > 100.0)
-                            {
-                                feedback->progress_rate = 100.0;
-                            }
-                            else if (feedback->progress_rate < 0.0)
-                            {
-                                feedback->progress_rate = 0.0;
-                            }
-
-                            RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), " feedback->progress_rate:%.1f, %d, %d\n", feedback->progress_rate, l_step_, points);
-
-                            feedback->current_step_info = "joint command send";
-                            if (auto node = lockNode(__func__)) {
-                                feedback->header.stamp = node->get_clock()->now();
-                            }
-                            goal_handle->publish_feedback(feedback);   //要加限流反馈
-                            rclcpp::sleep_for(std::chrono::milliseconds(2));
-                        } 
-                        while(1)
-                        {
-                            arm_status_mtx_.lock();
-                            //RCLCPP_INFO(node_->get_logger(), "dcss_.m_Out[0].m_LowSpdFlag = %d", dcss_.m_Out[0].m_LowSpdFlag);
-                            if(dcss_.m_Out[0].m_LowSpdFlag == 1 && dcss_.m_Out[1].m_LowSpdFlag)
-                            {
-                                arm_status_mtx_.unlock();
-                                break;
-                            }
-                            arm_status_mtx_.unlock();
-
-                            
-                        }
-                        
-                        RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), " goal_handle->succeed(result)");
-                        result->success = ACTION_SUCCESS;
-                        goal_handle->succeed(result);
-                        // 正常结束，恢复空闲状态
-                        is_executing_left_arm_.store(false);
-                        break;                       
-                    }else{
-                        feedback->task_status  = 1;
-                        feedback->progress_rate = l_step_/points;
-                        feedback->current_step_info = "joint command send";
-                        if (auto node = lockNode(__func__)) {
-                            feedback->header.stamp = node->get_clock()->now();
-                        }
-                        goal_handle->publish_feedback(feedback);
-                    }
-                }
-
-            }else{
-                result->success = ACTION_FAIL;
-                result->error_message = " traj plan failed";
-                goal_handle->abort(result);
-                is_executing_left_arm_.store(false);
-                return; 
-            }
-         }else{
-
-            result->success = ACTION_FAIL;
-            result->error_message = " ompl plan failed";
-            goal_handle->abort(result);
-            is_executing_left_arm_.store(false);
-            return;
-         }
-        }else if(goal->arm_id==ARM_RIGHT)
-        {
-          pose_to_matrix(pose,r_tar_pos);
-         for (int i = 0; i < 4; i++)
-          {
-            for (int j = 0; j < 4; j++)
-            {
-              r_sp_.m_Input_IK_TargetTCP[i][j] = r_tar_pos[i][j];
-            }
-          }
-
-         if (FX_Robot_Kine_IK(1, &r_sp_) == FX_FALSE)
-          {
-              result->success = ACTION_FAIL;
-              result->error_message = "right arm inverse kinamatics error";
-              goal_handle->abort(result);
-              is_executing_right_arm_.store(false);
-              return;
-          }
-
-        }else if(goal->arm_id==ARM_BOTH)
-        {
-          
-           pose_to_matrix(pose,l_tar_pos);
-           geometry_msgs::msg::Pose r_pose;
-           r_pose.position.x = pose.position.x + safety_distance[3];
-           r_pose.position.y = pose.position.y + safety_distance[4];
-           r_pose.position.z = pose.position.z + safety_distance[5];
-           r_pose.orientation.x = tar_pose.orientation.x;
-           r_pose.orientation.y = tar_pose.orientation.y;
-           r_pose.orientation.z = tar_pose.orientation.z;
-           r_pose.orientation.w = tar_pose.orientation.w;
-           pose_to_matrix(pose,r_tar_pos);
-
+        result->error_message = message;
+        update_execution_time();
+        terminal.cancel(result);
+    };
+    const auto publish_feedback = [&goal_handle, &feedback, this](
+        float progress, const std::string& step) {
+        feedback->task_status = progress >= 100.0F ? "SUCCEEDED" : "RUNNING";
+        feedback->progress_rate = std::clamp(progress, 0.0F, 100.0F);
+        feedback->current_step_info = step;
+        if (auto node = lockNode(__func__)) {
+            feedback->header.stamp = node->get_clock()->now();
         }
+        goal_handle->publish_feedback(feedback);
+    };
+
+    const auto expected_channel =
+        motion_control_pkg::execution::armChannelFromId(goal->arm_id);
+    if (!expected_channel || *expected_channel != channel) {
+        abort_goal("MovePose requires exactly one matching arm");
+        return;
+    }
+
+    const std::size_t arm_index = static_cast<std::size_t>(channel);
+    const bool is_left =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft;
+    const char* arm_name = is_left ? "left" : "right";
+    const char* model_end_frame = is_left ?
+        "gripper_base_l_link" : "gripper_base_r_link";
+    const auto& model_end_to_tool_tcp = is_left ?
+        left_model_end_to_tool_tcp_ : right_model_end_to_tool_tcp_;
+
+    const auto scaled_limits =
+        motion_control_pkg::motion::scaleMotionLimits(
+        is_left ? l_v_limit_ : r_v_limit_,
+        is_left ? l_a_limit_ : r_a_limit_,
+        is_left ? l_jerk_limit_ : r_jerk_limit_,
+        static_cast<double>(goal->speed));
+    if (!scaled_limits.valid) {
+        abort_goal(scaled_limits.error_message);
+        return;
+    }
+    if (goal->use_force_control) {
+        abort_goal("MovePose force control is not implemented in stage 7");
+        return;
+    }
+    if (!goal->hand_action_type.empty()) {
+        abort_goal("MovePose hand actions are not implemented before the tool stage");
+        return;
+    }
+    const auto& point_cloud = goal->env_point_cloud;
+    if (!point_cloud.data.empty() || point_cloud.width != 0U ||
+        point_cloud.height != 0U)
+    {
+        abort_goal(
+            "MovePose environment point cloud was not loaded into the "
+            "MiracleMAlgo collision world");
+        return;
+    }
+    if (!goal->bound_size.empty() &&
+        (goal->bound_size.size() != 3U ||
+        !std::all_of(
+            goal->bound_size.begin(), goal->bound_size.end(),
+            [](float value) {
+                return std::isfinite(value) && value > 0.0F;
+            })))
+    {
+        abort_goal(
+            "MovePose bound_size must be empty or contain three finite "
+            "positive dimensions in metres");
+        return;
+    }
+    if (!l_init_arm_params_) {
+        abort_goal("Robot kinematics parameters are not initialized");
+        return;
+    }
+    if (!init_robot_link_) {
+        abort_goal("Robot link is not initialized");
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MovePose goal canceled before execution");
+        return;
+    }
+
+    const auto timeout = std::chrono::milliseconds(
+        goal->timeout_ms > 0 ? goal->timeout_ms : 5000);
+    motion_control_pkg::execution::SteadyDeadline deadline(timeout);
+    RCLCPP_INFO(
+        rclcpp::get_logger("dual_arm_module"),
+        "Starting %s arm MovePose using Pinocchio%s and existing trajectory libraries",
+        arm_name, goal->enable_collision_check ? "/Coal/OMPL" : " IK");
+
+    motion_control_pkg::sdk::DualArmDeviceState initial_state;
+    const auto state_result = sdk_command_gate_->readState(initial_state);
+    if (!state_result) {
+        abort_goal(state_result.error_message);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(arm_status_mtx_);
+        dual_arm_state_ = initial_state;
+    }
+    const auto& selected_initial_state = initial_state.arms[arm_index];
+    if (selected_initial_state.error_code != 0 ||
+        selected_initial_state.current_state == 100)
+    {
+        abort_goal(
+            std::string(arm_name) +
+            " arm reports an SDK state error: error_code=" +
+            std::to_string(selected_initial_state.error_code) +
+            ", current_state=" +
+            std::to_string(selected_initial_state.current_state));
+        return;
+    }
+    if (!selected_initial_state.low_speed) {
+        abort_goal(std::string(arm_name) +
+            " arm is not stationary before MovePose planning");
+        return;
+    }
+
+    std::vector<double> left_joint_radians;
+    std::vector<double> right_joint_radians;
+    std::string model_error;
+    if (!updateArmModelState(
+        initial_state, left_joint_radians, right_joint_radians, model_error))
+    {
+        abort_goal(model_error);
+        return;
+    }
+    std::vector<double> full_start_q;
+    if (!miracle_algo_->getFullJointState(full_start_q)) {
+        abort_goal("Failed to obtain the Pinocchio full-body start state");
+        return;
+    }
+    std::vector<double> current_arm_q;
+    if (!miracle_algo_->extractSingleArmJoints(
+        is_left, full_start_q, current_arm_q))
+    {
+        abort_goal(std::string("Failed to extract ") + arm_name +
+            " arm joints by model name");
+        return;
+    }
+    publish_feedback(5.0F, std::string(arm_name) + " arm state acquired");
+
+    // Action 目标始终表示工具 TCP；先反解固定 end_T_tcp，再把中央
+    // planning_frame 目标交给同一 Pinocchio 模型转换到模型根坐标系。
+    const Eigen::Isometry3d planning_to_model_end =
+        motion_control_pkg::kinematics::targetTcpToModelEndPose(
+        planning_target.pose, model_end_to_tool_tcp);
+    Eigen::Isometry3d root_to_model_end = Eigen::Isometry3d::Identity();
+    if (!miracle_algo_->transformPoseToModelRoot(
+        planning_frame_, full_start_q, planning_to_model_end,
+        root_to_model_end))
+    {
+        abort_goal("Failed to transform the MovePose target into the model root frame");
+        return;
+    }
+
+    // Pinocchio 模型限位与当前包 CCS 软限位取交集；OMPL 路点与时间参数化
+    // 后的全部 4 ms 采样点都会经过同一套约束检查。
+    std::vector<double> model_lower(motion_control_pkg::sdk::kArmDof);
+    std::vector<double> model_upper(motion_control_pkg::sdk::kArmDof);
+    if (!miracle_algo_->getChainJointsLimt(
+        is_left ? 0 : 1, model_lower, model_upper))
+    {
+        abort_goal(std::string("Failed to obtain ") + arm_name +
+            " arm Pinocchio joint limits");
+        return;
+    }
+    const auto effective_limits =
+        motion_control_pkg::motion::intersectPositionLimits(
+        is_left ? l_q_lower_limits_ : r_q_lower_limits_,
+        is_left ? l_q_upper_limits_ : r_q_upper_limits_,
+        model_lower, model_upper);
+    if (!effective_limits.valid) {
+        abort_goal(effective_limits.error_message);
+        return;
+    }
+    motion_control_pkg::motion::CcsJoint67Table joint67_table{};
+    for (std::size_t row = 0; row < joint67_table.size(); ++row) {
+        for (std::size_t column = 0;
+            column < joint67_table[row].size(); ++column)
+        {
+            joint67_table[row][column] = bd_[arm_index][row][column];
+        }
+    }
+    motion_control_pkg::motion::JointVector current_joint{};
+    std::copy(current_arm_q.begin(), current_arm_q.end(),
+        current_joint.begin());
+    const auto current_validation =
+        motion_control_pkg::motion::validateJointTarget(
+        current_joint, effective_limits.lower, effective_limits.upper,
+        joint67_table);
+    if (!current_validation.valid) {
+        abort_goal(std::string(arm_name) +
+            " arm current state is outside configured constraints: " +
+            current_validation.error_message);
+        return;
+    }
+
+    std::vector<std::vector<double>> active_arm_path;
+    if (goal->enable_collision_check) {
+        // 复用 MiracleMAlgo 内部 Pinocchio IK、Coal 状态有效性与 OMPL
+        // RRTConnect；旧的恒真 OMPLWrapper 不再进入 MovePose 主链。
+        std::vector<std::vector<double>> full_ompl_path;
+        if (!miracle_algo_->planSingleArmCartesianGoal(
+            is_left, full_start_q, root_to_model_end, full_ompl_path))
+        {
+            abort_goal(std::string(arm_name) +
+                " arm Pinocchio/Coal/OMPL pose planning failed");
+            return;
+        }
+        active_arm_path.reserve(full_ompl_path.size());
+        for (const auto& full_q : full_ompl_path) {
+            std::vector<double> arm_q;
+            if (!miracle_algo_->extractSingleArmJoints(
+                is_left, full_q, arm_q))
+            {
+                abort_goal("OMPL returned an invalid full-body waypoint");
+                return;
+            }
+            active_arm_path.push_back(std::move(arm_q));
+        }
+        publish_feedback(15.0F, std::string(arm_name) +
+            " arm collision-checked OMPL path ready");
+    } else {
+        // 无碰撞模式仍使用现成 Pinocchio IK。单目标形成唯一的起终两点，
+        // 必须交给 Ruckig，不通过业务层插值。
+        std::vector<double> ik_goal;
+        if (!miracle_algo_->solveSingleArmCartesianIk(
+            is_left, full_start_q, root_to_model_end, ik_goal))
+        {
+            abort_goal(std::string(arm_name) + " arm Pinocchio IK failed");
+            return;
+        }
+        active_arm_path = {current_arm_q, std::move(ik_goal)};
+        publish_feedback(15.0F, std::string(arm_name) +
+            " arm Pinocchio IK target ready");
+    }
+
+    const auto pose_path =
+        motion_control_pkg::motion::preparePoseWaypointPath(active_arm_path);
+    if (!pose_path.valid) {
+        abort_goal(pose_path.error_message);
+        return;
+    }
+    std::vector<std::vector<double>> waypoint_positions;
+    waypoint_positions.reserve(pose_path.waypoints.size());
+    for (const auto& waypoint : pose_path.waypoints) {
+        waypoint_positions.push_back(waypoint.positions);
+    }
+    const auto waypoint_validation =
+        motion_control_pkg::motion::validateTrajectoryPositions(
+        waypoint_positions, effective_limits.lower, effective_limits.upper,
+        joint67_table);
+    if (!waypoint_validation.valid) {
+        abort_goal("IK/OMPL path violates configured constraints: " +
+            waypoint_validation.error_message);
+        return;
+    }
+
+    const bool use_ruckig = pose_path.kind ==
+        motion_control_pkg::motion::PoseTrajectoryKind::kRuckigPointToPoint;
+    TrajectoryPlanner* planner = nullptr;
+    if (is_left) {
+        planner = use_ruckig ?
+            l_ruckig_planner_.get() : l_toppra_planner_.get();
+    } else {
+        planner = use_ruckig ?
+            r_ruckig_planner_.get() : r_toppra_planner_.get();
+    }
+    const char* planner_name = use_ruckig ? "Ruckig" : "TOPPRA";
+    if (planner == nullptr) {
+        abort_goal(std::string(arm_name) + " arm " + planner_name +
+            " planner is not initialized");
+        return;
+    }
+    MotionConstraint constraints;
+    constraints.max_vel = scaled_limits.velocity;
+    constraints.max_acc = scaled_limits.acceleration;
+    constraints.max_jerk = scaled_limits.jerk;
+    planner->setCycleTime(
+        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
+    if (!planner->init(arm_dof_, constraints)) {
+        abort_goal(std::string(planner_name) +
+            " rejected the scaled MovePose constraints");
+        return;
+    }
+
+    // 两点只调用一次 Ruckig；三点及以上的 OMPL 路径整体交给 TOPPRA。
+    // 禁止逐段 Ruckig 拼接，两个规划器都统一输出 4 ms 采样。
+    const auto trajectory = planner->plan(pose_path.waypoints);
+    if (!trajectory.success) {
+        abort_goal(std::string(arm_name) + " arm " + planner_name +
+            " time parameterization failed");
+        return;
+    }
+    const auto trajectory_validation =
+        motion_control_pkg::motion::validateTrajectoryPositions(
+        trajectory.positions, effective_limits.lower, effective_limits.upper,
+        joint67_table);
+    if (!trajectory_validation.valid) {
+        abort_goal(trajectory_validation.error_message);
+        return;
+    }
+    std::vector<motion_control_pkg::execution::JointCommand> command_points;
+    std::string conversion_error;
+    if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
+        trajectory.positions, command_points, conversion_error))
+    {
+        abort_goal(conversion_error);
+        return;
+    }
+    publish_feedback(25.0F, std::string(arm_name) + " arm " + planner_name +
+        " 4 ms trajectory ready");
+
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MovePose goal canceled before command submission");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MovePose timed out before command submission");
+        return;
+    }
+    const auto enqueue_result = command_coordinator_->enqueueTrajectory(
+        channel, std::move(command_points));
+    if (!enqueue_result.success) {
+        abort_goal(enqueue_result.error_message);
+        return;
+    }
+    auto trajectory_ticket = enqueue_result.ticket;
+    bool canceled_by_client = false;
+    bool timed_out = false;
+    auto next_feedback = std::chrono::steady_clock::now();
+    while (true) {
+        const auto snapshot = trajectory_ticket.snapshot();
+        if (motion_control_pkg::execution::isTerminal(snapshot.state)) {
+            break;
+        }
+        if (goal_handle->is_canceling()) {
+            canceled_by_client = true;
+            // 普通 Action 取消只抑制后续点，不声称执行了厂商或物理急停。
+            trajectory_ticket.requestCancel();
+        } else if (deadline.expired()) {
+            timed_out = true;
+            trajectory_ticket.requestCancel();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            const float command_progress = snapshot.sample_count == 0 ? 0.0F :
+                static_cast<float>(snapshot.samples_sent) /
+                static_cast<float>(snapshot.sample_count);
+            publish_feedback(
+                25.0F + 70.0F * command_progress,
+                std::string(arm_name) +
+                " arm streaming through the 4 ms coordinator");
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        trajectory_ticket.waitFor(
+            motion_control_pkg::execution::kDualArmControlPeriod);
+    }
+
+    const auto trajectory_status = trajectory_ticket.snapshot();
+    if (canceled_by_client) {
+        cancel_goal(
+            "MovePose goal canceled by client; future samples suppressed");
+        return;
+    }
+    if (timed_out) {
+        abort_goal("MovePose command streaming timed out");
+        return;
+    }
+    if (trajectory_status.state !=
+        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    {
+        abort_goal(
+            trajectory_status.error_message.empty() ?
+            "4 ms MovePose trajectory execution failed" :
+            trajectory_status.error_message);
+        return;
+    }
+
+    // Action 终态只由这条共享左右臂链产生：持续读取新鲜 SDK 状态，更新
+    // Pinocchio FK，并以工具 TCP 平移误差（米）填充 final_distance_error。
+    next_feedback = std::chrono::steady_clock::now();
+    const Eigen::Isometry3d target_tcp =
+        motion_control_pkg::kinematics::poseToIsometry(planning_target.pose);
+    while (true) {
+        if (goal_handle->is_canceling()) {
+            cancel_goal(
+                "MovePose goal canceled during completion wait; "
+                "no physical emergency stop was issued");
+            return;
+        }
+        if (deadline.expired()) {
+            abort_goal("MovePose completion wait timed out");
+            return;
+        }
+
+        motion_control_pkg::sdk::DualArmDeviceState completion_state;
+        const auto completion_result =
+            sdk_command_gate_->readState(completion_state);
+        if (!completion_result) {
+            abort_goal(completion_result.error_message);
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(arm_status_mtx_);
+            dual_arm_state_ = completion_state;
+        }
+        const auto& selected_completion_state =
+            completion_state.arms[arm_index];
+        if (selected_completion_state.error_code != 0 ||
+            selected_completion_state.current_state == 100)
+        {
+            abort_goal(
+                std::string(arm_name) +
+                " arm entered an SDK state error: error_code=" +
+                std::to_string(selected_completion_state.error_code) +
+                ", current_state=" +
+                std::to_string(selected_completion_state.current_state));
+            return;
+        }
+
+        if (!updateArmModelState(
+            completion_state, left_joint_radians, right_joint_radians,
+            model_error))
+        {
+            abort_goal(model_error);
+            return;
+        }
+        geometry_msgs::msg::Pose current_tcp_pose;
+        if (!computeToolTcpPose(
+            model_end_frame, model_end_to_tool_tcp, current_tcp_pose,
+            model_error))
+        {
+            abort_goal(model_error);
+            return;
+        }
+        const Eigen::Isometry3d current_tcp =
+            motion_control_pkg::kinematics::poseToIsometry(current_tcp_pose);
+        result->final_distance_error =
+            (current_tcp.translation() - target_tcp.translation()).norm();
+        if (!std::isfinite(result->final_distance_error)) {
+            abort_goal(std::string(arm_name) +
+                " arm returned non-finite completion feedback");
+            return;
+        }
+
+        if (selected_completion_state.low_speed) {
+            result->success = ACTION_SUCCESS;
+            result->error_message.clear();
+            update_execution_time();
+            publish_feedback(100.0F, std::string(arm_name) +
+                " arm MovePose complete");
+            terminal.succeed(result);
+            RCLCPP_INFO(
+                rclcpp::get_logger("dual_arm_module"),
+                "%s arm MovePose succeeded via %s; TCP translation error=%.9f m",
+                arm_name, planner_name, result->final_distance_error);
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            publish_feedback(99.0F, std::string(arm_name) +
+                " arm waiting for low-speed completion");
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -514,6 +2519,19 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
 {
     //添加机器人开/合抓逻辑   示例
     const auto goal = goal_handle->get_goal();
+    std::atomic<bool> * first_busy_flag = nullptr;
+    std::atomic<bool> * second_busy_flag = nullptr;
+    if (goal->gripper_id == GRIPPER_LEFT) {
+        first_busy_flag = &is_executing_left_tool_;
+    } else if (goal->gripper_id == GRIPPER_RIGHT) {
+        first_busy_flag = &is_executing_right_tool_;
+    } else if (goal->gripper_id == GRIPPER_BOTH) {
+        first_busy_flag = &is_executing_left_tool_;
+        second_busy_flag = &is_executing_right_tool_;
+    }
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        first_busy_flag, second_busy_flag);
+    ControlGripperTerminalGuard terminal(goal_handle);
     rclcpp::Clock ros_clock(RCL_ROS_TIME);
     // 起始时间：把msg里的stamp转成rclcpp::Time
     rclcpp::Time start_time(goal->header.stamp);
@@ -541,8 +2559,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             result->success = ACTION_FAIL;
             result->error_message = "Get gripper_A status failed";
             RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_A"), "Get gripper_A status failed");
-            goal_handle->abort(result);
-            is_executing_left_tool_.store(false);
+            terminal.abort(result);
             return;
         }
 
@@ -554,6 +2571,13 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             // 休眠20ms
 
             rclcpp::sleep_for(std::chrono::milliseconds(20));
+
+            if (goal_handle->is_canceling()) {
+                result->success = ACTION_FAIL;
+                result->error_message = "ControlGripper goal canceled by client";
+                terminal.cancel(result);
+                return;
+            }
 
             /* 超时检查 */
             rclcpp::Time now = ros_clock.now();
@@ -568,10 +2592,8 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
                 result->final_position[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].position;
                 result->final_torque[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].torque;
                 result->final_torque[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].torque;
-                result->success = ACTION_SUCCESS;
-                goal_handle->abort(result);
-                is_executing_left_tool_.store(false);
-                break;
+                terminal.abort(result);
+                return;
             }
             ret = jodell_control->Jodell_Status_A(&rt_status[GRIPPER_LEFT]);
 
@@ -580,8 +2602,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
                 log_jodell_status(rclcpp::get_logger("Jodell_Status_A"), rt_status[GRIPPER_LEFT]);
                 if(rt_status[GRIPPER_LEFT].gto == 0)
                 {
-                    control_gripper_result(rt_status, result, goal_handle);
-                    is_executing_left_tool_.store(false);
+                    control_gripper_result(rt_status, result, terminal);
                     break;
                 }
                 else
@@ -610,8 +2631,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             result->success = ACTION_FAIL;
             result->error_message = "Get gripper_B status failed";
             RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_B"), "Get gripper_B status failed");
-            goal_handle->abort(result);
-            is_executing_right_tool_.store(false);
+            terminal.abort(result);
             return;
         }
         jodell_control->Jodell_Move_Abs_B(goal->position[GRIPPER_RIGHT], goal->max_torque[GRIPPER_RIGHT], goal->speed[GRIPPER_RIGHT]);
@@ -623,6 +2643,13 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
 
             rclcpp::sleep_for(std::chrono::milliseconds(20));
 
+            if (goal_handle->is_canceling()) {
+                result->success = ACTION_FAIL;
+                result->error_message = "ControlGripper goal canceled by client";
+                terminal.cancel(result);
+                return;
+            }
+
             /* 超时检查 */
             rclcpp::Time now = ros_clock.now();
             int64_t diff_ns = (now - start_time).nanoseconds();
@@ -632,9 +2659,8 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
                 RCLCPP_INFO(rclcpp::get_logger("timeout"), "timeout exit");
                 result->success = ACTION_FAIL;
                 result->error_message = "time_out";
-                goal_handle->abort(result);
-                is_executing_right_tool_.store(false);
-                break;
+                terminal.abort(result);
+                return;
             }
 
 
@@ -644,8 +2670,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             {
                 if(rt_status[GRIPPER_RIGHT].gto == 0)
                 {
-                    control_gripper_result(rt_status, result, goal_handle);
-                    is_executing_right_tool_.store(false);
+                    control_gripper_result(rt_status, result, terminal);
                     break;
                 }
                 else
@@ -706,6 +2731,13 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
 
             rclcpp::sleep_for(std::chrono::milliseconds(20));
 
+            if (goal_handle->is_canceling()) {
+                result->success = ACTION_FAIL;
+                result->error_message = "ControlGripper goal canceled by client";
+                terminal.cancel(result);
+                return;
+            }
+
             /* 超时检查 */
             rclcpp::Time now = ros_clock.now();
             int64_t diff_ns = (now - start_time).nanoseconds();
@@ -715,10 +2747,8 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
                 RCLCPP_INFO(rclcpp::get_logger("timeout"), "timeout exit");
                 result->success = ACTION_FAIL;
                 result->error_message = "time_out";
-                goal_handle->abort(result);
-                is_executing_left_tool_.store(false);
-                is_executing_right_tool_.store(false);
-                break;
+                terminal.abort(result);
+                return;
             }
 
 
@@ -728,9 +2758,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             {
                 if(rt_status[GRIPPER_LEFT].gto == 0 && rt_status[GRIPPER_RIGHT].gto == 0)
                 {
-                    control_gripper_result(rt_status, result, goal_handle);
-                    is_executing_left_tool_.store(false);
-                    is_executing_right_tool_.store(false);
+                    control_gripper_result(rt_status, result, terminal);
                     break;
                 }
                 else
@@ -752,8 +2780,9 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
     }
     else
     {
-        is_executing_left_tool_.store(false);
-        is_executing_right_tool_.store(false);
+        result->success = ACTION_FAIL;
+        result->error_message = "Unsupported gripper_id";
+        terminal.abort(result);
         return;
     }
 
@@ -765,24 +2794,38 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
  bool DualArmModule::init_arm_params()
  {
     bool res = false;
-    if (LOADMvCfg((char*)"/config/ccs_m6_40.MvKDCfg", type_, grv_, dh_, pnva_, bd_, mass_, mcp_, i_) == FX_FALSE)
+    std::string mutable_config_path = sdk_config_path_;
+    if (LOADMvCfg(
+        mutable_config_path.data(), type_, grv_, dh_, pnva_, bd_, mass_,
+        mcp_, i_) == FX_FALSE)
     {
-         std::cout<<"1*****"<<std::endl;
+       RCLCPP_ERROR(
+           rclcpp::get_logger("dual_arm_module"),
+           "Failed to load Marvin config: %s", sdk_config_path_.c_str());
        return res;
     }
-    if (FX_Robot_Init_Type(0, type_[0])&&FX_Robot_Init_Type(1, type_[1]) == FX_FALSE )
+    if (FX_Robot_Init_Type(0, type_[0]) == FX_FALSE ||
+        FX_Robot_Init_Type(1, type_[1]) == FX_FALSE)
     {
-         std::cout<<"11*****"<<std::endl;
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "Failed to initialize Marvin robot types");
         return res;
     }
-    if(FX_Robot_Init_Kine(0, dh_[0])&&FX_Robot_Init_Kine(1, dh_[1]) == FX_FALSE )
+    if (FX_Robot_Init_Kine(0, dh_[0]) == FX_FALSE ||
+        FX_Robot_Init_Kine(1, dh_[1]) == FX_FALSE)
     {
-         std::cout<<"12*****"<<std::endl;
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "Failed to initialize Marvin kinematics");
         return res;
     }
-    if(FX_Robot_Init_Lmt(0, pnva_[0], bd_[0])&&FX_Robot_Init_Lmt(1, pnva_[1], bd_[1]) == FX_FALSE )
+    if (FX_Robot_Init_Lmt(0, pnva_[0], bd_[0]) == FX_FALSE ||
+        FX_Robot_Init_Lmt(1, pnva_[1], bd_[1]) == FX_FALSE)
     {
-         std::cout<<"13*****"<<std::endl;
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "Failed to initialize Marvin joint limits");
         return res;
     }
 
@@ -810,8 +2853,10 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
       std::cout<<"i:="<<i<<","<<"a:="<< pnva_[0][i][3]<<std::endl;
     
 
-      l_jerk_limit_[i] = 5.0*l_a_limit_[i]*DEG2RAD;
-      r_jerk_limit_[i] = 5.0*r_a_limit_[i]*DEG2RAD;
+      // 加速度在上一行已经由度制转换为 rad/s²；jerk 只按倍数生成，
+      // 不得再次乘 DEG2RAD，否则约束会被错误缩小约 57.3 倍。
+      l_jerk_limit_[i] = 5.0 * l_a_limit_[i];
+      r_jerk_limit_[i] = 5.0 * r_a_limit_[i];
 
     }
      std::cout<<"15*****"<<std::endl;
@@ -819,60 +2864,59 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
     return res;
  }
 
- void DualArmModule::init_set_tcp()
- {
-
-    for (int i = 0; i < 4; i++)
-    {
-        for (int j = 0; j < 4; j++)
-        {
-            if (i == j)
-            {
-                l_tool_[i][j] = 1.0;
-                r_tool_[i][j] = 1.0;
-            }
-            else
-            {
-                l_tool_[i][j] = 0.0;
-                r_tool_[i][j] = 0.0;
-            }
-
-        }
-    }
-    l_tool_[2][3] = 178.5;
-    r_tool_[2][3] = 178.5;
-
-    if (FX_Robot_Tool_Set(0, l_tool_) == FX_FALSE)
-    {
-        printf("Robot Set Left Tool Error\n");
-    }
-    else
-    {
-        printf("Robot Set Left Tool Success\n");
-    }
-
-    if (FX_Robot_Tool_Set(1, r_tool_) == FX_FALSE)
-    {
-        printf("Robot Set Right Tool Error\n");
-    }
-    else
-    {
-        printf("Robot Set Right Tool Success\n");
-    }
-
- }
-
-
-
-void DualArmModule::set_arm_control_mode()
+bool DualArmModule::init_set_tcp(std::string& error_message)
 {
-    OnClearSet();
-    OnSetTargetState_A(1) ;
-    OnSetJointLmt_A(10, 10) ;
-    OnSetTargetState_B(1) ;
-    OnSetJointLmt_B(10, 10) ;
-    OnSetSend();
-    rclcpp::sleep_for(std::chrono::milliseconds(1));
+    // 复用配置中的同一份 end_T_tcp：既用于状态 FK，也用于厂商 IK 的工具设置，
+    // 避免保留另一组硬编码 TCP 参数。
+    const auto set_tool = [&error_message](
+        int arm_index,
+        const char* arm_name,
+        const Eigen::Isometry3d& model_end_to_tool_tcp) {
+          Matrix4 vendor_tool{};
+          const auto vendor_matrix =
+              motion_control_pkg::kinematics::toVendorMillimeterMatrix(
+              model_end_to_tool_tcp);
+          for (std::size_t row = 0; row < 4U; ++row) {
+            for (std::size_t column = 0; column < 4U; ++column) {
+              vendor_tool[row][column] = vendor_matrix[row][column];
+            }
+          }
+          if (FX_Robot_Tool_Set(arm_index, vendor_tool) == FX_FALSE) {
+            error_message = std::string("Failed to configure ") + arm_name +
+              " tool transform in Marvin kinematics";
+            return false;
+          }
+          return true;
+        };
+
+    if (motion_control_pkg::sdk::isArmEnabled(
+        arm_configuration_, motion_control_pkg::sdk::ArmChannel::kLeft) &&
+        !set_tool(0, "left", left_model_end_to_tool_tcp_))
+    {
+        return false;
+    }
+    if (motion_control_pkg::sdk::isArmEnabled(
+        arm_configuration_, motion_control_pkg::sdk::ArmChannel::kRight) &&
+        !set_tool(1, "right", right_model_end_to_tool_tcp_))
+    {
+        return false;
+    }
+
+    error_message.clear();
+    return true;
+}
+
+
+
+bool DualArmModule::set_arm_control_mode(std::string& error_message)
+{
+    const auto result = sdk_command_gate_->initializePositionMode(10, 10);
+    if (!result) {
+        error_message = result.error_message;
+        return false;
+    }
+    error_message.clear();
+    return true;
 }
 
 
@@ -926,7 +2970,10 @@ float_t DualArmModule::get_progress_1000(int init_val, int tar_val, int curr_val
     return progress;
 }
 
-void DualArmModule::control_gripper_result(Jodell_status *rt_status, std::shared_ptr<ControlGripper::Result> result, const std::shared_ptr<GoalHandleControlGripper> goal_handle)
+void DualArmModule::control_gripper_result(
+    Jodell_status *rt_status,
+    std::shared_ptr<ControlGripper::Result> result,
+    ControlGripperTerminalGuard& terminal)
 {
     result->success = ACTION_SUCCESS;
     if (rt_status[GRIPPER_LEFT].err_active || rt_status[GRIPPER_RIGHT].err_active)
@@ -1059,13 +3106,13 @@ void DualArmModule::control_gripper_result(Jodell_status *rt_status, std::shared
     {
         result->success = ACTION_FAIL;
         RCLCPP_ERROR(rclcpp::get_logger("control_gripper_result"), "%s", result->error_message.c_str());
-        goal_handle->abort(result);
+        terminal.abort(result);
     }
     else
     {
         result->success = ACTION_SUCCESS;
         
-        goal_handle->succeed(result);
+        terminal.succeed(result);
     }
     
     return;
@@ -1084,6 +3131,11 @@ void DualArmModule::heart_beat_cb()
 }
 void DualArmModule::init_motor_status()
 {
+    motor_status_msg_.joint_names.clear();
+    motor_status_msg_.joint_positions.clear();
+    motor_status_msg_.joint_velocities.clear();
+    motor_status_msg_.joint_efforts.clear();
+    motor_status_msg_.end_effector_pose.clear();
     for(const auto&name :MotorName)
     {
        motor_status_msg_.joint_names.push_back(name);
@@ -1091,221 +3143,176 @@ void DualArmModule::init_motor_status()
        motor_status_msg_.joint_velocities.push_back(0.0);
        motor_status_msg_.joint_efforts.push_back(0.0);
     }
-    l_end_effector_pose.position.x = 0.0;
-    l_end_effector_pose.position.y = 0.0;
-    l_end_effector_pose.position.z = 0.0;
-    l_end_effector_pose.orientation.w = 1.0;
-    l_end_effector_pose.orientation.x = 0.0;
-    l_end_effector_pose.orientation.y = 0.0;
-    l_end_effector_pose.orientation.z = 0.0;
-    motor_status_msg_.end_effector_pose.push_back(l_end_effector_pose);    
-
-    r_end_effector_pose.position.x = 0.0;
-    r_end_effector_pose.position.y = 0.0;
-    r_end_effector_pose.position.z = 0.0;
-    r_end_effector_pose.orientation.w = 1.0;
-    r_end_effector_pose.orientation.x = 0.0;
-    r_end_effector_pose.orientation.y = 0.0;
-    r_end_effector_pose.orientation.z = 0.0;
-    motor_status_msg_.end_effector_pose.push_back(r_end_effector_pose);  
+    geometry_msgs::msg::Pose identity_pose;
+    identity_pose.orientation.w = 1.0;
+    motor_status_msg_.end_effector_pose.push_back(identity_pose);
+    motor_status_msg_.end_effector_pose.push_back(identity_pose);
 }
 
-geometry_msgs::msg::Pose DualArmModule::matrix_to_pose(const Matrix4& mat)
+bool DualArmModule::updateArmModelState(
+    const motion_control_pkg::sdk::DualArmDeviceState& state,
+    std::vector<double>& left_radians,
+    std::vector<double>& right_radians,
+    std::string& error_message)
 {
-    geometry_msgs::msg::Pose pose;
-
-    pose.position.x = mat[0][3];
-    pose.position.y = mat[1][3];
-    pose.position.z = mat[2][3];
- 
-    double r00 = mat[0][0], r01 = mat[0][1], r02 = mat[0][2];
-    double r10 = mat[1][0], r11 = mat[1][1], r12 = mat[1][2];
-    double r20 = mat[2][0], r21 = mat[2][1], r22 = mat[2][2];
- 
-    double qw, qx, qy, qz;
-    double trace = r00 + r11 + r22;
-
-    if (trace > 0) {
-        double s = 0.5 / sqrt(trace + 1.0);
-        qw = 0.25 / s;
-        qx = (r21 - r12) * s;
-        qy = (r02 - r20) * s;
-        qz = (r10 - r01) * s;
-    } else {
-        if (r00 > r11 && r00 > r22) {
-            double s = 2.0 * sqrt(1.0 + r00 - r11 - r22);
-            qw = (r21 - r12) / s;
-            qx = 0.25 * s;
-            qy = (r01 + r10) / s;
-            qz = (r02 + r20) / s;
-        } else if (r11 > r22) {
-            double s = 2.0 * sqrt(1.0 + r11 - r00 - r22);
-            qw = (r02 - r20) / s;
-            qx = (r01 + r10) / s;
-            qy = 0.25 * s;
-            qz = (r12 + r21) / s;
-        } else {
-            double s = 2.0 * sqrt(1.0 + r22 - r00 - r11);
-            qw = (r10 - r01) / s;
-            qx = (r02 + r20) / s;
-            qy = (r12 + r21) / s;
-            qz = 0.25 * s;
-        }
+    // 两条链必须来自同一份 SDK 状态快照，避免左右臂 FK 时刻不一致。
+    if (!motion_control_pkg::kinematics::degreesToRadians(
+        state.arms[0].joint_position, left_radians, error_message,
+        "left arm"))
+    {
+        return false;
+    }
+    if (!motion_control_pkg::kinematics::degreesToRadians(
+        state.arms[1].joint_position, right_radians, error_message,
+        "right arm"))
+    {
+        return false;
     }
 
-    pose.orientation.x = qx;
-    pose.orientation.y = qy;
-    pose.orientation.z = qz;
-    pose.orientation.w = qw;
-
-    return pose;
-
-}
-
-void DualArmModule::pose_to_matrix(const geometry_msgs::msg::Pose& pose,Matrix4& mat)
-{
-     // 提取位置
-    double x = pose.position.x;
-    double y = pose.position.y;
-    double z = pose.position.z;
-
-    // 提取四元数并归一化（确保单位四元数）
-    double qx = pose.orientation.x;
-    double qy = pose.orientation.y;
-    double qz = pose.orientation.z;
-    double qw = pose.orientation.w;
-    double norm = std::sqrt(qx*qx + qy*qy + qz*qz + qw*qw);
-    if (norm > 0.0) {
-        qx /= norm; qy /= norm; qz /= norm; qw /= norm;
+    std::string left_chain = "left_arm";
+    std::string right_chain = "right_arm";
+    if (miracle_algo_->updateChainJointsAngle(
+        left_chain, left_radians) != 0)
+    {
+        error_message =
+            "Failed to update left_arm Pinocchio joint state from Marvin feedback";
+        return false;
+    }
+    if (miracle_algo_->updateChainJointsAngle(
+        right_chain, right_radians) != 0)
+    {
+        error_message =
+            "Failed to update right_arm Pinocchio joint state from Marvin feedback";
+        return false;
     }
 
-    // 计算旋转矩阵元素
-    double xx = qx * qx, yy = qy * qy, zz = qz * qz;
-    double xy = qx * qy, xz = qx * qz, yz = qy * qz;
-    double wx = qw * qx, wy = qw * qy, wz = qw * qz;
-
-    mat[0][0] = 1.0 - 2.0*(yy + zz);
-    mat[0][1] = 2.0*(xy - wz);
-    mat[0][2] = 2.0*(xz + wy);
-    mat[0][3] = x;
-
-    mat[1][0] = 2.0*(xy + wz);
-    mat[1][1] = 1.0 - 2.0*(xx + zz);
-    mat[1][2] = 2.0*(yz - wx);
-    mat[1][3] = y;
-
-    mat[2][0] = 2.0*(xz - wy);
-    mat[2][1] = 2.0*(yz + wx);
-    mat[2][2] = 1.0 - 2.0*(xx + yy);
-    mat[2][3] = z;
-
-    // 最后一行
-    mat[3][0] = 0.0;
-    mat[3][1] = 0.0;
-    mat[3][2] = 0.0;
-    mat[3][3] = 1.0;
-
+    error_message.clear();
+    return true;
 }
 
-bool DualArmModule::check_robot_statu_error()
+bool DualArmModule::computeToolTcpPose(
+    const std::string& model_end_frame,
+    const Eigen::Isometry3d& model_end_to_tool_tcp,
+    geometry_msgs::msg::Pose& tool_tcp_pose,
+    std::string& error_message)
 {
-    bool res = false;
-//     int arm_error_a=dcss_.m_State[0].m_ERRCode;
-//     int arm_state_a=dcss_.m_State[0].m_CurState;
-//     if (arm_error_a!=0 || arm_state_a==100)
-//     {
-//         res = true;
-//         return res;
-//     }
+    // 机械臂内部固定链全部由 URDF/Pinocchio 求解，不再维护安装矩阵副本。
+    Eigen::Matrix4d planning_to_model_end;
+    if (!miracle_algo_->getForwardKinematics(
+        planning_frame_, model_end_frame, planning_to_model_end))
+    {
+        error_message = "Pinocchio FK failed from " + planning_frame_ +
+            " to " + model_end_frame;
+        return false;
+    }
+    if (!planning_to_model_end.allFinite() ||
+        !model_end_to_tool_tcp.matrix().allFinite())
+    {
+        error_message = "Pinocchio FK or configured tool TCP contains non-finite values";
+        return false;
+    }
 
-//     int arm_error_b=dcss_.m_State[1].m_ERRCode;
-//     int arm_state_b=dcss_.m_State[1].m_CurState;
-//     if (arm_error_b!=0 || arm_state_b==100)
-//     {
-//         res = true;
-//         return res;
-//     }
-
-//     long ErrCode_A[7]={};
-//     long ErrCode_B[7]={};
-//     OnGetServoErr_A(ErrCode_A);
-//     OnGetServoErr_B(ErrCode_B);
-//     bool allZero_a = true;
-//     bool allZero_b = true;
-//     for (int i = 0; i < 7; ++i) 
-//     {
-//         if (ErrCode_A[i] != 0) {
-//             allZero_a = false;
-//             break;
-//         }
-//     }
-//     for (int i = 0; i < 7; ++i) 
-//     {
-//         if (ErrCode_B[i] != 0) {
-//             allZero_b = false;
-//             break;
-//         }
-//     }
-//    if(allZero_a)
-//    {
-//        res = true;
-//         return res;
-//    }
-
-//    if(allZero_b)
-//    {
-//        res = true;
-//         return res;
-//    }
-
-    return res;
+    tool_tcp_pose = motion_control_pkg::kinematics::composeToolTcpPose(
+        planning_to_model_end, model_end_to_tool_tcp);
+    error_message.clear();
+    return true;
 }
 
 void DualArmModule::motor_statu_cb()
-{       
-   auto node = lockNode(__func__);
-   if (!node) {
-     return;
-   }
-   // 查验连接是否成功
+{
+    auto node = lockNode(__func__);
+    if (!node) {
+      return;
+    }
+    motor_status_msg_.header.frame_id = planning_frame_;
+    // 查验连接是否成功
     if (!init_robot_link_) {
-     init_motor_status();
-     motor_status_msg_.header.stamp = node->get_clock()->now();
-     motor_status_pub_->publish(motor_status_msg_);
-    }else
-    {
-      arm_status_mtx_.lock();
-      OnGetBuf(&dcss_);
-      arm_status_mtx_.unlock();
-      //dcss_[0].
-      auto is_error = check_robot_statu_error();
-      if(is_error)
-      {
-        arm_status_mtx_.lock();
-        arm_status_error_ = true;
-        arm_status_mtx_.unlock();
-      }
-      double current_joints_a[7]={0.0};
-      double current_joints_b[7]={0.0};
-      for (int i = 0; i < 7; i++)
-      {
-         current_joints_a[i] = dcss_.m_Out[0].m_FB_Joint_Pos[i];
-         current_joints_b[i] = dcss_.m_Out[1].m_FB_Joint_Pos[i];
-         motor_status_msg_.joint_positions[i] = dcss_.m_Out[0].m_FB_Joint_Pos[i];
-         motor_status_msg_.joint_positions[i+7] = dcss_.m_Out[1].m_FB_Joint_Pos[i];
-         motor_status_msg_.joint_velocities[i] = dcss_.m_Out[0].m_FB_Joint_Vel[i];
-         motor_status_msg_.joint_velocities[i+7] = dcss_.m_Out[1].m_FB_Joint_Vel[i];
-         motor_status_msg_.joint_efforts[i] = dcss_.m_Out[0].m_FB_Joint_SToq[i];
-         motor_status_msg_.joint_efforts[i+7] = dcss_.m_Out[1].m_FB_Joint_SToq[i];
-      }
-        Matrix4 l_end_pos,r_end_pos;
-        FX_Robot_Kine_FK(0, current_joints_a, l_end_pos);
-        FX_Robot_Kine_FK(1, current_joints_b, r_end_pos);
-        
-        motor_status_msg_.end_effector_pose[0] = matrix_to_pose(l_end_pos);
-        motor_status_msg_.end_effector_pose[1] = matrix_to_pose(r_end_pos);
+      init_motor_status();
+      motor_status_msg_.header.frame_id = planning_frame_;
+      motor_status_msg_.header.stamp = node->get_clock()->now();
+      motor_status_pub_->publish(motor_status_msg_);
+    } else {
+      motion_control_pkg::sdk::DualArmDeviceState latest_state;
+      const auto state_result = sdk_command_gate_->readState(latest_state);
+      if (!state_result) {
+        RCLCPP_ERROR(
+            node->get_logger(), "Read dual arm state failed: %s",
+            state_result.error_message.c_str());
+        init_motor_status();
+        motor_status_msg_.header.frame_id = planning_frame_;
         motor_status_msg_.header.stamp = node->get_clock()->now();
         motor_status_pub_->publish(motor_status_msg_);
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(arm_status_mtx_);
+        dual_arm_state_ = latest_state;
+      }
+      std::vector<double> left_joint_radians;
+      std::vector<double> right_joint_radians;
+      std::string model_error;
+      if (!updateArmModelState(
+          latest_state, left_joint_radians, right_joint_radians, model_error))
+      {
+        RCLCPP_ERROR(
+            node->get_logger(), "Dual-arm model update failed: %s",
+            model_error.c_str());
+        motor_status_msg_.header.stamp = node->get_clock()->now();
+        motor_status_pub_->publish(motor_status_msg_);
+        return;
+      }
+
+      std::vector<double> left_velocity_radians;
+      std::vector<double> right_velocity_radians;
+      if (!motion_control_pkg::kinematics::degreesToRadians(
+          latest_state.arms[0].joint_velocity, left_velocity_radians,
+          model_error, "left arm velocity") ||
+          !motion_control_pkg::kinematics::degreesToRadians(
+          latest_state.arms[1].joint_velocity, right_velocity_radians,
+          model_error, "right arm velocity"))
+      {
+        RCLCPP_ERROR(
+            node->get_logger(), "Dual-arm velocity conversion failed: %s",
+            model_error.c_str());
+        motor_status_msg_.header.stamp = node->get_clock()->now();
+        motor_status_pub_->publish(motor_status_msg_);
+        return;
+      }
+
+      for (int i = 0; i < 7; i++)
+      {
+         motor_status_msg_.joint_positions[i] = left_joint_radians[i];
+         motor_status_msg_.joint_positions[i+7] = right_joint_radians[i];
+         motor_status_msg_.joint_velocities[i] = left_velocity_radians[i];
+         motor_status_msg_.joint_velocities[i+7] = right_velocity_radians[i];
+         motor_status_msg_.joint_efforts[i] = latest_state.arms[0].joint_effort[i];
+         motor_status_msg_.joint_efforts[i+7] = latest_state.arms[1].joint_effort[i];
+      }
+
+      geometry_msgs::msg::Pose left_tcp_pose;
+      geometry_msgs::msg::Pose right_tcp_pose;
+      const bool left_fk_ok = computeToolTcpPose(
+          "gripper_base_l_link", left_model_end_to_tool_tcp_,
+          left_tcp_pose, model_error);
+      if (!left_fk_ok) {
+        RCLCPP_ERROR(
+            node->get_logger(), "Left arm FK failed: %s", model_error.c_str());
+      }
+      const bool right_fk_ok = computeToolTcpPose(
+          "gripper_base_r_link", right_model_end_to_tool_tcp_,
+          right_tcp_pose, model_error);
+      if (!right_fk_ok) {
+        RCLCPP_ERROR(
+            node->get_logger(), "Right arm FK failed: %s", model_error.c_str());
+      }
+      if (left_fk_ok) {
+        motor_status_msg_.end_effector_pose[0] = left_tcp_pose;
+      }
+      if (right_fk_ok) {
+        motor_status_msg_.end_effector_pose[1] = right_tcp_pose;
+      }
+      motor_status_msg_.header.stamp = node->get_clock()->now();
+      motor_status_pub_->publish(motor_status_msg_);
     }
 }
 
@@ -1313,24 +3320,3 @@ void DualArmModule::joint_command_cb()
 {
 
 }
-
- void DualArmModule:: matrix_multiply(const Matrix4& a, const Matrix4& b, Matrix4& result)
- {
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            result[i][j] = 0;
-            for (int k = 0; k < 4; ++k) {
-                result[i][j] += a[i][k] * b[k][j];
-            }
-        }
-    }
- }
-  void DualArmModule::print_matrix(Matrix4 a)
-  {
-       for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            std::cout << std::fixed << std::setprecision(2) << std::setw(8) << a[i][j] << " ";
-        }
-        std::cout << std::endl;
-    }
-  }

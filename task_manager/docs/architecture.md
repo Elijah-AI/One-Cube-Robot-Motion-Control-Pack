@@ -333,7 +333,7 @@ boot_task:                           # 启动任务
 | 结构体 | 动作类型 | 关键字段 |
 |--------|----------|----------|
 | `VisionActionParam` | `vision_detect` | target_obj_name, need_6d_pose, downsample_res |
-| `MoveArmParam` | `move_arm` | arm_id, use_planning, config_pose |
+| `MoveArmParam` | `move_arm` | arm_id, enable_collision_check, config_pose, bound_size, use_force_control, hand_action_type, timeout_ms |
 | `GripperParam` | `gripper_ctrl` | gripper_id, position, speed, timeout_ms |
 | `VisionCheckSelfParam` | `vision_check_self` | timeout_ms |
 | `ControlCheckSelfParam` | `control_check_self` | timeout_ms, com_port |

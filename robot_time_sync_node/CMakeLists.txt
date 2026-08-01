@@ -12,25 +12,13 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-
-# 编译自定义msg
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/SyncedRobotVision.msg"
-  "msg/NodeStatus.msg"
-  "msg/HeartBeat.msg"
-  "msg/MotorInfo.msg"
-  "msg/CameraRawData.msg"
-  DEPENDENCIES std_msgs sensor_msgs geometry_msgs builtin_interfaces
-)
+find_package(com_interfaces REQUIRED)
 
 # 生成可执行文件
 add_executable(time_sync_node src/time_sync.cpp)
 ament_target_dependencies(time_sync_node
-  rclcpp std_msgs sensor_msgs geometry_msgs builtin_interfaces
+  rclcpp std_msgs sensor_msgs geometry_msgs builtin_interfaces com_interfaces
 )
-rosidl_target_interfaces(time_sync_node
-  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # 安装可执行文件
 install(TARGETS

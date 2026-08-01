@@ -9,6 +9,7 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
+#include <vector>
 
 #include "task_config_parser.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -17,23 +18,29 @@
 // 使用 com_interfaces 中的 Action 定义
 #include "com_interfaces/action/vision_detection.hpp"
 #include "com_interfaces/action/control_gripper.hpp"
-#include "com_interfaces/action/move_arm.hpp"
+#include "com_interfaces/action/control_suck.hpp"
+#include "com_interfaces/action/move_pose.hpp"
 #include "com_interfaces/action/hardware_check.hpp"
 #include "com_interfaces/action/hardware_reset.hpp"
+#include "com_interfaces/action/move_joints.hpp"
 
 
 namespace task_act
 {
 using VisionDet = com_interfaces::action::VisionDetection;
-using MoveArm = com_interfaces::action::MoveArm;
+using MovePose = com_interfaces::action::MovePose;
 using CtrlGripper = com_interfaces::action::ControlGripper;
+using CtrlSuck = com_interfaces::action::ControlSuck;
 using HardWareCheck = com_interfaces::action::HardwareCheck;
 using HardWareReset = com_interfaces::action::HardwareReset;
+using MoveJoints = com_interfaces::action::MoveJoints;
 using GoalHandleVisionDetection = rclcpp_action::ClientGoalHandle<VisionDet>;
-using GoalHandleMoveArm = rclcpp_action::ClientGoalHandle<MoveArm>;
+using GoalHandleMovePose = rclcpp_action::ClientGoalHandle<MovePose>;
 using GoalHandleCtrlGripper = rclcpp_action::ClientGoalHandle<CtrlGripper>;
+using GoalHandleCtrlSuck = rclcpp_action::ClientGoalHandle<CtrlSuck>;
 using GoalHandleHardWareCheck = rclcpp_action::ClientGoalHandle<HardWareCheck>;
 using GoalHandleHardWareReset = rclcpp_action::ClientGoalHandle<HardWareReset>;
+using GoalHandleMoveJoints = rclcpp_action::ClientGoalHandle<MoveJoints>;
 
 // 动作全局状态枚举
 enum class ActionRunState
@@ -99,6 +106,8 @@ enum class ResourceType
     RIGHT_ARM,      ///< 右机械臂
     LEFT_GRIPPER,   ///< 左夹爪
     RIGHT_GRIPPER,  ///< 右夹爪
+    LEFT_SUCK,      ///< 左吸盘
+    RIGHT_SUCK,     ///< 右吸盘
     COUNT           ///< 资源总数（哨兵）
 };
 
@@ -112,6 +121,8 @@ inline const char* resource_type_to_str(ResourceType r)
         case ResourceType::RIGHT_ARM:     return "RIGHT_ARM";
         case ResourceType::LEFT_GRIPPER:  return "LEFT_GRIPPER";
         case ResourceType::RIGHT_GRIPPER: return "RIGHT_GRIPPER";
+        case ResourceType::LEFT_SUCK:     return "LEFT_SUCK";
+        case ResourceType::RIGHT_SUCK:    return "RIGHT_SUCK";
         default:                          return "UNKNOWN";
     }
 }
@@ -126,6 +137,29 @@ struct ActionContext
     std::vector<ResourceType> acquired_resources;  ///< 该 action 占用的资源列表
 };
 
+namespace detail
+{
+
+/// Atomically finishes one branch and transfers only that branch's leases
+/// to the caller for release. Other concurrently running branches are untouched.
+inline std::vector<ResourceType> complete_context(
+    std::map<std::string, ActionContext>& contexts,
+    std::mutex& contexts_mutex,
+    const std::string& state_key,
+    ActionRunState state,
+    ActionCallResult call_result)
+{
+    std::lock_guard<std::mutex> lock(contexts_mutex);
+    auto& context = contexts[state_key];
+    context.state = state;
+    context.call_result = call_result;
+    std::vector<ResourceType> resources;
+    resources.swap(context.acquired_resources);
+    return resources;
+}
+
+}  // namespace detail
+
 class TaskActionClient
 {
 public:
@@ -137,8 +171,8 @@ public:
         const std::string& task_id, const task_cfg::VisionActionParam& param,
         const std::string& state_key = "default");
 
-    ActionCallResult call_move_arm(
-        const std::string& task_id, const task_cfg::MoveArmParam& param,
+    ActionCallResult call_move_pose(
+        const std::string& task_id, const task_cfg::MovePoseParam& param,
         const geometry_msgs::msg::PoseStamped& target_pose,
         const sensor_msgs::msg::PointCloud2& cloud, const std::string& frame_id,
         const std::string& state_key = "default");
@@ -171,6 +205,18 @@ public:
     /// @brief 调用运控复位（/Control/Reset）
     ActionCallResult call_control_reset(
         const std::string& task_id, const task_cfg::ControlResetParam& param,
+        const std::string& state_key = "default");
+
+    // ========= MoveJoints 相关接口 =========
+    /// @brief 调用关节空间移动（/Control/move_joints）
+    ActionCallResult call_move_joints(
+        const std::string& task_id, const task_cfg::MoveJointsParam& param,
+        const std::string& state_key = "default");
+
+    // ========= ControlSuck 相关接口 =========
+    /// @brief 调用吸盘控制（/Control/control_suck）
+    ActionCallResult call_control_suck(
+        const std::string& task_id, const task_cfg::SuckParam& param,
         const std::string& state_key = "default");
 
     // 统一入口：根据 AtomicAction 分发执行
@@ -240,9 +286,9 @@ private:
     void feedback_callback(GoalHandleVisionDetection::SharedPtr, const std::shared_ptr<const VisionDet::Feedback> feedback);
     void result_callback(const GoalHandleVisionDetection::WrappedResult & result);
 
-    void arm_goal_response_callback(GoalHandleMoveArm::SharedPtr goal_handle);
-    void arm_feedback_callback(GoalHandleMoveArm::SharedPtr, const std::shared_ptr<const MoveArm::Feedback> feedback);
-    void arm_result_callback(const GoalHandleMoveArm::WrappedResult & result);
+    void arm_goal_response_callback(GoalHandleMovePose::SharedPtr goal_handle);
+    void arm_feedback_callback(GoalHandleMovePose::SharedPtr, const std::shared_ptr<const MovePose::Feedback> feedback);
+    void arm_result_callback(const GoalHandleMovePose::WrappedResult & result);
 
 
     void gripper_goal_response_callback(GoalHandleCtrlGripper::SharedPtr goal_handle);
@@ -259,6 +305,16 @@ private:
     void hw_reset_feedback_callback(GoalHandleHardWareReset::SharedPtr, const std::shared_ptr<const HardWareReset::Feedback> feedback);
     void hw_reset_result_callback(const GoalHandleHardWareReset::WrappedResult & result);
 
+    // ========= MoveJoints 回调 =========
+    void move_joints_goal_response_callback(GoalHandleMoveJoints::SharedPtr goal_handle);
+    void move_joints_feedback_callback(GoalHandleMoveJoints::SharedPtr, const std::shared_ptr<const MoveJoints::Feedback> feedback);
+    void move_joints_result_callback(const GoalHandleMoveJoints::WrappedResult & result);
+
+    // ========= ControlSuck 回调 =========
+    void control_suck_goal_response_callback(GoalHandleCtrlSuck::SharedPtr goal_handle);
+    void control_suck_feedback_callback(GoalHandleCtrlSuck::SharedPtr, const std::shared_ptr<const CtrlSuck::Feedback> feedback);
+    void control_suck_result_callback(const GoalHandleCtrlSuck::WrappedResult & result);
+
     /// @brief 根据动作类型和参数确定所需的资源列表
     std::vector<ResourceType> get_required_resources(
         const std::string& act_type, const task_cfg::AtomicAction& act) const;
@@ -266,6 +322,12 @@ private:
     /// @brief 释放 ActionContext 中已获取的所有资源
     /// @param ctx 动作上下文
     void release_acquired_resources(ActionContext& ctx);
+
+    /// @brief 原子地终结指定分支，并且只释放该分支占用的资源。
+    void complete_action_context(
+        const std::string& state_key,
+        ActionRunState state,
+        ActionCallResult call_result);
 
     /// @brief 动作类型分发执行（send_goal 共享逻辑）
     /// @param act 原子动作
@@ -279,15 +341,19 @@ private:
         ActionContext& ctx,
         const std::string& state_key);
 
-    // 五类 Action 客户端
+    // 六类 Action 客户端
     rclcpp_action::Client<VisionDet>::SharedPtr vision_client_;
-    rclcpp_action::Client<MoveArm>::SharedPtr arm_client_;
+    rclcpp_action::Client<MovePose>::SharedPtr arm_client_;
     rclcpp_action::Client<CtrlGripper>::SharedPtr gripper_client_;
     rclcpp_action::Client<HardWareCheck>::SharedPtr hw_check_client_;
     rclcpp_action::Client<HardWareReset>::SharedPtr hw_reset_client_;
     // 运控自检/复位独立客户端（必须为成员变量，不能是局部变量，否则回调无法触发）
     rclcpp_action::Client<HardWareCheck>::SharedPtr control_check_client_;
     rclcpp_action::Client<HardWareReset>::SharedPtr control_reset_client_;
+    // 关节移动客户端（/Control/move_joints）
+    rclcpp_action::Client<MoveJoints>::SharedPtr move_joints_client_;
+    // 吸盘控制客户端（/Control/control_suck）
+    rclcpp_action::Client<CtrlSuck>::SharedPtr control_suck_client_;
 
     // ========= 基于 state_key 的独立 action 上下文管理 =========
     /// @brief 获取指定 state_key 的上下文（const 版本）

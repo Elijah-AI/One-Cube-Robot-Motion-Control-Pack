@@ -183,6 +183,7 @@ MiracleMAlgo::MiracleMAlgo(const std::string& urdf_path, const std::string& mesh
 }
 
 void MiracleMAlgo::setupInternalCollisionPairs() {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     // Clear all existing collision pairs first
     geom_model_.collisionPairs.clear();
     
@@ -224,6 +225,7 @@ void MiracleMAlgo::setupInternalCollisionPairs() {
 
 
 void MiracleMAlgo::disableCollisionPair(const std::string& geom1_name, const std::string& geom2_name) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     if(!geom_model_.existGeometryName(geom1_name) || !geom_model_.existGeometryName(geom2_name)) {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "Geometry not found! geom1=%s geom2=%s", geom1_name.c_str(), geom2_name.c_str());
         return;
@@ -238,6 +240,7 @@ void MiracleMAlgo::disableCollisionPair(const std::string& geom1_name, const std
 void MiracleMAlgo::addExternalCollisionBox(const std::string& name, 
                                               const Eigen::Vector3d& size, 
                                               const Eigen::Isometry3d& pose) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     // Prevent adding duplicates
     if (std::find(external_objects_.begin(), external_objects_.end(), name) != external_objects_.end()) {
         RCLCPP_WARN(rclcpp::get_logger("MiracleMAlgo"), "External object '%s' already exists.", name.c_str());
@@ -280,6 +283,7 @@ void MiracleMAlgo::addExternalCollisionBox(const std::string& name,
 }
 
 void MiracleMAlgo::removeExternalCollisionObject(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     auto it = std::find(external_objects_.begin(), external_objects_.end(), name);
     if (it != external_objects_.end()) {
         external_objects_.erase(it);
@@ -314,6 +318,7 @@ Eigen::VectorXd MiracleMAlgo::toEigenConfig(const std::vector<double>& full_q) c
 }
 
 bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     if (full_q.size() != model_.nq) {
         std::cerr << "[isFullQValid] Unsupported input size: " << full_q.size()
                   << ". Expected " << model_.nq << std::endl;
@@ -351,6 +356,7 @@ bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
 std::shared_ptr<ompl::geometric::SimpleSetup> MiracleMAlgo::createPlannerSetup(
     const std::vector<size_t>& active_indices, 
     const Eigen::VectorXd& fixed_full_q) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     
     int dim = active_indices.size();
     auto space(std::make_shared<ompl::base::RealVectorStateSpace>(dim));
@@ -386,6 +392,7 @@ std::shared_ptr<ompl::geometric::SimpleSetup> MiracleMAlgo::createPlannerSetup(
 bool MiracleMAlgo::isStateValid(const ompl::base::State* state, 
                                    const std::vector<size_t>& active_indices, 
                                    const Eigen::VectorXd& fixed_full_q) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     const auto* rs = state->as<ompl::base::RealVectorStateSpace::StateType>();
     Eigen::VectorXd q = fixed_full_q;
     for(size_t i=0; i<active_indices.size(); ++i) {
@@ -431,6 +438,7 @@ bool MiracleMAlgo::isStateValid(const ompl::base::State* state,
 bool MiracleMAlgo::planDualArmJointSpace(const std::vector<double>& start_q,
                                             const std::vector<double>& goal_q,
                                             std::vector<std::vector<double>>& path) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     if (start_q.size() != static_cast<size_t>(model_.nq)) {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "planDualArmJointSpace: unsupported start_q size: %zu, expected %d", start_q.size(), model_.nq);
         return false;
@@ -486,6 +494,7 @@ bool MiracleMAlgo::planSingleArmJointSpace(bool is_left,
                                               const std::vector<double>& start_q,
                                               const std::vector<double>& goal_q,
                                               std::vector<std::vector<double>>& path) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     if (start_q.size() != static_cast<size_t>(model_.nq)) {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "planSingleArmJointSpace: unsupported start_q size: %zu, expected %d", start_q.size(), model_.nq);
         return false;
@@ -553,8 +562,18 @@ bool MiracleMAlgo::getForwardKinematics(const std::string& source_frame,
     Eigen::VectorXd q(model_.nq);
     {
         std::lock_guard<std::mutex> lock(upadate_joinst_state_msg);
+        if (_m_full_joint_state_msg.size() !=
+            static_cast<size_t>(model_.nq)) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "getForwardKinematics: full joint state size=%zu, expected=%d",
+                _m_full_joint_state_msg.size(), model_.nq);
+            return false;
+        }
         q = Eigen::Map<const Eigen::VectorXd>(_m_full_joint_state_msg.data(), static_cast<long>(model_.nq));
     }
+
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
 
     if (!model_.existFrame(source_frame)) {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "getForwardKinematics: source_frame not found: %s", source_frame.c_str());
@@ -586,6 +605,7 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
                               const Eigen::Isometry3d& goal,
                               Eigen::VectorXd& q_res,
                               int mode) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     double eps = 1e-5;
     const int IT_MAX = 2000;
     const double DT = 0.5;
@@ -721,6 +741,7 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
                                   const Eigen::Isometry3d& left_goal,
                                   const Eigen::Isometry3d& right_goal,
                                   Eigen::VectorXd& q_res) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     const double eps = 1e-5;
     const int IT_MAX = 2000;
     const double DT = 0.5;
@@ -802,6 +823,7 @@ bool MiracleMAlgo::planDualArmCartesianGoal(const std::vector<double>& start_q,
                                                const Eigen::Isometry3d& left_goal,
                                                const Eigen::Isometry3d& right_goal,
                                                std::vector<std::vector<double>>& path) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     Eigen::VectorXd q_init = toEigenConfig(start_q);
     Eigen::VectorXd q_res;
     if(!solveDualIK(q_init, left_goal, right_goal, q_res)) return false;
@@ -818,6 +840,13 @@ bool MiracleMAlgo::planSingleArmCartesianGoal(bool is_left,
                                                  const std::vector<double>& start_q,
                                                  const Eigen::Isometry3d& goal,
                                                  std::vector<std::vector<double>>& path) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    if (start_q.size() != static_cast<size_t>(model_.nq)) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "planSingleArmCartesianGoal: unsupported start_q size: %zu, expected %d",
+                     start_q.size(), model_.nq);
+        return false;
+    }
     Eigen::VectorXd q_init = toEigenConfig(start_q);
     Eigen::VectorXd q_res;
     if(!solveIK(q_init, goal, q_res, is_left ? 0 : 1)) return false;
@@ -830,11 +859,123 @@ bool MiracleMAlgo::planSingleArmCartesianGoal(bool is_left,
     return planSingleArmJointSpace(is_left, start_q, goal_q, path);
 }
 
+bool MiracleMAlgo::solveSingleArmCartesianIk(
+    bool is_left,
+    const std::vector<double>& start_q,
+    const Eigen::Isometry3d& goal,
+    std::vector<double>& goal_q) {
+    goal_q.clear();
+    if (start_q.size() != static_cast<size_t>(model_.nq) ||
+        !goal.matrix().allFinite()) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "solveSingleArmCartesianIk: invalid full q or goal pose");
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    const Eigen::VectorXd q_init = toEigenConfig(start_q);
+    Eigen::VectorXd q_result;
+    if (!solveIK(q_init, goal, q_result, is_left ? 0 : 1)) {
+        return false;
+    }
+
+    const auto& indices = is_left ? left_arm_q_indices_ : right_arm_q_indices_;
+    goal_q.resize(indices.size());
+    for (size_t index = 0; index < indices.size(); ++index) {
+        goal_q[index] = q_result[indices[index]];
+    }
+    return true;
+}
+
+bool MiracleMAlgo::solveDualArmCartesianIk(
+    const std::vector<double>& start_q,
+    const Eigen::Isometry3d& left_goal,
+    const Eigen::Isometry3d& right_goal,
+    std::vector<double>& goal_q) {
+    goal_q.clear();
+    if (start_q.size() != static_cast<size_t>(model_.nq) ||
+        !left_goal.matrix().allFinite() ||
+        !right_goal.matrix().allFinite()) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "solveDualArmCartesianIk: invalid full q or goal pose");
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    Eigen::VectorXd q_result;
+    if (!solveDualIK(toEigenConfig(start_q), left_goal, right_goal, q_result)) {
+        return false;
+    }
+    goal_q.resize(14U);
+    for (std::size_t index = 0; index < 7U; ++index) {
+        goal_q[index] = q_result[left_arm_q_indices_[index]];
+        goal_q[7U + index] = q_result[right_arm_q_indices_[index]];
+    }
+    return true;
+}
+
+bool MiracleMAlgo::extractSingleArmJoints(
+    bool is_left,
+    const std::vector<double>& full_q,
+    std::vector<double>& arm_q) const {
+    arm_q.clear();
+    if (full_q.size() != static_cast<size_t>(model_.nq)) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "extractSingleArmJoints: unsupported full q size: %zu, expected %d",
+                     full_q.size(), model_.nq);
+        return false;
+    }
+    const auto& indices = is_left ? left_arm_q_indices_ : right_arm_q_indices_;
+    arm_q.resize(indices.size());
+    for (size_t index = 0; index < indices.size(); ++index) {
+        arm_q[index] = full_q[indices[index]];
+    }
+    return true;
+}
+
+bool MiracleMAlgo::getFullJointState(std::vector<double>& full_q) const {
+    std::lock_guard<std::mutex> lock(upadate_joinst_state_msg);
+    if (_m_full_joint_state_msg.size() != static_cast<size_t>(model_.nq)) {
+        full_q.clear();
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "getFullJointState: internal state size=%zu, expected=%d",
+                     _m_full_joint_state_msg.size(), model_.nq);
+        return false;
+    }
+    full_q = _m_full_joint_state_msg;
+    return true;
+}
+
+bool MiracleMAlgo::transformPoseToModelRoot(
+    const std::string& source_frame,
+    const std::vector<double>& full_q,
+    const Eigen::Isometry3d& source_to_target,
+    Eigen::Isometry3d& root_to_target) {
+    if (full_q.size() != static_cast<size_t>(model_.nq) ||
+        !source_to_target.matrix().allFinite() ||
+        !model_.existFrame(source_frame)) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "transformPoseToModelRoot: invalid q, source frame or target pose");
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    const Eigen::VectorXd q = toEigenConfig(full_q);
+    pinocchio::forwardKinematics(model_, *data_, q);
+    pinocchio::updateFramePlacements(model_, *data_);
+    const auto source_id = model_.getFrameId(source_frame);
+    Eigen::Isometry3d root_to_source = Eigen::Isometry3d::Identity();
+    root_to_source.matrix() = data_->oMf[source_id].toHomogeneousMatrix();
+    root_to_target = root_to_source * source_to_target;
+    return root_to_target.matrix().allFinite();
+}
+
 bool MiracleMAlgo::planDualArmCartesianPath(const std::vector<double>& start_q,
                                                const Eigen::Isometry3d& left_goal,
                                                const Eigen::Isometry3d& right_goal,
                                                std::vector<std::vector<double>>& path,
                                                double step_size) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     Eigen::VectorXd q_current = toEigenConfig(start_q);
     pinocchio::forwardKinematics(model_, *data_, q_current);
     pinocchio::updateFramePlacements(model_, *data_);
@@ -887,6 +1028,7 @@ bool MiracleMAlgo::planSingleArmCartesianPath(bool is_left,
                                                  const Eigen::Isometry3d& goal,
                                                  std::vector<std::vector<double>>& path,
                                                  double step_size) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     Eigen::VectorXd q_current = toEigenConfig(start_q);
     pinocchio::forwardKinematics(model_, *data_, q_current);
     pinocchio::updateFramePlacements(model_, *data_);
@@ -1045,6 +1187,7 @@ bool MiracleMAlgo::toppraPlan(const std::vector<std::vector<double>>& ompl_path,
 //--------------------------------------------------------------//
 
 bool MiracleMAlgo::getChainJointsLimt(int module_id, std::vector<double> &min_angles, std::vector<double> &max_angles) {
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     const std::vector<size_t> *q_indices = nullptr;
     if (module_id == 0) {
         q_indices = &left_arm_q_indices_;
@@ -1086,7 +1229,9 @@ std::vector<double> MiracleMAlgo::getLegJoints() {
     // }
 }
 
-int MiracleMAlgo::updateChainJointsAngle(std::string &module_name, std::vector<double> cur_joint_angles) {
+int MiracleMAlgo::updateChainJointsAngle(
+    const std::string &module_name,
+    const std::vector<double> &cur_joint_angles) {
     
     std::vector<double> *msg = nullptr;
     const std::vector<size_t> *q_indices = nullptr;
@@ -1113,16 +1258,24 @@ int MiracleMAlgo::updateChainJointsAngle(std::string &module_name, std::vector<d
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "Internal error: msg pointer is null");
         return -1;
     }
-    std::lock_guard<std::mutex> lock(upadate_joinst_state_msg);
-    msg->clear();
-    msg->assign(cur_joint_angles.begin(), cur_joint_angles.end());
-
     if (q_indices) {
         if (q_indices->size() != cur_joint_angles.size()) {
             RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "Joint size mismatch for module %s: state=%zu, indices=%zu",
                          module_name.c_str(), cur_joint_angles.size(), q_indices->size());
             return -1;
         }
+    }
+    for (const double angle : cur_joint_angles) {
+        if (!std::isfinite(angle)) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "Non-finite joint angle for module %s", module_name.c_str());
+            return -1;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(upadate_joinst_state_msg);
+    if (q_indices) {
         if (_m_full_joint_state_msg.size() != static_cast<size_t>(model_.nq)) {
             _m_full_joint_state_msg.assign(default_q_.data(), default_q_.data() + default_q_.size());
         }
@@ -1136,8 +1289,7 @@ int MiracleMAlgo::updateChainJointsAngle(std::string &module_name, std::vector<d
             _m_full_joint_state_msg[idx] = cur_joint_angles[i];
         }
     }
-
-    
+    msg->assign(cur_joint_angles.begin(), cur_joint_angles.end());
 
     return 0;
 }

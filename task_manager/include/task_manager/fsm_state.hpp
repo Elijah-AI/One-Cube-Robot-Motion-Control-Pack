@@ -27,7 +27,8 @@ enum class SystemState : int8_t
   RESET_DONE = 4,  ///< 复位完成
   IDLE       = 5,  ///< 空闲（待命）
   RUNNING    = 6,  ///< 任务执行中
-  ERROR      = 7   ///< 错误状态
+  ERROR      = 7,  ///< 错误状态
+  EMERGENCY  = 8   ///< 紧急停止状态（最高优先级安全任务触发）
 };
 
 /// @brief 错误标志位掩码定义

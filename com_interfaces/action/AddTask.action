@@ -1,0 +1,33 @@
+# AddTask.action - 安全控制任务 Action 接口
+# 由 safety_monitor 作为 Action Client 调用，向 task_manager 下发安全控制任务
+# Action 名称: /Task_manager/add_task
+# task_manager 作为 Action Server 接收任务
+
+# --- Goal ---
+std_msgs/Header header      # 时间戳
+string task_id              # 唯一任务标识符，用于后续查询或取消
+string task_type            # 任务类型枚举字符串 (e.g., "emergency_stop", "safety_halt", "resume")
+string target_node          # 预期执行该任务的目标节点名称（可选，若为空则由管理器自动调度）
+string parameters_json      # 任务具体参数，使用JSON字符串格式以支持灵活扩展（如坐标、物体ID、速度限制等）
+int32 priority              # 任务优先级 (1-25, 25最高)，用于任务队列排序
+int64 timeout_ms            # 操作超时时间 (毫秒)，默认 5000ms
+
+---
+# --- Result ---
+# 任务完成后返回的最终数据
+bool success                # 任务是否成功执行
+uint8 status_code           # 详细状态码:
+                            # 0: OK
+                            # 1: FAILED (硬件故障)
+                            # 2: TIMEOUT (超时未响应)
+                            # 3: BUSY (正在执行其他高优先级任务)
+string error_message        # 详细错误描述 (e.g., "Goal blocked by dynamic obstacle")
+float64 execution_time      # 总耗时 (秒)
+
+---
+# --- Feedback ---
+# 任务执行过程中周期性发送的状态更新
+string current_phase        # 当前阶段简介
+float32 progress_percent    # 总体进度 (0-100%)
+string active_node          # 当前实际执行任务的节点名称
+std_msgs/Header header      # 时间戳

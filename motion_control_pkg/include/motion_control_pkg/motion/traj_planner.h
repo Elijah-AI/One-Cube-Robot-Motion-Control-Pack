@@ -2,6 +2,7 @@
 #define TRAJECTORY_PLANNER_H
 
 #include "traj_common_util.h"
+#include "motion_control_pkg/execution/control_period.hpp"
 #include <vector>
 #include <memory>
 
@@ -44,12 +45,13 @@ public:
     // 规划接口（统一！）
     virtual TrajectoryResult plan(const std::vector<Waypoint>& waypoints) = 0;
 
-    // 设置控制周期（默认0.01s）
+    // 双臂规划默认使用统一 4 ms 周期；需要其他周期的模块必须显式设置。
     void setCycleTime(double time) { dt_ = time; }
 
 protected:
     int dof_ = 0;
-    double dt_ = 0.01;
+    double dt_ =
+        motion_control_pkg::execution::kDualArmControlPeriodSeconds;
     MotionConstraint constraint_;
 };
 

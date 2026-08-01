@@ -408,7 +408,7 @@ inline BTStatus send_action_goal(
 {
     LOG_INFO_TITLE(logger, task_log::Tag::BT, "===== Execute Action Type: " << action_type << " =====");
     LOG_INFO(logger, task_log::Tag::BT, "VisionParam -> target: " << atomic_act.vision_param.target_obj_name << ", need_6d: " << (atomic_act.vision_param.need_6d_pose ? "true" : "false"));
-    LOG_INFO(logger, task_log::Tag::BT, "ArmParam -> arm_id: " << atomic_act.arm_param.arm_id << ", use_planning: " << (atomic_act.arm_param.use_planning ? "true" : "false"));
+    LOG_INFO(logger, task_log::Tag::BT, "ArmParam -> arm_id: " << atomic_act.arm_param.arm_id << ", enable_collision_check: " << (atomic_act.arm_param.enable_collision_check ? "true" : "false"));
     LOG_INFO(logger, task_log::Tag::BT, "GripperParam -> gripper_id: " << (int)atomic_act.gripper_param.gripper_id << ", block: " << (atomic_act.gripper_param.block ? "true" : "false"));
 
     task_act::ActionCallResult send_ret = act_client.send_goal(atomic_act);
@@ -511,7 +511,7 @@ void BehaviorTreeEngine::load_parallel_task(std::vector<std::vector<task_cfg::At
 
               LOG_INFO_TITLE(logger_, task_log::Tag::BT, "===== [Branch " << branch_index << "] Execute Action Type: " << atomic_act->action_type << " =====");
               LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] VisionParam -> target: " << atomic_act->vision_param.target_obj_name << ", need_6d: " << (atomic_act->vision_param.need_6d_pose ? "true" : "false"));
-              LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] ArmParam -> arm_id: " << atomic_act->arm_param.arm_id << ", use_planning: " << (atomic_act->arm_param.use_planning ? "true" : "false"));
+              LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] ArmParam -> arm_id: " << atomic_act->arm_param.arm_id << ", enable_collision_check: " << (atomic_act->arm_param.enable_collision_check ? "true" : "false"));
               LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] GripperParam -> gripper_id: " << (int)atomic_act->gripper_param.gripper_id << ", block: " << (atomic_act->gripper_param.block ? "true" : "false"));
               
               LOG_DEBUG(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] ActionClient state_key: " << state_key);
