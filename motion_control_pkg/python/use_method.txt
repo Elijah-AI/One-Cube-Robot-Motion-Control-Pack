@@ -72,11 +72,11 @@ python3 action_client_test.py move_joints \
       'Joint5_L','Joint6_L','Joint7_L'
     ],
     position: [
-      0.76667255, -0.00008863, 0.01666107, -0.00009300,
-      0.01666994, -0.00005273, -0.00005645
+      0.8, -0.5, 0.6, -0.4,
+      0.7, -0.2, -0.3
     ],
     enable_collision_check: false,
-    speed: 0.3,
+    speed: 0.2,
     timeout_ms: 30000}" \
   --feedback
 
