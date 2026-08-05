@@ -152,9 +152,6 @@ set_target_properties(kine_lib PROPERTIES
 # SDK 命令门是厂商无关的内部核心库，便于使用 Fake SDK 做离线事务测试。
 add_library(dual_arm_sdk_core STATIC
     src/sdk/sdk_command_gate.cpp
-    src/execution/dual_arm_command_coordinator.cpp
-    src/execution/synchronized_trajectory.cpp
-    src/execution/dual_arm_task_arbiter.cpp
 )
 target_include_directories(dual_arm_sdk_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -320,26 +317,6 @@ if(BUILD_TESTING)
   target_link_libraries(test_sdk_command_gate
     dual_arm_sdk_core
     fake_dual_arm_device
-    Threads::Threads
-  )
-
-  ament_add_gtest(test_dual_arm_command_coordinator
-    test/test_dual_arm_command_coordinator.cpp
-  )
-  target_include_directories(test_dual_arm_command_coordinator PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/test
-  )
-  target_link_libraries(test_dual_arm_command_coordinator
-    dual_arm_sdk_core
-    fake_dual_arm_device
-    Threads::Threads
-  )
-
-  ament_add_gtest(test_dual_arm_task_arbiter
-    test/test_dual_arm_task_arbiter.cpp
-  )
-  target_link_libraries(test_dual_arm_task_arbiter
-    dual_arm_sdk_core
     Threads::Threads
   )
 

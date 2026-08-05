@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "motion_control_pkg/execution/dual_arm_command_coordinator.hpp"
+#include "motion_control_pkg/execution/joint_command.hpp"
 #include "motion_control_pkg/sdk/dual_arm_device_interface.hpp"
 
 namespace motion_control_pkg::motion

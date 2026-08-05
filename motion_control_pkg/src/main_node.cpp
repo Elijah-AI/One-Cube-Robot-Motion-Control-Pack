@@ -15,7 +15,6 @@
 #include "miracle_lower_body_module.hpp"
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
-#include "motion_control_pkg/execution/dual_arm_task_arbiter.hpp"
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
 #include "motion_control_pkg/sdk/marvin_dual_arm_sdk_adapter.hpp"
@@ -143,10 +142,6 @@ public:
                 "modes have been removed");
         }
         active_arm_configuration_ = *parsed_arm_configuration;
-        task_arbiter_ = std::make_unique<
-            motion_control_pkg::execution::DualArmTaskArbiter>(
-            active_arm_configuration_);
-
         const std::string sdk_config_path =
             ament_index_cpp::get_package_share_directory("motion_control_pkg") +
             "/config/ccs_m6_40.MvKDCfg";
@@ -218,9 +213,6 @@ private:
     motion_control_pkg::sdk::ActiveArmConfiguration
     active_arm_configuration_{
         motion_control_pkg::sdk::ActiveArmConfiguration::kDualArm};
-    std::unique_ptr<motion_control_pkg::execution::DualArmTaskArbiter>
-    task_arbiter_;
-
     std::shared_ptr<DualArmModule> dual_arm_module_;
     rclcpp_action::Server<MovePose>::SharedPtr move_pose_action_server_;
     rclcpp_action::Server<MoveJoints>::SharedPtr move_joints_action_server_;
@@ -355,32 +347,22 @@ private:
 
         // 【路由检查】：根据指令中的参数，检查对应模块是否繁忙
         if (goal->arm_id == ARM_LEFT) {
-            const auto availability = task_arbiter_->canAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kLeft);
-            if (!availability) {
-                RCLCPP_WARN(
-                    this->get_logger(), "%s",
-                    availability.error_message.c_str());
+            if (!dual_arm_module_->is_idle(ID_LEFT_ARM)) {
+                RCLCPP_WARN(this->get_logger(), "Left arm is busy!");
                 return rclcpp_action::GoalResponse::REJECT;
             }
         } 
         else if (goal->arm_id == ARM_RIGHT) {
-            const auto availability = task_arbiter_->canAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kRight);
-            if (!availability) {
-                RCLCPP_WARN(
-                    this->get_logger(), "%s",
-                    availability.error_message.c_str());
+            if (!dual_arm_module_->is_idle(ID_RIGHT_ARM)) {
+                RCLCPP_WARN(this->get_logger(), "Right arm is busy!");
                 return rclcpp_action::GoalResponse::REJECT;
             }
         }
         else if (goal->arm_id == ARM_BOTH) {
-            const auto availability = task_arbiter_->canAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kDual);
-            if (!availability) {
-                RCLCPP_WARN(
-                    this->get_logger(), "%s",
-                    availability.error_message.c_str());
+            if (!dual_arm_module_->is_idle(ID_LEFT_ARM) ||
+                !dual_arm_module_->is_idle(ID_RIGHT_ARM))
+            {
+                RCLCPP_WARN(this->get_logger(), "Dual arms are busy!");
                 return rclcpp_action::GoalResponse::REJECT;
             }
         }
@@ -412,19 +394,6 @@ private:
 
         // 【任务分发】：将 goal_handle 丢给对应的部件模块去执行
         if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT) {
-            const auto scope = goal->arm_id == ARM_LEFT ?
-                motion_control_pkg::execution::ArmTaskScope::kLeft :
-                motion_control_pkg::execution::ArmTaskScope::kRight;
-            auto acquisition = task_arbiter_->tryAcquire(scope);
-            if (!acquisition) {
-                auto result = std::make_shared<MovePose::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message =
-                    "MovePose lost the arm arbitration race: " +
-                    acquisition.error_message;
-                goal_handle->abort(result);
-                return;
-            }
             if (goal_handle->is_canceling()) {
                 auto result = std::make_shared<MovePose::Result>();
                 result->success = ACTION_FAIL;
@@ -451,20 +420,9 @@ private:
                 goal->target_pose.header.frame_id.c_str(),
                 transformed.pose.header.frame_id.c_str());
             dual_arm_module_->start_execution_move_pose(
-                goal_handle, transformed.pose, std::move(acquisition.lease));
+                goal_handle, transformed.pose);
         } else if (goal->arm_id == ARM_BOTH) {
             const auto request_started_at = std::chrono::steady_clock::now();
-            auto acquisition = task_arbiter_->tryAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kDual);
-            if (!acquisition) {
-                auto result = std::make_shared<MovePose::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message =
-                    "ARM_BOTH MovePose lost the arbitration race: " +
-                    acquisition.error_message;
-                goal_handle->abort(result);
-                return;
-            }
             if (goal_handle->is_canceling()) {
                 auto result = std::make_shared<MovePose::Result>();
                 result->success = ACTION_FAIL;
@@ -512,8 +470,7 @@ private:
                 return;
             }
             dual_arm_module_->start_execution_move_dual_arm_pose(
-                goal_handle, left.pose, right.pose, request_started_at,
-                std::move(acquisition.lease));
+                goal_handle, left.pose, right.pose, request_started_at);
         }
         else if (goal->arm_id == LEG) {
             RCLCPP_INFO(this->get_logger(), "Dispatching task to leg.");
@@ -605,12 +562,8 @@ private:
                     validation.error_message.c_str());
                 return rclcpp_action::GoalResponse::REJECT;
             }
-            const auto availability = task_arbiter_->canAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kLeft);
-            if (!availability) {
-                RCLCPP_WARN(
-                    this->get_logger(), "%s",
-                    availability.error_message.c_str());
+            if (!dual_arm_module_->is_idle(ID_LEFT_ARM)) {
+                RCLCPP_WARN(this->get_logger(), "Left arm is busy!");
                 return rclcpp_action::GoalResponse::REJECT;
             }
         } 
@@ -625,22 +578,16 @@ private:
                     validation.error_message.c_str());
                 return rclcpp_action::GoalResponse::REJECT;
             }
-            const auto availability = task_arbiter_->canAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kRight);
-            if (!availability) {
-                RCLCPP_WARN(
-                    this->get_logger(), "%s",
-                    availability.error_message.c_str());
+            if (!dual_arm_module_->is_idle(ID_RIGHT_ARM)) {
+                RCLCPP_WARN(this->get_logger(), "Right arm is busy!");
                 return rclcpp_action::GoalResponse::REJECT;
             }
         }
         else if (goal->arm_id == ARM_BOTH) {
-            const auto availability = task_arbiter_->canAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kDual);
-            if (!availability) {
-                RCLCPP_WARN(
-                    this->get_logger(), "%s",
-                    availability.error_message.c_str());
+            if (!dual_arm_module_->is_idle(ID_LEFT_ARM) ||
+                !dual_arm_module_->is_idle(ID_RIGHT_ARM))
+            {
+                RCLCPP_WARN(this->get_logger(), "Dual arms are busy!");
                 return rclcpp_action::GoalResponse::REJECT;
             }
         }
@@ -678,36 +625,12 @@ private:
 
         // 【任务分发】：将 goal_handle 丢给对应的部件模块去执行
         if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT) {
-            const auto scope = goal->arm_id == ARM_LEFT ?
-                motion_control_pkg::execution::ArmTaskScope::kLeft :
-                motion_control_pkg::execution::ArmTaskScope::kRight;
-            auto acquisition = task_arbiter_->tryAcquire(scope);
-            if (!acquisition) {
-                auto result = std::make_shared<MoveJoints::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message =
-                    "MoveJoints lost the arm arbitration race: " +
-                    acquisition.error_message;
-                goal_handle->abort(result);
-                return;
-            }
             RCLCPP_INFO(this->get_logger(), "Dispatching joints task to Dual Arm.");
             dual_arm_module_->start_execution_move_joints(
-                goal_handle, std::move(acquisition.lease));
+                goal_handle);
         } else if (goal->arm_id == ARM_BOTH) {
-            auto acquisition = task_arbiter_->tryAcquire(
-                motion_control_pkg::execution::ArmTaskScope::kDual);
-            if (!acquisition) {
-                auto result = std::make_shared<MoveJoints::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message =
-                    "ARM_BOTH MoveJoints lost the arbitration race: " +
-                    acquisition.error_message;
-                goal_handle->abort(result);
-                return;
-            }
             dual_arm_module_->start_execution_move_dual_arm_joints(
-                goal_handle, std::move(acquisition.lease));
+                goal_handle);
         }
         else if (goal->arm_id == LEG) {
             RCLCPP_INFO(this->get_logger(), "Dispatching joints task to leg.");

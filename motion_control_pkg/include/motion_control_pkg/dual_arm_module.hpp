@@ -15,10 +15,8 @@
 #include "motion_control_pkg/execution/action_terminal_guard.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
 #include "motion_control_pkg/execution/control_period.hpp"
-#include "motion_control_pkg/execution/dual_arm_command_coordinator.hpp"
-#include "motion_control_pkg/execution/dual_arm_task_arbiter.hpp"
 #include "motion_control_pkg/execution/execution_control.hpp"
-#include "motion_control_pkg/execution/synchronized_trajectory.hpp"
+#include "motion_control_pkg/execution/joint_command.hpp"
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
 #include "motion_control_pkg/motion/pose_space_control.hpp"
@@ -26,6 +24,7 @@
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
 #include <cmath>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <chrono>
@@ -67,23 +66,19 @@ public:
     // 暴露给上层的任务入口, 一个action対应一个接口
     void start_execution_move_pose(
         std::shared_ptr<GoalHandleMovePose> goal_handle,
-        geometry_msgs::msg::PoseStamped planning_target,
-        motion_control_pkg::execution::ArmTaskLease task_lease);
+        geometry_msgs::msg::PoseStamped planning_target);
 
     void start_execution_move_joints(
-        std::shared_ptr<GoalHandleMoveJoints> goal_handle,
-        motion_control_pkg::execution::ArmTaskLease task_lease);
+        std::shared_ptr<GoalHandleMoveJoints> goal_handle);
 
     void start_execution_move_dual_arm_joints(
-        std::shared_ptr<GoalHandleMoveJoints> goal_handle,
-        motion_control_pkg::execution::ArmTaskLease task_lease);
+        std::shared_ptr<GoalHandleMoveJoints> goal_handle);
 
     void start_execution_move_dual_arm_pose(
         std::shared_ptr<GoalHandleMovePose> goal_handle,
         geometry_msgs::msg::PoseStamped left_planning_target,
         geometry_msgs::msg::PoseStamped right_planning_target,
-        std::chrono::steady_clock::time_point request_started_at,
-        motion_control_pkg::execution::ArmTaskLease task_lease);
+        std::chrono::steady_clock::time_point request_started_at);
 
     void start_execution_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle);
 
@@ -223,6 +218,8 @@ private:
         std::vector<double>& left_radians,
         std::vector<double>& right_radians,
         std::string& error_message);
+      bool tryClaimArms(bool need_left, bool need_right, std::string& error_message);
+      void releaseArms(bool release_left, bool release_right) noexcept;
     // 使用现有 MiracleMAlgo FK，再拼接配置中的模型末端到工具 TCP 变换。
     bool computeToolTcpPose(
         const std::string& model_end_frame,
@@ -256,9 +253,6 @@ private:
     FX_DOUBLE i_[2][7][6];
     std::shared_ptr<motion_control_pkg::sdk::DualArmDeviceInterface> arm_device_;
     std::unique_ptr<motion_control_pkg::sdk::SdkCommandGate> sdk_command_gate_;
-    std::unique_ptr<
-        motion_control_pkg::execution::DualArmCommandCoordinator>
-        command_coordinator_;
     std::shared_ptr<MiracleMAlgo> miracle_algo_;
     motion_control_pkg::sdk::ActiveArmConfiguration arm_configuration_;
     std::string sdk_config_path_;
@@ -271,6 +265,7 @@ private:
     bool sdk_connected_ = false;
     bool init_robot_link_ = false;
     mutable std::mutex arm_status_mtx_;
+      mutable std::mutex arm_claim_mtx_;
       const int arm_dof_ = 7;
     std::vector<double> r_q_lower_limits_,l_q_lower_limits_;
     std::vector<double> r_q_upper_limits_,l_q_upper_limits_;

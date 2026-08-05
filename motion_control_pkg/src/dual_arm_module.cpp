@@ -2,11 +2,153 @@
 #include "miracle_m_algo.hpp"
 #include <std_msgs/msg/header.hpp>
 #include <algorithm>
+#include <cerrno>
+#include <ctime>
 #include <limits>
 #include <memory>
 
 #include <iostream>
 #include <stdexcept>
+
+namespace
+{
+
+void addPeriodToTimespec(timespec& timestamp, std::chrono::nanoseconds period)
+{
+    const auto total_nanoseconds =
+        static_cast<long long>(timestamp.tv_nsec) + period.count();
+    timestamp.tv_sec += static_cast<time_t>(
+        total_nanoseconds / 1'000'000'000LL);
+    timestamp.tv_nsec = static_cast<long>(
+        total_nanoseconds % 1'000'000'000LL);
+}
+
+void sleepUntilTimespec(const timespec& timestamp)
+{
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &timestamp, nullptr) == EINTR) {
+    }
+}
+
+template <typename GoalHandleT>
+bool streamSingleArmTrajectory(
+    motion_control_pkg::sdk::SdkCommandGate& sdk_command_gate,
+    const std::shared_ptr<GoalHandleT>& goal_handle,
+    motion_control_pkg::sdk::ArmChannel channel,
+    const std::vector<motion_control_pkg::execution::JointCommand>& command_points,
+    motion_control_pkg::execution::SteadyDeadline& deadline,
+    const char* action_name,
+    const std::function<void(float, const std::string&)>& publish_feedback,
+    const std::function<void(const std::string&)>& abort_goal,
+    const std::function<void(const std::string&)>& cancel_goal)
+{
+    if (command_points.empty()) {
+        abort_goal("trajectory must contain at least one sample");
+        return false;
+    }
+    timespec next_cycle{};
+    clock_gettime(CLOCK_MONOTONIC, &next_cycle);
+    auto next_feedback = std::chrono::steady_clock::now();
+    const char* arm_name =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ? "left" : "right";
+    for (std::size_t index = 0; index < command_points.size(); ++index) {
+        if (goal_handle->is_canceling()) {
+            cancel_goal(
+                std::string(action_name) +
+                " goal canceled by client; future samples suppressed");
+            return false;
+        }
+        if (deadline.expired()) {
+            abort_goal(std::string(action_name) + " command streaming timed out");
+            return false;
+        }
+        const auto send_result =
+            sdk_command_gate.sendJointPosition(channel, command_points[index]);
+        if (!send_result) {
+            abort_goal(send_result.error_message);
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            const float command_progress =
+                static_cast<float>(index + 1U) /
+                static_cast<float>(command_points.size());
+            publish_feedback(
+                25.0F + 70.0F * command_progress,
+                std::string(arm_name) + " arm streaming commands at 4 ms");
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        if (index + 1U < command_points.size()) {
+            addPeriodToTimespec(
+                next_cycle, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    motion_control_pkg::execution::kDualArmControlPeriod));
+            sleepUntilTimespec(next_cycle);
+        }
+    }
+    return true;
+}
+
+template <typename GoalHandleT>
+bool streamDualArmTrajectory(
+    motion_control_pkg::sdk::SdkCommandGate& sdk_command_gate,
+    const std::shared_ptr<GoalHandleT>& goal_handle,
+    const std::vector<motion_control_pkg::execution::JointCommand>& left_commands,
+    const std::vector<motion_control_pkg::execution::JointCommand>& right_commands,
+    motion_control_pkg::execution::SteadyDeadline& deadline,
+    const char* action_name,
+    std::uint8_t executing_status,
+    const char* feedback_step,
+    const std::function<void(std::uint8_t, float, float, const std::string&)>& publish_feedback,
+    const std::function<void(const std::string&)>& abort_goal,
+    const std::function<void(const std::string&)>& cancel_goal)
+{
+    if (left_commands.empty() || right_commands.empty()) {
+        abort_goal("both synchronized trajectories must contain samples");
+        return false;
+    }
+    if (left_commands.size() != right_commands.size()) {
+        abort_goal("dual-arm synchronized trajectories must have equal sample counts");
+        return false;
+    }
+    timespec next_cycle{};
+    clock_gettime(CLOCK_MONOTONIC, &next_cycle);
+    auto next_feedback = std::chrono::steady_clock::now();
+    for (std::size_t index = 0; index < left_commands.size(); ++index) {
+        if (goal_handle->is_canceling()) {
+            cancel_goal(
+                std::string(action_name) +
+                " canceled; future paired samples suppressed");
+            return false;
+        }
+        if (deadline.expired()) {
+            abort_goal(std::string(action_name) + " command streaming timed out");
+            return false;
+        }
+        const auto send_result = sdk_command_gate.sendJointPositions(
+            left_commands[index], right_commands[index]);
+        if (!send_result) {
+            abort_goal(send_result.error_message);
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_feedback) {
+            const float progress =
+                20.0F + 70.0F * static_cast<float>(index + 1U) /
+                static_cast<float>(left_commands.size());
+            publish_feedback(
+                executing_status, progress, progress, feedback_step);
+            next_feedback = now + std::chrono::milliseconds(50);
+        }
+        if (index + 1U < left_commands.size()) {
+            addPeriodToTimespec(
+                next_cycle, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    motion_control_pkg::execution::kDualArmControlPeriod));
+            sleepUntilTimespec(next_cycle);
+        }
+    }
+    return true;
+}
+
+}  // namespace
 
 DualArmModule::DualArmModule(
     const std::string& arm_name,
@@ -43,9 +185,6 @@ DualArmModule::DualArmModule(
     sdk_command_gate_ =
         std::make_unique<motion_control_pkg::sdk::SdkCommandGate>(
         *arm_device_, arm_configuration_);
-    command_coordinator_ = std::make_unique<
-        motion_control_pkg::execution::DualArmCommandCoordinator>(
-        *sdk_command_gate_);
 
     RCLCPP_INFO(
         rclcpp::get_logger("dual_arm_module"),
@@ -104,7 +243,7 @@ DualArmModule::DualArmModule(
     l_jerk_limit_.resize(arm_dof_);
    
     this->motor_status_pub_ = shared_node->create_publisher<MotorStatus>("/Control/MotorInfo",10);
-    joint_feedback_timer_ = shared_node->create_wall_timer(250ms,
+    joint_feedback_timer_ = shared_node->create_wall_timer(50ms,
     std::bind(&DualArmModule::motor_statu_cb, this));
     motor_status_msg_ = com_interfaces::msg::MotorStatus();
     init_motor_status();
@@ -192,16 +331,6 @@ bool DualArmModule::initialize(std::string& error_message)
         return false;
     }
 
-    if (!command_coordinator_->start()) {
-        error_message = "Failed to start the 4 ms dual arm command coordinator";
-        const auto release_result = sdk_command_gate_->release();
-        sdk_connected_ = false;
-        if (!release_result) {
-            error_message += "; " + release_result.error_message;
-        }
-        return false;
-    }
-
     init_robot_link_ = true;
     error_message.clear();
     return true;
@@ -218,10 +347,6 @@ rclcpp::Node::SharedPtr DualArmModule::lockNode(const char *context) const
 
 DualArmModule::~DualArmModule()
 {
-    // 先停止 4 ms 协调器并唤醒等待中的 Action，再回收各执行线程。
-    if (command_coordinator_) {
-        command_coordinator_->stop();
-    }
     // 安全退出机制：等待正在执行的线程结束
     if (execution_thread_move_left_pose_.joinable()) {
         execution_thread_move_left_pose_.join();
@@ -280,19 +405,68 @@ bool DualArmModule::is_idle(int module_id) const  //根据模块标号返回单�
     }
 }
 
+bool DualArmModule::tryClaimArms(
+    bool need_left, bool need_right, std::string& error_message)
+{
+    std::lock_guard<std::mutex> lock(arm_claim_mtx_);
+    if (need_left &&
+        !motion_control_pkg::sdk::isArmEnabled(
+            arm_configuration_, motion_control_pkg::sdk::ArmChannel::kLeft))
+    {
+        error_message = "left arm is disabled by active_arm_configuration";
+        return false;
+    }
+    if (need_right &&
+        !motion_control_pkg::sdk::isArmEnabled(
+            arm_configuration_, motion_control_pkg::sdk::ArmChannel::kRight))
+    {
+        error_message = "right arm is disabled by active_arm_configuration";
+        return false;
+    }
+    if (need_left && is_executing_left_arm_.load()) {
+        error_message = "left arm is already occupied by another task";
+        return false;
+    }
+    if (need_right && is_executing_right_arm_.load()) {
+        error_message = "right arm is already occupied by another task";
+        return false;
+    }
+    if (need_left) {
+        is_executing_left_arm_.store(true);
+    }
+    if (need_right) {
+        is_executing_right_arm_.store(true);
+    }
+    error_message.clear();
+    return true;
+}
+
+void DualArmModule::releaseArms(bool release_left, bool release_right) noexcept
+{
+    std::lock_guard<std::mutex> lock(arm_claim_mtx_);
+    if (release_left) {
+        is_executing_left_arm_.store(false);
+    }
+    if (release_right) {
+        is_executing_right_arm_.store(false);
+    }
+}
+
 void DualArmModule::start_execution_move_pose(
     std::shared_ptr<GoalHandleMovePose> goal_handle,
-    geometry_msgs::msg::PoseStamped planning_target,
-    motion_control_pkg::execution::ArmTaskLease task_lease)
+    geometry_msgs::msg::PoseStamped planning_target)
 {
-    if (!task_lease.valid()) {
+    std::string claim_error;
+    const auto goal = goal_handle->get_goal();
+    const bool need_left = goal->arm_id == ARM_LEFT;
+    const bool need_right = goal->arm_id == ARM_RIGHT;
+    if (!tryClaimArms(need_left, need_right, claim_error)) {
         auto result = std::make_shared<MovePose::Result>();
         result->success = ACTION_FAIL;
-        result->error_message = "MovePose dispatch is missing an arm task lease";
+        result->error_message = claim_error;
         goal_handle->abort(result);
         return;
     }
-    const auto goal = goal_handle->get_goal();
     // 标记为正在执行,
     if(goal->arm_id==ARM_LEFT)
     {
@@ -302,14 +476,12 @@ void DualArmModule::start_execution_move_pose(
         is_executing_left_arm_.store(true);
         try {
             execution_thread_move_left_pose_ = std::thread(
-                [this, goal_handle, planning_target = std::move(planning_target),
-                task_lease = std::move(task_lease)]() mutable {
-                    (void)task_lease;
+                [this, goal_handle, planning_target = std::move(planning_target)]() mutable {
                     execution_loop_move_left_pose(
                         goal_handle, std::move(planning_target));
                 });
         } catch (const std::exception& error) {
-            is_executing_left_arm_.store(false);
+            releaseArms(true, false);
             auto result = std::make_shared<MovePose::Result>();
             result->success = ACTION_FAIL;
             result->error_message =
@@ -325,14 +497,12 @@ void DualArmModule::start_execution_move_pose(
         is_executing_right_arm_.store(true);
         try {
             execution_thread_move_right_pose_ = std::thread(
-                [this, goal_handle, planning_target = std::move(planning_target),
-                task_lease = std::move(task_lease)]() mutable {
-                    (void)task_lease;
+                [this, goal_handle, planning_target = std::move(planning_target)]() mutable {
                     execution_loop_move_right_pose(
                         goal_handle, std::move(planning_target));
                 });
         } catch (const std::exception& error) {
-            is_executing_right_arm_.store(false);
+            releaseArms(false, true);
             auto result = std::make_shared<MovePose::Result>();
             result->success = ACTION_FAIL;
             result->error_message =
@@ -365,17 +535,19 @@ void DualArmModule::execution_loop_move_right_pose(
 }
 
 void DualArmModule::start_execution_move_joints(
-    std::shared_ptr<GoalHandleMoveJoints> goal_handle,
-    motion_control_pkg::execution::ArmTaskLease task_lease)
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle)
 {
-    if (!task_lease.valid()) {
+    const auto goal = goal_handle->get_goal();
+    const bool need_left = goal->arm_id == ARM_LEFT;
+    const bool need_right = goal->arm_id == ARM_RIGHT;
+    std::string claim_error;
+    if (!tryClaimArms(need_left, need_right, claim_error)) {
         auto result = std::make_shared<MoveJoints::Result>();
         result->success = ACTION_FAIL;
-        result->error_message = "MoveJoints dispatch is missing an arm task lease";
+        result->error_message = claim_error;
         goal_handle->abort(result);
         return;
     }
-    const auto goal = goal_handle->get_goal();
     if (goal->arm_id == ARM_LEFT) {
         if (execution_thread_move_left_joint_.joinable()) {
             execution_thread_move_left_joint_.join();
@@ -383,12 +555,11 @@ void DualArmModule::start_execution_move_joints(
         is_executing_left_arm_.store(true);
         try {
             execution_thread_move_left_joint_ = std::thread(
-                [this, goal_handle, task_lease = std::move(task_lease)]() mutable {
-                    (void)task_lease;
+                [this, goal_handle]() mutable {
                     execution_loop_move_left_joint(goal_handle);
                 });
         } catch (const std::exception& error) {
-            is_executing_left_arm_.store(false);
+            releaseArms(true, false);
             auto result = std::make_shared<MoveJoints::Result>();
             result->success = ACTION_FAIL;
             result->error_message =
@@ -402,12 +573,11 @@ void DualArmModule::start_execution_move_joints(
         is_executing_right_arm_.store(true);
         try {
             execution_thread_move_right_joint_ = std::thread(
-                [this, goal_handle, task_lease = std::move(task_lease)]() mutable {
-                    (void)task_lease;
+                [this, goal_handle]() mutable {
                     execution_loop_move_right_joint(goal_handle);
                 });
         } catch (const std::exception& error) {
-            is_executing_right_arm_.store(false);
+            releaseArms(false, true);
             auto result = std::make_shared<MoveJoints::Result>();
             result->success = ACTION_FAIL;
             result->error_message =
@@ -436,14 +606,13 @@ void DualArmModule::execution_loop_move_right_joint(
 }
 
 void DualArmModule::start_execution_move_dual_arm_joints(
-    std::shared_ptr<GoalHandleMoveJoints> goal_handle,
-    motion_control_pkg::execution::ArmTaskLease task_lease)
+    std::shared_ptr<GoalHandleMoveJoints> goal_handle)
 {
-    if (!task_lease.valid()) {
+    std::string claim_error;
+    if (!tryClaimArms(true, true, claim_error)) {
         auto result = std::make_shared<MoveJoints::Result>();
         result->success = false;
-        result->error_message =
-            "MoveJoints dispatch is missing a dual-arm task lease";
+        result->error_message = claim_error;
         goal_handle->abort(result);
         return;
     }
@@ -454,13 +623,11 @@ void DualArmModule::start_execution_move_dual_arm_joints(
     is_executing_right_arm_.store(true);
     try {
         execution_thread_move_dual_joints_ = std::thread(
-            [this, goal_handle, task_lease = std::move(task_lease)]() mutable {
-                (void)task_lease;
+            [this, goal_handle]() mutable {
                 execution_loop_move_dual_arm_joints(goal_handle);
             });
     } catch (const std::exception& error) {
-        is_executing_left_arm_.store(false);
-        is_executing_right_arm_.store(false);
+        releaseArms(true, true);
         auto result = std::make_shared<MoveJoints::Result>();
         result->success = false;
         result->error_message =
@@ -826,13 +993,6 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
         abort_goal(conversion_error);
         return;
     }
-    const auto synchronized =
-        motion_control_pkg::execution::synchronizeTrajectoryPair(
-        left_commands, right_commands);
-    if (!synchronized.success) {
-        abort_goal(synchronized.error_message);
-        return;
-    }
     if (goal_handle->is_canceling()) {
         cancel_goal("MoveJoints canceled before atomic submission");
         return;
@@ -844,67 +1004,12 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
     publish_feedback(
         MoveJoints::Feedback::STATUS_EXECUTING, 20.0F, 20.0F,
         "submitting synchronized A/B batches at 4 ms");
-    auto enqueue = command_coordinator_->enqueueSynchronizedPair(
-        synchronized.left, synchronized.right);
-    if (!enqueue.success) {
-        abort_goal(enqueue.error_message);
-        return;
-    }
-
-    bool client_canceled = false;
-    bool timed_out = false;
-    auto next_feedback = std::chrono::steady_clock::now();
-    while (true) {
-        const auto left = enqueue.left_ticket.snapshot();
-        const auto right = enqueue.right_ticket.snapshot();
-        if (motion_control_pkg::execution::isTerminal(left.state) &&
-            motion_control_pkg::execution::isTerminal(right.state))
-        {
-            break;
-        }
-        if (goal_handle->is_canceling()) {
-            client_canceled = true;
-            enqueue.left_ticket.requestCancel();
-            enqueue.right_ticket.requestCancel();
-        } else if (deadline.expired()) {
-            timed_out = true;
-            enqueue.left_ticket.requestCancel();
-            enqueue.right_ticket.requestCancel();
-        }
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= next_feedback) {
-            const auto progress = [](const auto& snapshot) {
-                return snapshot.sample_count == 0U ? 0.0F :
-                    20.0F + 70.0F * static_cast<float>(snapshot.samples_sent) /
-                    static_cast<float>(snapshot.sample_count);
-            };
-            publish_feedback(
-                MoveJoints::Feedback::STATUS_EXECUTING,
-                progress(left), progress(right),
-                "streaming one atomic dual-arm batch per cycle");
-            next_feedback = now + std::chrono::milliseconds(50);
-        }
-        enqueue.left_ticket.waitFor(
-            motion_control_pkg::execution::kDualArmControlPeriod);
-    }
-    const auto left_stream = enqueue.left_ticket.snapshot();
-    const auto right_stream = enqueue.right_ticket.snapshot();
-    if (client_canceled) {
-        cancel_goal(
-            "MoveJoints canceled; future paired samples suppressed");
-        return;
-    }
-    if (timed_out) {
-        abort_goal("MoveJoints command streaming timed out");
-        return;
-    }
-    if (left_stream.state !=
-        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded ||
-        right_stream.state !=
-        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    if (!streamDualArmTrajectory(
+        *sdk_command_gate_, goal_handle, left_commands, right_commands, deadline,
+        "MoveJoints", MoveJoints::Feedback::STATUS_EXECUTING,
+        "streaming one atomic dual-arm batch per cycle",
+        publish_feedback, abort_goal, cancel_goal))
     {
-        abort_goal(!left_stream.error_message.empty() ?
-            left_stream.error_message : right_stream.error_message);
         return;
     }
 
@@ -975,14 +1080,13 @@ void DualArmModule::start_execution_move_dual_arm_pose(
     std::shared_ptr<GoalHandleMovePose> goal_handle,
     geometry_msgs::msg::PoseStamped left_planning_target,
     geometry_msgs::msg::PoseStamped right_planning_target,
-    std::chrono::steady_clock::time_point request_started_at,
-    motion_control_pkg::execution::ArmTaskLease task_lease)
+    std::chrono::steady_clock::time_point request_started_at)
 {
-    if (!task_lease.valid()) {
+    std::string claim_error;
+    if (!tryClaimArms(true, true, claim_error)) {
         auto result = std::make_shared<MovePose::Result>();
         result->success = false;
-        result->error_message =
-            "MovePose dispatch is missing a dual-arm task lease";
+        result->error_message = claim_error;
         goal_handle->abort(result);
         return;
     }
@@ -996,16 +1100,13 @@ void DualArmModule::start_execution_move_dual_arm_pose(
             [this, goal_handle,
             left_planning_target = std::move(left_planning_target),
             right_planning_target = std::move(right_planning_target),
-            request_started_at,
-            task_lease = std::move(task_lease)]() mutable {
-                (void)task_lease;
+            request_started_at]() mutable {
                 execution_loop_move_dual_arm_pose(
                     goal_handle, std::move(left_planning_target),
                     std::move(right_planning_target), request_started_at);
             });
     } catch (const std::exception& error) {
-        is_executing_left_arm_.store(false);
-        is_executing_right_arm_.store(false);
+        releaseArms(true, true);
         auto result = std::make_shared<MovePose::Result>();
         result->success = false;
         result->error_message =
@@ -1420,13 +1521,6 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         abort_goal(conversion_error);
         return;
     }
-    const auto synchronized =
-        motion_control_pkg::execution::synchronizeTrajectoryPair(
-        left_commands, right_commands);
-    if (!synchronized.success) {
-        abort_goal(synchronized.error_message);
-        return;
-    }
     if (goal_handle->is_canceling()) {
         cancel_goal("MovePose canceled before atomic submission");
         return;
@@ -1438,67 +1532,12 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
     publish_feedback(
         MovePose::Feedback::STATUS_EXECUTING, 20.0F, 20.0F,
         "submitting synchronized pose trajectory batches at 4 ms");
-    auto enqueue = command_coordinator_->enqueueSynchronizedPair(
-        synchronized.left, synchronized.right);
-    if (!enqueue.success) {
-        abort_goal(enqueue.error_message);
-        return;
-    }
-
-    bool client_canceled = false;
-    bool timed_out = false;
-    auto next_feedback = std::chrono::steady_clock::now();
-    while (true) {
-        const auto left = enqueue.left_ticket.snapshot();
-        const auto right = enqueue.right_ticket.snapshot();
-        if (motion_control_pkg::execution::isTerminal(left.state) &&
-            motion_control_pkg::execution::isTerminal(right.state))
-        {
-            break;
-        }
-        if (goal_handle->is_canceling()) {
-            client_canceled = true;
-            enqueue.left_ticket.requestCancel();
-            enqueue.right_ticket.requestCancel();
-        } else if (deadline.expired()) {
-            timed_out = true;
-            enqueue.left_ticket.requestCancel();
-            enqueue.right_ticket.requestCancel();
-        }
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= next_feedback) {
-            const auto progress = [](const auto& snapshot) {
-                return snapshot.sample_count == 0U ? 0.0F :
-                    20.0F + 70.0F * static_cast<float>(snapshot.samples_sent) /
-                    static_cast<float>(snapshot.sample_count);
-            };
-            publish_feedback(
-                MovePose::Feedback::STATUS_EXECUTING,
-                progress(left), progress(right),
-                "streaming one atomic dual-arm pose batch per cycle");
-            next_feedback = now + std::chrono::milliseconds(50);
-        }
-        enqueue.left_ticket.waitFor(
-            motion_control_pkg::execution::kDualArmControlPeriod);
-    }
-    const auto left_stream = enqueue.left_ticket.snapshot();
-    const auto right_stream = enqueue.right_ticket.snapshot();
-    if (client_canceled) {
-        cancel_goal(
-            "MovePose canceled; future paired samples suppressed");
-        return;
-    }
-    if (timed_out) {
-        abort_goal("MovePose command streaming timed out");
-        return;
-    }
-    if (left_stream.state !=
-        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded ||
-        right_stream.state !=
-        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    if (!streamDualArmTrajectory(
+        *sdk_command_gate_, goal_handle, left_commands, right_commands, deadline,
+        "MovePose", MovePose::Feedback::STATUS_EXECUTING,
+        "streaming one atomic dual-arm pose batch per cycle",
+        publish_feedback, abort_goal, cancel_goal))
     {
-        abort_goal(!left_stream.error_message.empty() ?
-            left_stream.error_message : right_stream.error_message);
         return;
     }
 
@@ -1859,67 +1898,16 @@ void DualArmModule::execution_loop_move_joint_impl(
         abort_goal("MoveJoints timed out before command submission");
         return;
     }
-    const auto enqueue_result = command_coordinator_->enqueueTrajectory(
-        channel, std::move(command_points));
-    if (!enqueue_result.success) {
-        abort_goal(enqueue_result.error_message);
-        return;
-    }
-    auto trajectory_ticket = enqueue_result.ticket;
-    bool canceled_by_client = false;
-    bool timed_out = false;
-    auto next_feedback = std::chrono::steady_clock::now();
-
-    while (true) {
-        const auto snapshot = trajectory_ticket.snapshot();
-        if (motion_control_pkg::execution::isTerminal(snapshot.state)) {
-            break;
-        }
-        if (goal_handle->is_canceling()) {
-            canceled_by_client = true;
-            // 协调器取消只抑制后续点，不冒充厂商软急停或物理急停。
-            trajectory_ticket.requestCancel();
-        } else if (deadline.expired()) {
-            timed_out = true;
-            trajectory_ticket.requestCancel();
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= next_feedback) {
-            const float command_progress = snapshot.sample_count == 0 ? 0.0F :
-                static_cast<float>(snapshot.samples_sent) /
-                static_cast<float>(snapshot.sample_count);
-            publish_feedback(
-                25.0F + 70.0F * command_progress,
-                std::string(arm_name) +
-                " arm streaming through the 4 ms coordinator");
-            next_feedback = now + std::chrono::milliseconds(50);
-        }
-        trajectory_ticket.waitFor(
-            motion_control_pkg::execution::kDualArmControlPeriod);
-    }
-
-    const auto trajectory_status = trajectory_ticket.snapshot();
-    if (canceled_by_client) {
-        cancel_goal("MoveJoints goal canceled by client; future samples suppressed");
-        return;
-    }
-    if (timed_out) {
-        abort_goal("MoveJoints command streaming timed out");
-        return;
-    }
-    if (trajectory_status.state !=
-        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    if (!streamSingleArmTrajectory(
+        *sdk_command_gate_, goal_handle, channel, command_points, deadline,
+        "MoveJoints",
+        publish_feedback, abort_goal, cancel_goal))
     {
-        abort_goal(
-            trajectory_status.error_message.empty() ?
-            "4 ms MoveJoints trajectory execution failed" :
-            trajectory_status.error_message);
         return;
     }
 
     // 所有离散点提交后，用新鲜 SDK 状态等待“低速到位”，并计算最大关节误差。
-    next_feedback = std::chrono::steady_clock::now();
+    auto next_feedback = std::chrono::steady_clock::now();
     while (true) {
         if (goal_handle->is_canceling()) {
             cancel_goal(
@@ -2339,67 +2327,17 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal("MovePose timed out before command submission");
         return;
     }
-    const auto enqueue_result = command_coordinator_->enqueueTrajectory(
-        channel, std::move(command_points));
-    if (!enqueue_result.success) {
-        abort_goal(enqueue_result.error_message);
-        return;
-    }
-    auto trajectory_ticket = enqueue_result.ticket;
-    bool canceled_by_client = false;
-    bool timed_out = false;
-    auto next_feedback = std::chrono::steady_clock::now();
-    while (true) {
-        const auto snapshot = trajectory_ticket.snapshot();
-        if (motion_control_pkg::execution::isTerminal(snapshot.state)) {
-            break;
-        }
-        if (goal_handle->is_canceling()) {
-            canceled_by_client = true;
-            // 普通 Action 取消只抑制后续点，不声称执行了厂商或物理急停。
-            trajectory_ticket.requestCancel();
-        } else if (deadline.expired()) {
-            timed_out = true;
-            trajectory_ticket.requestCancel();
-        }
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= next_feedback) {
-            const float command_progress = snapshot.sample_count == 0 ? 0.0F :
-                static_cast<float>(snapshot.samples_sent) /
-                static_cast<float>(snapshot.sample_count);
-            publish_feedback(
-                25.0F + 70.0F * command_progress,
-                std::string(arm_name) +
-                " arm streaming through the 4 ms coordinator");
-            next_feedback = now + std::chrono::milliseconds(50);
-        }
-        trajectory_ticket.waitFor(
-            motion_control_pkg::execution::kDualArmControlPeriod);
-    }
-
-    const auto trajectory_status = trajectory_ticket.snapshot();
-    if (canceled_by_client) {
-        cancel_goal(
-            "MovePose goal canceled by client; future samples suppressed");
-        return;
-    }
-    if (timed_out) {
-        abort_goal("MovePose command streaming timed out");
-        return;
-    }
-    if (trajectory_status.state !=
-        motion_control_pkg::execution::TrajectoryExecutionState::kSucceeded)
+    if (!streamSingleArmTrajectory(
+        *sdk_command_gate_, goal_handle, channel, command_points, deadline,
+        "MovePose",
+        publish_feedback, abort_goal, cancel_goal))
     {
-        abort_goal(
-            trajectory_status.error_message.empty() ?
-            "4 ms MovePose trajectory execution failed" :
-            trajectory_status.error_message);
         return;
     }
 
     // Action 终态只由这条共享左右臂链产生：持续读取新鲜 SDK 状态，更新
     // Pinocchio FK，并以工具 TCP 平移误差（米）填充 final_distance_error。
-    next_feedback = std::chrono::steady_clock::now();
+    auto next_feedback = std::chrono::steady_clock::now();
     const Eigen::Isometry3d target_tcp =
         motion_control_pkg::kinematics::poseToIsometry(planning_target.pose);
     while (true) {
