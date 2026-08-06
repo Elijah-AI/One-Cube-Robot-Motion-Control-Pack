@@ -31,18 +31,52 @@ python3 action_client_test.py move_joints \
 
   --collision (：置位 enable_collision_check=True)
 
+*******************头部******************************
+  ros2 action send_goal /Control/move_joints \
+  com_interfaces/action/MoveJoints \
+  "{header: {frame_id: base_link},
+    task_id: 'MANUAL_HEAD_JOINT_01',
+    arm_id: 3,
+    joint_name: [
+      'head_yaw_joint','head_pitch_joint'
+    ],
+    position: [
+      -0.3, 0.4
+    ],
+    enable_collision_check: false,
+    speed: 0.5,
+    timeout_ms: 3000}" \
+  --feedback
+
+****************腿部*******************************
+  ros2 action send_goal /Control/move_joints \
+  com_interfaces/action/MoveJoints \
+  "{header: {frame_id: base_link},
+    task_id: 'MANUAL_LEG_JOINT_01',
+    arm_id: 4,
+    joint_name: [
+      'leg_joint1','leg_joint2','leg_joint3','body_joint'
+    ],
+    position: [
+      -1.3, 2.7, -1.4, 0.0
+    ],
+    enable_collision_check: false,
+    speed: 0.5,
+    timeout_ms: 3000}" \
+  --feedback
+
 ***************************************双臂模块测试************************************
   ros2 action send_goal /Control/move_pose \
   com_interfaces/action/MovePose \
   "{header: {frame_id: base_link},
     task_id: 'MANUAL_LEFT_POSE_01',
-    arm_id: 1,
+    arm_id: 0,
     target_pose: {
       header: {frame_id: base_link},
       pose: {
         position: {
           x: 0.98041,
-          y: -0.51958,
+          y: 0.51958,
           z: 1.44463
         },
         orientation: {
@@ -56,7 +90,6 @@ python3 action_client_test.py move_joints \
     bound_size: [0.05, 0.05, 0.05],
     enable_collision_check: false,
     use_force_control: false,
-    enable_move_line: false,
     speed: 0.2,
     timeout_ms: 45000}" \
   --feedback
@@ -110,19 +143,65 @@ python3 action_client_test.py move_joints \
       'Joint5_L','Joint6_L','Joint7_L'
     ],
     left_position: [
-      0.8, 0.0, 0.0, 0.0,
-      0.0, 0.0, 0.0
+      0.8, -0.5, 0.6, -0.4,
+      0.7, -0.2, -0.3
     ],
     right_joint_name: [
       'Joint1_R','Joint2_R','Joint3_R','Joint4_R',
       'Joint5_R','Joint6_R','Joint7_R'
     ],
     right_position: [
-      0.4, 0.0, 0.0, 0.0,
-      0.0, 0.0, 0.0
+      0.8, -0.5, 0.6, -0.4,
+      0.7, -0.2, -0.3
     ],
     synchronization_mode: 0,
-    enable_collision_check: false,
+    enable_collision_check: true,
     speed: 0.3,
     timeout_ms: 30000}" \
+  --feedback
+
+  ros2 action send_goal /Control/move_pose \
+  com_interfaces/action/MovePose \
+  "{header: {frame_id: base_link},
+    task_id: 'MANUAL_DUAL_POSE_01',
+    arm_id: 2,
+    left_target_pose: {
+      header: {frame_id: base_link},
+      pose: {
+        position: {
+          x: 0.98041,
+          y: 0.51958,
+          z: 1.44463
+        },
+        orientation: {
+          x: -0.486658,
+          y: 0.471915,
+          z: -0.446717,
+          w: 0.583871
+        }
+      }
+    },
+    left_bound_size: [0.0, 0.0, 0.0],
+    right_target_pose: {
+      header: {frame_id: base_link},
+      pose: {
+        position: {
+          x: 0.96041,
+          y: -0.53958,
+          z: 1.44463
+        },
+        orientation: {
+          x: -0.486658,
+          y: 0.471915,
+          z: -0.446717,
+          w: 0.583871
+        }
+      }
+    },
+    right_bound_size: [0.0, 0.0, 0.0],
+    synchronization_mode: 0,
+    enable_collision_check: false,
+    use_force_control: false,
+    speed: 0.5,
+    timeout_ms: 45000}" \
   --feedback

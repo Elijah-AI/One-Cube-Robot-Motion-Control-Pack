@@ -647,72 +647,23 @@ public:
         return 0;
     }
 
+    bool ruckigPlan(
+        double dt,
+        const std::vector<double>& max_velocity,
+        const std::vector<double>& max_acc,
+        const std::vector<double>& max_jerk,
+        const std::vector<double>& joint_cur_pos,
+        const std::vector<double>& joint_cur_vel,
+        const std::vector<double>& joint_cur_acc,
+        const std::vector<double>& joint_target_pos,
+        std::vector<std::vector<double>>& res_trajectory);
 
-    template <int dof>
-    bool ruckigPlan(const double dt, const double max_velocity, const double max_acc, const double max_jerk, const std::vector<double> joint_cur_pos, const std::vector<double> joint_cur_vel,  
-                            const std::vector<double> joint_cur_acc, const std::vector<double> joint_target_pos, std::vector<std::vector<double>>& res_trajectory)
-    {
-        ruckig::InputParameter<dof> input;
-        for(size_t i = 0; i < dof; ++i) {
-            input.current_position[i] = joint_cur_pos[i];
-            input.current_velocity[i] = joint_cur_vel[i];
-            input.current_acceleration[i] = joint_cur_acc[i];
-            // input.current_acceleration = {0.0, 2.5, -0.5};
-        
-            input.target_position[i] = joint_target_pos[i];
-            input.target_velocity[i] = 0.0;
-            // input.target_acceleration = {0.0, 0.0, 0.5};
-
-            input.max_velocity[i] = max_velocity;
-            input.max_acceleration[i] = max_acc;
-            input.max_jerk[i] = max_jerk;
-        }
-
-        ruckig::Ruckig<dof> otg;
-        ruckig::Trajectory<dof> trajectory;
-
-        ruckig::Result result = otg.calculate(input, trajectory); // Working = 0,  The trajectory is calculated normally
-        if (result < 0) {//= ruckig::Result::ErrorInvalidInput) {
-            
-            RCLCPP_ERROR(rclcpp::get_logger("ruckigPlan"),"%s Ruckig  calculate error %d",  __func__, (int)result);
-            return false;
-        }
-        
-        // Get duration of the trajectory
-        res_trajectory.clear();
-        double total_time = trajectory.get_duration();
-        std::array<double, dof> new_position, new_velocity, new_acceleration;
-        // std::cout << "Trajectory duration: " << trajectory.get_duration() << " [s]." << std::endl;
-
-        for(double new_time = 0.0; new_time < total_time; new_time+=dt) {
-            trajectory.at_time(new_time, new_position, new_velocity, new_acceleration);
-
-
-
-            std::vector<double> vec_pos{new_position.begin(), new_position.end()};
-            std::vector<double> vec_vel{new_velocity.begin(), new_velocity.end()};
-            std::vector<double> vec_acc{new_acceleration.begin(), new_acceleration.end()};
-                        
-            res_trajectory.emplace_back(vec_pos);
-            // traj_vel_new.emplace_back(vec_vel);
-            // traj_acc_new.emplace_back(vec_acc);    
-
-        }    
-        
-        trajectory.at_time(total_time, new_position, new_velocity, new_acceleration);
-        std::vector<double> vec_pos{new_position.begin(), new_position.end()};
-        std::vector<double> vec_vel{new_velocity.begin(), new_velocity.end()};
-        std::vector<double> vec_acc{new_acceleration.begin(), new_acceleration.end()};
-
-        res_trajectory.emplace_back(vec_pos);
-        // traj_vel_new.emplace_back(vec_vel);
-        // traj_acc_new.emplace_back(vec_acc);
-        return true;
-        
-    }
-
-
-    bool toppraPlan(const std::vector<std::vector<double>>& ompl_path, double dt, int dof, double vel_min, double vel_max, double acc_min, double acc_max, std::vector<std::vector<double>>& res_trajectory);
+    bool toppraPlan(
+        const std::vector<std::vector<double>>& ompl_path,
+        double dt,
+        const std::vector<double>& max_velocity,
+        const std::vector<double>& max_acc,
+        std::vector<std::vector<double>>& res_trajectory);
     
     // std::shared_ptr<GMCA::GMCA> robot; ///< 运动学，动力学底层类，封装为库
 

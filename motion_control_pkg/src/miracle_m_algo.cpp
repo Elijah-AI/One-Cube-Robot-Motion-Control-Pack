@@ -464,7 +464,7 @@ bool MiracleMAlgo::planDualArmJointSpace(const std::vector<double>& start_q,
     }
     // debug start state explicitly using our function
     RCLCPP_INFO_STREAM(rclcpp::get_logger("MiracleMAlgo"),
-                       "Validating single arm start state using isStateValid: "
+                       "Validating dual arm start state using isStateValid: "
                            << isStateValid(start.get(), active_indices, fixed_full_q));
               
     ss->setStartAndGoalStates(start, goal);
@@ -472,7 +472,9 @@ bool MiracleMAlgo::planDualArmJointSpace(const std::vector<double>& start_q,
     if (ss->solve(5.0)) {
         ss->simplifySolution();
         ompl::geometric::PathGeometric& p = ss->getSolutionPath();
-        p.interpolate(p.getStateCount() * 10);
+        if (p.getStateCount() > 2) {
+            p.interpolate(p.getStateCount() * 10);
+        }
         
         path.clear();
         for(std::size_t i = 0; i < p.getStateCount(); ++i) {
@@ -534,7 +536,9 @@ bool MiracleMAlgo::planSingleArmJointSpace(bool is_left,
     if (ss->solve(5.0)) {
         ss->simplifySolution();
         ompl::geometric::PathGeometric& p = ss->getSolutionPath();
-        p.interpolate(p.getStateCount() * 10);  //10倍插值
+        if (p.getStateCount() > 2) {
+            p.interpolate(p.getStateCount() * 10);  //10倍插值
+        }
         
         path.clear();
         for(std::size_t i = 0; i < p.getStateCount(); ++i) {
@@ -1073,12 +1077,95 @@ bool MiracleMAlgo::planSingleArmCartesianPath(bool is_left,
 }
 
 
-bool MiracleMAlgo::toppraPlan(const std::vector<std::vector<double>>& ompl_path, double dt, int dof, double vel_min, double vel_max, double acc_min, double acc_max, std::vector<std::vector<double>>& res_trajectory)
+bool MiracleMAlgo::ruckigPlan(
+    double dt,
+    const std::vector<double>& max_velocity,
+    const std::vector<double>& max_acc,
+    const std::vector<double>& max_jerk,
+    const std::vector<double>& joint_cur_pos,
+    const std::vector<double>& joint_cur_vel,
+    const std::vector<double>& joint_cur_acc,
+    const std::vector<double>& joint_target_pos,
+    std::vector<std::vector<double>>& res_trajectory)
 {
-    if (ompl_path.size() < 2 || dof <= 0)
+    const std::size_t dof = joint_target_pos.size();
+    if (dof == 0U || !std::isfinite(dt) || dt <= 0.0) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "ruckigPlan: invalid dt or empty target");
+        return false;
+    }
+    if (joint_cur_pos.size() != dof || joint_cur_vel.size() != dof ||
+        joint_cur_acc.size() != dof || max_velocity.size() != dof ||
+        max_acc.size() != dof || max_jerk.size() != dof)
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "ruckigPlan: vector size mismatch dof=%zu cur_pos=%zu cur_vel=%zu cur_acc=%zu vel=%zu acc=%zu jerk=%zu",
+            dof, joint_cur_pos.size(), joint_cur_vel.size(), joint_cur_acc.size(),
+            max_velocity.size(), max_acc.size(), max_jerk.size());
+        return false;
+    }
+
+    ruckig::InputParameter<ruckig::DynamicDOFs> input(dof);
+    for (std::size_t index = 0; index < dof; ++index) {
+        input.current_position[index] = joint_cur_pos[index];
+        input.current_velocity[index] = joint_cur_vel[index];
+        input.current_acceleration[index] = joint_cur_acc[index];
+        input.target_position[index] = joint_target_pos[index];
+        input.target_velocity[index] = 0.0;
+        input.target_acceleration[index] = 0.0;
+        input.max_velocity[index] = max_velocity[index];
+        input.max_acceleration[index] = max_acc[index];
+        input.max_jerk[index] = max_jerk[index];
+    }
+
+    ruckig::Ruckig<ruckig::DynamicDOFs> otg(dof);
+    ruckig::Trajectory<ruckig::DynamicDOFs> trajectory(dof);
+    const ruckig::Result result = otg.calculate(input, trajectory);
+    if (result < 0) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "ruckigPlan: calculate error %d", static_cast<int>(result));
+        return false;
+    }
+
+    res_trajectory.clear();
+    const double total_time = trajectory.get_duration();
+    std::vector<double> new_position(dof);
+    std::vector<double> new_velocity(dof);
+    std::vector<double> new_acceleration(dof);
+    const std::size_t total_steps =
+        static_cast<std::size_t>(std::max(1, static_cast<int>(std::ceil(total_time / dt))));
+    for (std::size_t i = 0; i < total_steps; ++i) {
+        const double new_time =
+            i + 1U == total_steps ? total_time : static_cast<double>(i) * dt;
+        trajectory.at_time(new_time, new_position, new_velocity, new_acceleration);
+        res_trajectory.emplace_back(new_position.begin(), new_position.end());
+    }
+    return true;
+}
+
+bool MiracleMAlgo::toppraPlan(
+    const std::vector<std::vector<double>>& ompl_path,
+    double dt,
+    const std::vector<double>& max_velocity,
+    const std::vector<double>& max_acc,
+    std::vector<std::vector<double>>& res_trajectory)
+{
+    const int dof = static_cast<int>(max_velocity.size());
+    if (ompl_path.size() < 2 || dof <= 0 || !std::isfinite(dt) || dt <= 0.0)
     {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: invalid path or dof");
         return false;
+    }
+    if (max_acc.size() != static_cast<std::size_t>(dof)) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: acceleration size mismatch");
+        return false;
+    }
+    for (const auto& wp : ompl_path) {
+        if (wp.size() != static_cast<std::size_t>(dof)) {
+            RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: waypoint size mismatch");
+            return false;
+        }
     }
     
     // 1. waypoint -> toppra::Vectors
@@ -1115,10 +1202,10 @@ bool MiracleMAlgo::toppraPlan(const std::vector<std::vector<double>>& ompl_path,
     toppra::Vector accLimitLower = Eigen::VectorXd::Zero(dof);
     toppra::Vector accLimitUpper = Eigen::VectorXd::Zero(dof);
     for(int j = 0; j < dof; ++j) {
-        velLimitLower(j) = vel_min;
-        velLimitUpper(j) = vel_max;
-        accLimitLower(j) = acc_min;
-        accLimitUpper(j) = acc_max;
+        velLimitLower(j) = -max_velocity[static_cast<std::size_t>(j)];
+        velLimitUpper(j) = max_velocity[static_cast<std::size_t>(j)];
+        accLimitLower(j) = -max_acc[static_cast<std::size_t>(j)];
+        accLimitUpper(j) = max_acc[static_cast<std::size_t>(j)];
     }
     toppra::LinearConstraintPtrs cons;
     cons.emplace_back(std::make_shared<toppra::constraint::LinearJointVelocity>(velLimitLower, velLimitUpper));
@@ -1129,8 +1216,8 @@ bool MiracleMAlgo::toppraPlan(const std::vector<std::vector<double>>& ompl_path,
     // 3. TOPPRA求解
     toppra::algorithm::TOPPRA opt(cons, path);
     // opt.setN(500);  求解时间急剧上升
-    auto solver = std::make_shared<toppra::solver::qpOASESWrapper>();   //二次规划求解速度更快
-    // auto solver = std::make_shared<toppra::solver::Seidel>();
+    // auto solver = std::make_shared<toppra::solver::qpOASESWrapper>();   //二次规划求解速度更快
+    auto solver = std::make_shared<toppra::solver::Seidel>();
     opt.solver(solver);
 
     auto ret = opt.computePathParametrization();
@@ -1152,15 +1239,13 @@ bool MiracleMAlgo::toppraPlan(const std::vector<std::vector<double>>& ompl_path,
     const toppra::Vector& raw_time = param.getTimes();
     double totalT = raw_time.tail(1)(0);
 
-    int sample_cnt = static_cast<int>(std::ceil(totalT / dt)) + 1;
+    int sample_cnt = static_cast<int>(std::ceil(totalT / dt));
     sample_cnt = std::max(1, sample_cnt);
 
     toppra::Vector samp_t(sample_cnt);
     for (int i = 0; i < sample_cnt; ++i)
     {
-        double t = i * dt;
-        if (t > totalT) t = totalT;
-        samp_t(i) = t;
+        samp_t(i) = i + 1 == sample_cnt ? totalT : static_cast<double>(i) * dt;
     }
 
     // 批量求值 pos/vel/acc

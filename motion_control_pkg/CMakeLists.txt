@@ -174,10 +174,7 @@ set(SOURCES
     # src/common/wbc/priority_tasks.cpp
     # src/common/wbc/wbc_priority.cpp
     src/common/gripper‌/Modbus_Jodell.cpp
-    src/common/motion/fcl_wrapper.cpp
-    src/common/motion/planner_factory.cpp
-    src/common/motion/ruckig_planner.cpp
-    src/common/motion/toppra_planner.cpp
+    # src/common/motion/fcl_wrapper.cpp
     # Stage 0-7 的生产节点只负责 Marvin 双臂。头部、下肢和 EtherCAT
     # 仍保留源码，但在各自完成离线与真机验证前不编入本节点。
     # MovePose 直接复用 MiracleMAlgo 内部的 Pinocchio/Coal/OMPL 链；

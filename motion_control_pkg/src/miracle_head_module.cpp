@@ -581,12 +581,19 @@ namespace miracle {
 
         double final_error = 0.0;//std::numeric_limits<double>::infinity();
         std::vector<DriverSDK::motorActualStruct> actual_data;
-        bool motors_healthy = m_bus_manager && m_bus_manager->getMotorActualSnapshot(actual_data);
-        for (int i = 0; i < HEAD_JOINTNUM; ++i) {
-            const auto &actual = actual_data[m_jointID[i]];
-            final_error = std::max(
-                final_error,
-                std::abs(static_cast<double>(m_traj_buffer_pos[i]) - actual.pos));
+        if (m_bus_manager && m_bus_manager->getMotorActualSnapshot(actual_data)) {
+            for (int i = 0; i < HEAD_JOINTNUM; ++i) {
+                const auto &actual = actual_data[m_jointID[i]];
+                final_error = std::max(
+                    final_error,
+                    std::abs(static_cast<double>(m_traj_buffer_pos[i]) - actual.pos));
+            }
+        } else {
+            for (int i = 0; i < HEAD_JOINTNUM; ++i) {
+                final_error = std::max(
+                    final_error,
+                    std::abs(static_cast<double>(m_traj_buffer_pos[i]) - m_joints_cur_pos[i]));
+            }
         }
         result->final_distance_error = final_error;
         if (final_error > JOINT_REACH_THRESHOLD) {

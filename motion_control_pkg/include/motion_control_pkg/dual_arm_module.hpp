@@ -2,33 +2,25 @@
 #define DUAL_ARM_MODULE_HPP
 
 
+#include <Eigen/Geometry>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 
-#include "main_node.hpp"
-#include "traj_planner.h"
-#include "planner_factory.h"
-#include "toppra_planner.h"
-#include "ruckig_planner.h"
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
+#include "main_node.hpp"
 // 双臂通信经统一 Adapter/Gate 访问，公共模块不再直接依赖 MarvinSDK.h。
 #include "motion_control_pkg/execution/action_terminal_guard.hpp"
-#include "motion_control_pkg/execution/arm_action_utils.hpp"
-#include "motion_control_pkg/execution/control_period.hpp"
-#include "motion_control_pkg/execution/execution_control.hpp"
-#include "motion_control_pkg/execution/joint_command.hpp"
-#include "motion_control_pkg/kinematics/transform_utils.hpp"
-#include "motion_control_pkg/motion/joint_space_control.hpp"
-#include "motion_control_pkg/motion/pose_space_control.hpp"
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
-#include <cmath>
-#include <functional>
-#include <mutex>
-#include <thread>
-#include <chrono>
-#include <memory>
 
 #define DEG2RAD M_PI/180.0
 #define RAD2DEG 180.0/M_PI
@@ -273,12 +265,6 @@ private:
     std::vector<double> r_a_limit_,l_a_limit_; 
     std::vector<double> r_jerk_limit_,l_jerk_limit_;
     bool l_init_arm_params_ = false;
-    // 左右臂分别持有规划器，禁止把左臂逐关节限制复用于右臂。
-    std::unique_ptr<TrajectoryPlanner> l_ruckig_planner_;
-    std::unique_ptr<TrajectoryPlanner> r_ruckig_planner_;
-    std::unique_ptr<TrajectoryPlanner> l_toppra_planner_;
-    std::unique_ptr<TrajectoryPlanner> r_toppra_planner_;
-    
 };
 
 #endif // DUAL_ARM_MODULE_HPP

@@ -399,8 +399,33 @@ namespace miracle {
             usleep(TRAJ_CYCLE_US);   //按ethercat周期发送
         }
 
-        result->success = ACTION_SUCCESS;
-        goal_handle->succeed(result);
+        double final_error = 0.0;
+        std::vector<DriverSDK::motorActualStruct> actual_data;
+        if (m_bus_manager && m_bus_manager->getMotorActualSnapshot(actual_data)) {
+            for (int i = 0; i < LEG_JOINTNUM; ++i) {
+                const auto &actual = actual_data[m_jointID[i]];
+                final_error = std::max(
+                    final_error,
+                    std::abs(static_cast<double>(m_traj_buffer_pos[i]) - actual.pos));
+            }
+        } else {
+            for (int i = 0; i < LEG_JOINTNUM; ++i) {
+                final_error = std::max(
+                    final_error,
+                    std::abs(static_cast<double>(m_traj_buffer_pos[i]) - m_joints_cur_pos[i]));
+            }
+        }
+        result->final_distance_error = final_error;
+        if (final_error > JOINT_REACH_THRESHOLD) {
+            result->success = ACTION_FAIL;
+            result->error_message = "legs failed to reach final position";
+            goal_handle->abort(result);
+        } else {
+            result->success = ACTION_SUCCESS;
+            result->error_message = "legs reached target";
+            goal_handle->succeed(result);
+        }
+
         // 正常结束，恢复空闲状态
         is_executing_leg_.store(false);
         RCLCPP_INFO(rclcpp::get_logger("leg_module"),"%s -%s %d", m_module_name, __func__, m_traj_point_index);

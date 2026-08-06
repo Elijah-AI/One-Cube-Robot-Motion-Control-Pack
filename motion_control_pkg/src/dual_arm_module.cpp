@@ -1,5 +1,13 @@
 #include "dual_arm_module.hpp"
 #include "miracle_m_algo.hpp"
+#include "motion_control_pkg/execution/arm_action_utils.hpp"
+#include "motion_control_pkg/execution/control_period.hpp"
+#include "motion_control_pkg/execution/execution_control.hpp"
+#include "motion_control_pkg/execution/joint_command.hpp"
+#include "motion_control_pkg/kinematics/transform_utils.hpp"
+#include "motion_control_pkg/motion/joint_space_control.hpp"
+#include "motion_control_pkg/motion/pose_space_control.hpp"
+
 #include <std_msgs/msg/header.hpp>
 #include <algorithm>
 #include <cerrno>
@@ -148,6 +156,82 @@ bool streamDualArmTrajectory(
     return true;
 }
 
+bool planRuckigSamples(
+    MiracleMAlgo& miracle_algo,
+    const std::vector<double>& start,
+    const std::vector<double>& target,
+    const std::vector<double>& velocity_limits,
+    const std::vector<double>& acceleration_limits,
+    const std::vector<double>& jerk_limits,
+    std::vector<std::vector<double>>& trajectory,
+    std::string& error_message)
+{
+    RCLCPP_INFO_STREAM(rclcpp::get_logger("dual_arm_module"),
+        "Using Ruckig point-to-point planner, dof=" << start.size()
+        << ", dt=" << motion_control_pkg::execution::kDualArmControlPeriodSeconds);
+    if (start.empty() || start.size() != target.size() ||
+        start.size() != velocity_limits.size() ||
+        start.size() != acceleration_limits.size() ||
+        start.size() != jerk_limits.size())
+    {
+        error_message = "Ruckig planning input dimensions do not match";
+        return false;
+    }
+    const std::vector<double> zero_velocity(start.size(), 0.0);
+    const std::vector<double> zero_acceleration(start.size(), 0.0);
+    if (!miracle_algo.ruckigPlan(
+            motion_control_pkg::execution::kDualArmControlPeriodSeconds,
+            velocity_limits, acceleration_limits, jerk_limits,
+            start, zero_velocity, zero_acceleration, target, trajectory))
+    {
+        error_message = "MiracleMAlgo::ruckigPlan failed";
+        return false;
+    }
+    error_message.clear();
+    return true;
+}
+
+bool planToppraSamples(
+    MiracleMAlgo& miracle_algo,
+    const std::vector<std::vector<double>>& waypoints,
+    const std::vector<double>& velocity_limits,
+    const std::vector<double>& acceleration_limits,
+    std::vector<std::vector<double>>& trajectory,
+    std::string& error_message)
+{
+    RCLCPP_INFO_STREAM(rclcpp::get_logger("dual_arm_module"),
+        "Using TOPPRA multi-waypoint planner, waypoints=" << waypoints.size()
+        << ", dof=" << velocity_limits.size()
+        << ", dt=" << motion_control_pkg::execution::kDualArmControlPeriodSeconds);
+    if (waypoints.size() < 2U || velocity_limits.empty() ||
+        velocity_limits.size() != acceleration_limits.size())
+    {
+        error_message = "TOPPRA planning input dimensions are invalid";
+        return false;
+    }
+    if (!miracle_algo.toppraPlan(
+            waypoints,
+            motion_control_pkg::execution::kDualArmControlPeriodSeconds,
+            velocity_limits, acceleration_limits, trajectory))
+    {
+        error_message = "MiracleMAlgo::toppraPlan failed";
+        return false;
+    }
+    error_message.clear();
+    return true;
+}
+
+std::vector<std::vector<double>> extractWaypointPositions(
+    const std::vector<Waypoint>& waypoints)
+{
+    std::vector<std::vector<double>> positions;
+    positions.reserve(waypoints.size());
+    for (const auto& waypoint : waypoints) {
+        positions.push_back(waypoint.positions);
+    }
+    return positions;
+}
+
 }  // namespace
 
 DualArmModule::DualArmModule(
@@ -262,54 +346,6 @@ bool DualArmModule::initialize(std::string& error_message)
         return false;
     }
     if (!init_set_tcp(error_message)) {
-        return false;
-    }
-
-    const auto initialize_planner =
-        [this](
-        PlannerType planner_type,
-        const std::vector<double> & velocity,
-        const std::vector<double> & acceleration,
-        const std::vector<double> & jerk,
-        std::unique_ptr<TrajectoryPlanner> & planner) {
-          MotionConstraint constraints;
-          constraints.max_vel = velocity;
-          constraints.max_acc = acceleration;
-          constraints.max_jerk = jerk;
-          planner = PlannerFactory::createPlanner(planner_type);
-          if (!planner) {
-            return false;
-          }
-          // Ruckig 必须在 init() 创建内部实例前收到统一 4 ms 周期。
-          planner->setCycleTime(
-              motion_control_pkg::execution::kDualArmControlPeriodSeconds);
-          return planner->init(arm_dof_, constraints);
-        };
-
-    if (motion_control_pkg::sdk::isArmEnabled(
-        arm_configuration_, motion_control_pkg::sdk::ArmChannel::kLeft) &&
-        (!initialize_planner(
-        PlannerType::RUCKIG, l_v_limit_, l_a_limit_, l_jerk_limit_,
-        l_ruckig_planner_) ||
-        !initialize_planner(
-        PlannerType::TOPPRA, l_v_limit_, l_a_limit_, l_jerk_limit_,
-        l_toppra_planner_)))
-    {
-        error_message =
-            "Failed to initialize left arm 4 ms Ruckig/TOPPRA planners";
-        return false;
-    }
-    if (motion_control_pkg::sdk::isArmEnabled(
-        arm_configuration_, motion_control_pkg::sdk::ArmChannel::kRight) &&
-        (!initialize_planner(
-        PlannerType::RUCKIG, r_v_limit_, r_a_limit_, r_jerk_limit_,
-        r_ruckig_planner_) ||
-        !initialize_planner(
-        PlannerType::TOPPRA, r_v_limit_, r_a_limit_, r_jerk_limit_,
-        r_toppra_planner_)))
-    {
-        error_message =
-            "Failed to initialize right arm 4 ms Ruckig/TOPPRA planners";
         return false;
     }
 
@@ -888,46 +924,38 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
         return;
     }
 
-    MotionConstraint combined_constraints;
+    std::vector<double> combined_velocity;
+    std::vector<double> combined_acceleration;
+    std::vector<double> combined_jerk;
     for (const auto& data : arm_data) {
-        combined_constraints.max_vel.insert(
-            combined_constraints.max_vel.end(),
+        combined_velocity.insert(
+            combined_velocity.end(),
             data.motion.velocity.begin(), data.motion.velocity.end());
-        combined_constraints.max_acc.insert(
-            combined_constraints.max_acc.end(),
+        combined_acceleration.insert(
+            combined_acceleration.end(),
             data.motion.acceleration.begin(), data.motion.acceleration.end());
-        combined_constraints.max_jerk.insert(
-            combined_constraints.max_jerk.end(),
+        combined_jerk.insert(
+            combined_jerk.end(),
             data.motion.jerk.begin(), data.motion.jerk.end());
     }
-    auto planner = PlannerFactory::createPlanner(
-        goal->enable_collision_check ? PlannerType::TOPPRA :
-        PlannerType::RUCKIG);
-    if (!planner) {
-        abort_goal("Failed to create the existing dual-arm trajectory planner");
-        return;
-    }
-    planner->setCycleTime(
-        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
-    if (!planner->init(2 * arm_dof_, combined_constraints)) {
-        abort_goal("Dual-arm trajectory planner rejected the 14-DOF limits");
-        return;
-    }
-    std::vector<Waypoint> waypoints;
-    waypoints.reserve(dual_path.size());
-    for (auto& point : dual_path) {
-        Waypoint waypoint;
-        waypoint.positions = std::move(point);
-        waypoints.push_back(std::move(waypoint));
-    }
-    const auto planned = planner->plan(waypoints);
-    if (!planned.success || planned.positions.empty()) {
-        abort_goal("Dual-arm 14-DOF time parameterization failed");
+    std::vector<std::vector<double>> planned_positions;
+    std::string planning_error;
+    const bool planned = dual_path.size() == 2U ?
+        planRuckigSamples(
+            *miracle_algo_, dual_path.front(), dual_path.back(),
+            combined_velocity, combined_acceleration, combined_jerk,
+            planned_positions, planning_error) :
+        planToppraSamples(
+            *miracle_algo_, dual_path, combined_velocity, combined_acceleration,
+            planned_positions, planning_error);
+    if (!planned || planned_positions.empty()) {
+        abort_goal("Dual-arm 14-DOF time parameterization failed: " +
+            planning_error);
         return;
     }
 
     std::array<std::vector<std::vector<double>>, 2> trajectories;
-    for (const auto& point : planned.positions) {
+    for (const auto& point : planned_positions) {
         if (point.size() != 2U * static_cast<std::size_t>(arm_dof_)) {
             abort_goal("Dual-arm trajectory sample does not contain 14 joints");
             return;
@@ -1416,46 +1444,38 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         return;
     }
 
-    MotionConstraint combined_constraints;
+    std::vector<double> combined_velocity;
+    std::vector<double> combined_acceleration;
+    std::vector<double> combined_jerk;
     for (const auto& data : arm_data) {
-        combined_constraints.max_vel.insert(
-            combined_constraints.max_vel.end(),
+        combined_velocity.insert(
+            combined_velocity.end(),
             data.motion.velocity.begin(), data.motion.velocity.end());
-        combined_constraints.max_acc.insert(
-            combined_constraints.max_acc.end(),
+        combined_acceleration.insert(
+            combined_acceleration.end(),
             data.motion.acceleration.begin(), data.motion.acceleration.end());
-        combined_constraints.max_jerk.insert(
-            combined_constraints.max_jerk.end(),
+        combined_jerk.insert(
+            combined_jerk.end(),
             data.motion.jerk.begin(), data.motion.jerk.end());
     }
-    auto planner = PlannerFactory::createPlanner(
-        goal->enable_collision_check ? PlannerType::TOPPRA :
-        PlannerType::RUCKIG);
-    if (!planner) {
-        abort_goal("Failed to create the existing dual-arm trajectory planner");
-        return;
-    }
-    planner->setCycleTime(
-        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
-    if (!planner->init(2 * arm_dof_, combined_constraints)) {
-        abort_goal("Dual-arm pose planner rejected the 14-DOF motion limits");
-        return;
-    }
-    std::vector<Waypoint> waypoints;
-    waypoints.reserve(dual_path.size());
-    for (auto& point : dual_path) {
-        Waypoint waypoint;
-        waypoint.positions = std::move(point);
-        waypoints.push_back(std::move(waypoint));
-    }
-    const auto planned = planner->plan(waypoints);
-    if (!planned.success || planned.positions.empty()) {
-        abort_goal("Dual-arm pose 14-DOF time parameterization failed");
+    std::vector<std::vector<double>> planned_positions;
+    std::string planning_error;
+    const bool planned = dual_path.size() == 2U ?
+        planRuckigSamples(
+            *miracle_algo_, dual_path.front(), dual_path.back(),
+            combined_velocity, combined_acceleration, combined_jerk,
+            planned_positions, planning_error) :
+        planToppraSamples(
+            *miracle_algo_, dual_path, combined_velocity, combined_acceleration,
+            planned_positions, planning_error);
+    if (!planned || planned_positions.empty()) {
+        abort_goal("Dual-arm pose 14-DOF time parameterization failed: " +
+            planning_error);
         return;
     }
 
     std::array<std::vector<std::vector<double>>, 2> trajectories;
-    for (const auto& point : planned.positions) {
+    for (const auto& point : planned_positions) {
         if (point.size() != 2U * static_cast<std::size_t>(arm_dof_)) {
             abort_goal("Dual-arm pose trajectory sample does not contain 14 joints");
             return;
@@ -1837,43 +1857,21 @@ void DualArmModule::execution_loop_move_joint_impl(
     publish_feedback(15.0F, std::string(arm_name) +
         " arm joint constraints validated");
 
-    auto& planner =
-        channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
-        l_ruckig_planner_ : r_ruckig_planner_;
-    if (!planner) {
+    std::vector<std::vector<double>> planned_positions;
+    if (!planRuckigSamples(
+            *miracle_algo_,
+            std::vector<double>(current_joint.begin(), current_joint.end()),
+            std::vector<double>(target_joint.begin(), target_joint.end()),
+            scaled_limits.velocity, scaled_limits.acceleration,
+            scaled_limits.jerk, planned_positions, conversion_error))
+    {
         abort_goal(std::string(arm_name) +
-            " arm Ruckig planner is not initialized");
-        return;
-    }
-    MotionConstraint constraints;
-    constraints.max_vel = scaled_limits.velocity;
-    constraints.max_acc = scaled_limits.acceleration;
-    constraints.max_jerk = scaled_limits.jerk;
-    // 每个手臂持有独立规划器；按 Goal 速度比例重新装载约束，不改变算法。
-    planner->setCycleTime(
-        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
-    if (!planner->init(arm_dof_, constraints)) {
-        abort_goal(std::string(arm_name) +
-            " arm Ruckig planner rejected the scaled constraints");
-        return;
-    }
-
-    Waypoint start_waypoint;
-    Waypoint target_waypoint;
-    start_waypoint.positions.assign(
-        current_joint.begin(), current_joint.end());
-    target_waypoint.positions.assign(
-        target_joint.begin(), target_joint.end());
-    const auto trajectory =
-        planner->plan({start_waypoint, target_waypoint});
-    if (!trajectory.success) {
-        abort_goal(std::string(arm_name) +
-            " arm Ruckig point-to-point planning failed");
+            " arm Ruckig point-to-point planning failed: " + conversion_error);
         return;
     }
     const auto trajectory_validation =
         motion_control_pkg::motion::validateTrajectoryPositions(
-        trajectory.positions, effective_limits.lower, effective_limits.upper,
+        planned_positions, effective_limits.lower, effective_limits.upper,
         joint67_table);
     if (!trajectory_validation.valid) {
         abort_goal(trajectory_validation.error_message);
@@ -1882,7 +1880,7 @@ void DualArmModule::execution_loop_move_joint_impl(
 
     std::vector<motion_control_pkg::execution::JointCommand> command_points;
     if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
-        trajectory.positions, command_points, conversion_error))
+        planned_positions, command_points, conversion_error))
     {
         abort_goal(conversion_error);
         return;
@@ -2249,11 +2247,8 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal(pose_path.error_message);
         return;
     }
-    std::vector<std::vector<double>> waypoint_positions;
-    waypoint_positions.reserve(pose_path.waypoints.size());
-    for (const auto& waypoint : pose_path.waypoints) {
-        waypoint_positions.push_back(waypoint.positions);
-    }
+    const std::vector<std::vector<double>> waypoint_positions =
+        extractWaypointPositions(pose_path.waypoints);
     const auto waypoint_validation =
         motion_control_pkg::motion::validateTrajectoryPositions(
         waypoint_positions, effective_limits.lower, effective_limits.upper,
@@ -2266,52 +2261,33 @@ void DualArmModule::execution_loop_move_pose_impl(
 
     const bool use_ruckig = pose_path.kind ==
         motion_control_pkg::motion::PoseTrajectoryKind::kRuckigPointToPoint;
-    TrajectoryPlanner* planner = nullptr;
-    if (is_left) {
-        planner = use_ruckig ?
-            l_ruckig_planner_.get() : l_toppra_planner_.get();
-    } else {
-        planner = use_ruckig ?
-            r_ruckig_planner_.get() : r_toppra_planner_.get();
-    }
     const char* planner_name = use_ruckig ? "Ruckig" : "TOPPRA";
-    if (planner == nullptr) {
+    std::string conversion_error;
+    std::vector<std::vector<double>> planned_positions;
+    const bool planned = use_ruckig ?
+        planRuckigSamples(
+            *miracle_algo_, waypoint_positions.front(), waypoint_positions.back(),
+            scaled_limits.velocity, scaled_limits.acceleration,
+            scaled_limits.jerk, planned_positions, conversion_error) :
+        planToppraSamples(
+            *miracle_algo_, waypoint_positions, scaled_limits.velocity,
+            scaled_limits.acceleration, planned_positions, conversion_error);
+    if (!planned) {
         abort_goal(std::string(arm_name) + " arm " + planner_name +
-            " planner is not initialized");
-        return;
-    }
-    MotionConstraint constraints;
-    constraints.max_vel = scaled_limits.velocity;
-    constraints.max_acc = scaled_limits.acceleration;
-    constraints.max_jerk = scaled_limits.jerk;
-    planner->setCycleTime(
-        motion_control_pkg::execution::kDualArmControlPeriodSeconds);
-    if (!planner->init(arm_dof_, constraints)) {
-        abort_goal(std::string(planner_name) +
-            " rejected the scaled MovePose constraints");
-        return;
-    }
-
-    // 两点只调用一次 Ruckig；三点及以上的 OMPL 路径整体交给 TOPPRA。
-    // 禁止逐段 Ruckig 拼接，两个规划器都统一输出 4 ms 采样。
-    const auto trajectory = planner->plan(pose_path.waypoints);
-    if (!trajectory.success) {
-        abort_goal(std::string(arm_name) + " arm " + planner_name +
-            " time parameterization failed");
+            " time parameterization failed: " + conversion_error);
         return;
     }
     const auto trajectory_validation =
         motion_control_pkg::motion::validateTrajectoryPositions(
-        trajectory.positions, effective_limits.lower, effective_limits.upper,
+        planned_positions, effective_limits.lower, effective_limits.upper,
         joint67_table);
     if (!trajectory_validation.valid) {
         abort_goal(trajectory_validation.error_message);
         return;
     }
     std::vector<motion_control_pkg::execution::JointCommand> command_points;
-    std::string conversion_error;
     if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
-        trajectory.positions, command_points, conversion_error))
+        planned_positions, command_points, conversion_error))
     {
         abort_goal(conversion_error);
         return;
@@ -2767,7 +2743,6 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
         return res;
     }
 
-    std::cout<<"14*****"<<std::endl;
     for(int i =0;i<arm_dof_;i++)
     {
 
@@ -2777,27 +2752,28 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
       l_q_upper_limits_[i] = pnva_[0][i][0]*DEG2RAD;
       r_q_upper_limits_[i] = pnva_[1][i][0]*DEG2RAD;
 
-      std::cout<<"i:="<<i<<","<<"l:="<< l_q_lower_limits_[i]<<","<<l_q_upper_limits_[i]<<std::endl;
-      std::cout<<"i:="<<i<<","<<"r:="<< r_q_lower_limits_[i]<<","<<r_q_upper_limits_[i]<<std::endl;
+    //   std::cout<<"i:="<<i<<","<<"l:="<< l_q_lower_limits_[i]<<","<<l_q_upper_limits_[i]<<std::endl;
+    //   std::cout<<"i:="<<i<<","<<"r:="<< r_q_lower_limits_[i]<<","<<r_q_upper_limits_[i]<<std::endl;
 
       l_v_limit_[i] = pnva_[0][i][2]*DEG2RAD;
       r_v_limit_[i] = pnva_[1][i][2]*DEG2RAD;
 
-      std::cout<<"i:="<<i<<","<<"v:="<< pnva_[0][i][2]<<std::endl;
+    //   std::cout<<"i:="<<i<<","<<"v:="<< l_v_limit_[i]<<","<<r_v_limit_[i]<<std::endl;
       
       l_a_limit_[i] = pnva_[0][i][3]*DEG2RAD;
       r_a_limit_[i] = pnva_[1][i][3]*DEG2RAD;
 
-      std::cout<<"i:="<<i<<","<<"a:="<< pnva_[0][i][3]<<std::endl;
+    //   std::cout<<"i:="<<i<<","<<"a:="<< l_a_limit_[i]<<","<<r_a_limit_[i]<<std::endl;
+      
     
 
       // 加速度在上一行已经由度制转换为 rad/s²；jerk 只按倍数生成，
       // 不得再次乘 DEG2RAD，否则约束会被错误缩小约 57.3 倍。
       l_jerk_limit_[i] = 5.0 * l_a_limit_[i];
       r_jerk_limit_[i] = 5.0 * r_a_limit_[i];
-
+      
+    //   std::cout<<"i:="<<i<<","<<"j:="<< l_jerk_limit_[i]<<","<<r_jerk_limit_[i]<<std::endl;
     }
-     std::cout<<"15*****"<<std::endl;
     res = true;
     return res;
  }
