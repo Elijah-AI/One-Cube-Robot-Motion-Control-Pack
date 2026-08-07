@@ -1076,6 +1076,157 @@ bool MiracleMAlgo::planSingleArmCartesianPath(bool is_left,
     return true;
 }
 
+Eigen::Quaterniond MiracleMAlgo::slerp_ruckig(const Eigen::Quaterniond& q0,
+                                       const Eigen::Quaterniond& q1,
+                                       double t)
+{
+    // 计算点积（使用 coeffs，顺序为 [x, y, z, w]）
+    double dot = q0.coeffs().dot(q1.coeffs());
+
+    Eigen::Quaterniond q1_local = q1;
+
+    // 防止反向，取最短圆弧
+    if (dot < 0.0)
+    {
+        q1_local.coeffs() = -q1_local.coeffs();
+        dot = -dot;
+    }
+
+    // 限制点积在 [-1, 1]，防止数值误差导致 acos 越界
+    dot = std::clamp(dot, -1.0, 1.0);
+
+    double theta_0    = std::acos(dot);
+    double theta      = theta_0 * t;
+    double sin_theta0 = std::sin(theta_0);
+
+    // 四元数几乎相同，直接返回起始四元数
+    if (sin_theta0 < 1e-10)
+    {
+        return q0;
+    }
+
+    double s0 = std::cos(theta) - dot * std::sin(theta) / sin_theta0;
+    double s1 = std::sin(theta) / sin_theta0;
+
+    Eigen::Quaterniond result;
+    result.coeffs() = s0 * q0.coeffs() + s1 * q1_local.coeffs();
+    return result;
+}
+
+bool MiracleMAlgo::planSingleArmCartesianLine(bool is_left, const std::vector<double>& start_q,
+                                                    const std::vector<double>& end_poseture,
+                                                    const double& dt,const double& v_max,
+                                                    const double& a_max, const double& j_max,
+                                                    std::vector<std::vector<double>>& path)
+{
+    Eigen::VectorXd q_current = toEigenConfig(start_q);
+    pinocchio::forwardKinematics(model_, *data_, q_current);
+    pinocchio::updateFramePlacements(model_, *data_);
+    
+    pinocchio::FrameIndex ee_id = is_left ? left_ee_frame_id_ : right_ee_frame_id_;
+    pinocchio::SE3 start_poseture = data_->oMf[ee_id];
+    Eigen::Vector3d start_pose=start_poseture.translation();
+    Eigen::Vector3d end_pose(end_poseture[0], end_poseture[1], end_poseture[2]);
+    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "end pose: %f,%f,%f", 
+                                    end_poseture[0],end_poseture[1],end_poseture[2]);
+    Eigen::Vector3d delta_X = end_pose - start_pose;
+    double d_pos = delta_X.norm();
+    if (d_pos < 1e-2)
+    {
+        std::cout << "起点终点重合！" << std::endl;
+        return false;
+    }
+
+    Eigen::Quaterniond start_quat(start_poseture.rotation());
+    Eigen::Quaterniond end_quat(end_poseture[6], end_poseture[3], end_poseture[4], end_poseture[5]);
+
+    // ===================== Ruckig 一维规划器 =====================
+    ruckig::Ruckig<1> otg(dt);
+    ruckig::InputParameter<1> input;
+    ruckig::OutputParameter<1> output;
+
+    // 初始状态
+    input.current_position = {0.0};
+    input.current_velocity = {0.0};
+    input.current_acceleration = {0.0};
+
+    // 目标状态
+    input.target_position = {d_pos};
+    input.target_velocity = {0.0};
+    input.target_acceleration = {0.0};
+
+    // 运动约束
+    input.max_velocity = {v_max};
+    input.max_acceleration = {a_max};
+    input.max_jerk = {j_max};
+
+    double t = 0.0;
+    // double s0 = input.current_position[0];
+    // double lambda0 = s0 / d_pos;
+
+    std::vector<double> start_p={start_pose[0], start_pose[1], start_pose[2], start_quat.x(), start_quat.y(), start_quat.z(), start_quat.w()};
+    std::vector<std::vector<double>>pose_path;
+    pose_path.push_back(start_p);
+    // path.push_back(start_q);
+
+    while (true)
+    {
+        ruckig::Result result = otg.update(input, output);
+
+        if (result != ruckig::Result::Working)
+        {
+            break;
+        }
+
+        t += dt;
+
+        double s_k   = output.new_position[0];
+        // double ds_k  = output.new_velocity[0];
+        // double dds_k = output.new_acceleration[0];
+        double lambda_k = s_k / d_pos;
+
+        // 位置线性插补
+        Eigen::Vector3d xk = start_pose + lambda_k * delta_X;
+
+        // 姿态 Slerp 插补
+        Eigen::Quaterniond qk = slerp_ruckig(start_quat, end_quat, lambda_k);
+
+        std::vector<double>point(7);
+        Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+        pose.linear() = qk.toRotationMatrix(); // 设置旋转部分
+        pose.translation() = xk; 
+    
+        point={xk.x(),xk.y(),xk.z(),qk.x(),qk.y(),qk.z(),qk.w()};
+        pose_path.push_back(point);
+        
+        output.pass_to_input(input);
+    }
+
+    std::vector<double> current_full_q = start_q;
+    std::vector<double>point_q(7);
+    for(size_t i=0;i<pose_path.size();i++){
+        RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "path i: %f,%f,%f,%f,%f,%f,%f", 
+                                    pose_path[i][0],pose_path[i][1],pose_path[i][2],pose_path[i][3],pose_path[i][4],pose_path[i][5],pose_path[i][6]);
+        Eigen::Vector3d xk(pose_path[i][0],pose_path[i][1],pose_path[i][2]);
+        Eigen::Quaterniond qk(pose_path[i][6],pose_path[i][3],pose_path[i][4],pose_path[i][5]);
+        Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+        pose.linear() = qk.toRotationMatrix(); // 设置旋转部分
+        pose.translation() = xk;
+        std::vector<double> q_next;
+        if(!solveSingleArmCartesianIk(is_left, current_full_q, pose, q_next)) {
+            RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "PlanSingleArmCartesianPath: failed to solve IK at %zu point",i+1);
+            return false;
+        }
+
+        const auto& indices = is_left ? left_arm_q_indices_ : right_arm_q_indices_;
+        for (size_t index = 0; index < indices.size(); ++index) {
+            current_full_q[indices[index]] = q_next[index];
+        }
+        path.push_back(q_next);
+        
+    }
+    return true;
+}
 
 bool MiracleMAlgo::ruckigPlan(
     double dt,

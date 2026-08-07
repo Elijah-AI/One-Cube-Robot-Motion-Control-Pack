@@ -2232,81 +2232,106 @@ void DualArmModule::execution_loop_move_pose_impl(
     }
 
     std::vector<std::vector<double>> active_arm_path;
-    if (goal->enable_collision_check) {
-        // 复用 MiracleMAlgo 内部 Pinocchio IK、Coal 状态有效性与 OMPL
-        // RRTConnect；旧的恒真 OMPLWrapper 不再进入 MovePose 主链。
-        std::vector<std::vector<double>> full_ompl_path;
-        if (!miracle_algo_->planSingleArmCartesianGoal(
-            is_left, full_start_q, root_to_model_end, full_ompl_path))
-        {
-            abort_goal(std::string(arm_name) +
-                " arm Pinocchio/Coal/OMPL pose planning failed");
-            return;
-        }
-        active_arm_path.reserve(full_ompl_path.size());
-        for (const auto& full_q : full_ompl_path) {
-            std::vector<double> arm_q;
-            if (!miracle_algo_->extractSingleArmJoints(
-                is_left, full_q, arm_q))
+    std::vector<std::vector<double>> planned_positions;
+    std::vector<motion_control_pkg::execution::JointCommand> command_points;
+    const char* planner_name = "Unknown";
+    if (!goal->enable_move_line) {
+        if (goal->enable_collision_check) {
+            // 复用 MiracleMAlgo 内部 Pinocchio IK、Coal 状态有效性与 OMPL
+            // RRTConnect；旧的恒真 OMPLWrapper 不再进入 MovePose 主链。
+            std::vector<std::vector<double>> full_ompl_path;
+            if (!miracle_algo_->planSingleArmCartesianGoal(
+                is_left, full_start_q, root_to_model_end, full_ompl_path))
             {
-                abort_goal("OMPL returned an invalid full-body waypoint");
+                abort_goal(std::string(arm_name) +
+                    " arm Pinocchio/Coal/OMPL pose planning failed");
                 return;
             }
-            active_arm_path.push_back(std::move(arm_q));
+            active_arm_path.reserve(full_ompl_path.size());
+            for (const auto& full_q : full_ompl_path) {
+                std::vector<double> arm_q;
+                if (!miracle_algo_->extractSingleArmJoints(
+                    is_left, full_q, arm_q))
+                {
+                    abort_goal("OMPL returned an invalid full-body waypoint");
+                    return;
+                }
+                active_arm_path.push_back(std::move(arm_q));
+            }
+            publish_feedback(15.0F, std::string(arm_name) +
+                " arm collision-checked OMPL path ready");
+        } else {
+            // 无碰撞模式仍使用现成 Pinocchio IK。单目标形成唯一的起终两点，
+            // 必须交给 Ruckig，不通过业务层插值。
+            std::vector<double> ik_goal;
+            if (!miracle_algo_->solveSingleArmCartesianIk(
+                is_left, full_start_q, root_to_model_end, ik_goal))
+            {
+                abort_goal(std::string(arm_name) + " arm Pinocchio IK failed");
+                return;
+            }
+            active_arm_path = {current_arm_q, std::move(ik_goal)};
+            publish_feedback(15.0F, std::string(arm_name) +
+                " arm Pinocchio IK target ready");
         }
-        publish_feedback(15.0F, std::string(arm_name) +
-            " arm collision-checked OMPL path ready");
-    } else {
-        // 无碰撞模式仍使用现成 Pinocchio IK。单目标形成唯一的起终两点，
-        // 必须交给 Ruckig，不通过业务层插值。
-        std::vector<double> ik_goal;
-        if (!miracle_algo_->solveSingleArmCartesianIk(
-            is_left, full_start_q, root_to_model_end, ik_goal))
-        {
-            abort_goal(std::string(arm_name) + " arm Pinocchio IK failed");
+
+        const auto pose_path =
+            motion_control_pkg::motion::preparePoseWaypointPath(active_arm_path);
+        if (!pose_path.valid) {
+            abort_goal(pose_path.error_message);
             return;
         }
-        active_arm_path = {current_arm_q, std::move(ik_goal)};
-        publish_feedback(15.0F, std::string(arm_name) +
-            " arm Pinocchio IK target ready");
+        const std::vector<std::vector<double>> waypoint_positions =
+            extractWaypointPositions(pose_path.waypoints);
+        const auto waypoint_validation =
+            motion_control_pkg::motion::validateTrajectoryPositions(
+            waypoint_positions, effective_limits.lower, effective_limits.upper,
+            joint67_table);
+        if (!waypoint_validation.valid) {
+            abort_goal("IK/OMPL path violates configured constraints: " +
+                waypoint_validation.error_message);
+            return;
+        }
+
+        const bool use_ruckig = pose_path.kind ==
+            motion_control_pkg::motion::PoseTrajectoryKind::kRuckigPointToPoint;
+        planner_name = use_ruckig ? "Ruckig" : "TOPPRA";
+        std::string planner_error;
+    
+        const bool planned = use_ruckig ?
+            planRuckigSamples(
+                *miracle_algo_, waypoint_positions.front(), waypoint_positions.back(),
+                scaled_limits.velocity, scaled_limits.acceleration,
+                scaled_limits.jerk, planned_positions, planner_error) :
+            planToppraSamples(
+                *miracle_algo_, waypoint_positions, scaled_limits.velocity,
+                scaled_limits.acceleration, planned_positions, planner_error);
+        if (!planned) {
+            abort_goal(std::string(arm_name) + " arm " + planner_name +
+                " time parameterization failed: " + planner_error);
+            return;
+        }   
+    }
+    else {  
+        planner_name = "CartesianLine";
+        double x = root_to_model_end.translation().x();
+        double y = root_to_model_end.translation().y();
+        double z = root_to_model_end.translation().z();
+        Eigen::Quaterniond q_root_to_model_end(root_to_model_end.rotation());
+        double qx = q_root_to_model_end.x();
+        double qy = q_root_to_model_end.y();
+        double qz = q_root_to_model_end.z();
+        double qw = q_root_to_model_end.w();
+        std::vector<double> end_poseture={x,y,z,qx,qy,qz,qw};
+        // std::vector<std::vector<double>> path;
+        bool res=miracle_algo_->planSingleArmCartesianLine(is_left, full_start_q, end_poseture, motion_control_pkg::execution::kDualArmControlPeriodSeconds, 
+                                                goal->speed*CARTES_V_MAX, goal->speed*CARTES_A_MAX, goal->speed*CARTES_J_MAX, planned_positions);
+        if(!res){
+            abort_goal("CartesianLine planner failed");
+            return;
+        }
     }
 
-    const auto pose_path =
-        motion_control_pkg::motion::preparePoseWaypointPath(active_arm_path);
-    if (!pose_path.valid) {
-        abort_goal(pose_path.error_message);
-        return;
-    }
-    const std::vector<std::vector<double>> waypoint_positions =
-        extractWaypointPositions(pose_path.waypoints);
-    const auto waypoint_validation =
-        motion_control_pkg::motion::validateTrajectoryPositions(
-        waypoint_positions, effective_limits.lower, effective_limits.upper,
-        joint67_table);
-    if (!waypoint_validation.valid) {
-        abort_goal("IK/OMPL path violates configured constraints: " +
-            waypoint_validation.error_message);
-        return;
-    }
-
-    const bool use_ruckig = pose_path.kind ==
-        motion_control_pkg::motion::PoseTrajectoryKind::kRuckigPointToPoint;
-    const char* planner_name = use_ruckig ? "Ruckig" : "TOPPRA";
-    std::string planner_error;
-    std::vector<std::vector<double>> planned_positions;
-    const bool planned = use_ruckig ?
-        planRuckigSamples(
-            *miracle_algo_, waypoint_positions.front(), waypoint_positions.back(),
-            scaled_limits.velocity, scaled_limits.acceleration,
-            scaled_limits.jerk, planned_positions, planner_error) :
-        planToppraSamples(
-            *miracle_algo_, waypoint_positions, scaled_limits.velocity,
-            scaled_limits.acceleration, planned_positions, planner_error);
-    if (!planned) {
-        abort_goal(std::string(arm_name) + " arm " + planner_name +
-            " time parameterization failed: " + planner_error);
-        return;
-    }
     const auto trajectory_validation =
         motion_control_pkg::motion::validateTrajectoryPositions(
         planned_positions, effective_limits.lower, effective_limits.upper,
@@ -2315,7 +2340,7 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal(trajectory_validation.error_message);
         return;
     }
-    std::vector<motion_control_pkg::execution::JointCommand> command_points;
+    // std::vector<motion_control_pkg::execution::JointCommand> command_points;
     if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
         planned_positions, command_points, conversion_error))
     {

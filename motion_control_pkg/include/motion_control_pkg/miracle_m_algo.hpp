@@ -58,6 +58,9 @@
 // #include "toppra/toppra.hpp"
 
 #define JOINTS_THRESHOLD 0.002
+#define CARTES_V_MAX 1.8
+#define CARTES_A_MAX 7.2
+#define CARTES_J_MAX 36.0
 
 typedef Eigen::VectorXd VectorXd;
 typedef Eigen::MatrixXd MatrixXd;
@@ -336,6 +339,12 @@ public:
                                     const Eigen::Isometry3d& goal,
                                     std::vector<std::vector<double>>& path,
                                     double step_size = 0.01);
+
+    bool planSingleArmCartesianLine(bool is_left, const std::vector<double>& start_q,
+                                    const std::vector<double>& end_poseture,
+                                    const double& dt,const double& v_max,
+                                    const double& a_max, const double& j_max,
+                                    std::vector<std::vector<double>>& path);
 
     const pinocchio::Model& getModel() const { return model_; }
 
@@ -698,6 +707,10 @@ private:
                      const Eigen::Isometry3d& left_goal,
                      const Eigen::Isometry3d& right_goal,
                      Eigen::VectorXd& q_res);
+    
+    Eigen::Quaterniond slerp_ruckig(const Eigen::Quaterniond& q0,
+                                    const Eigen::Quaterniond& q1,
+                                    double t);
     std::string urdf_path_;
     std::string mesh_dir_;
 

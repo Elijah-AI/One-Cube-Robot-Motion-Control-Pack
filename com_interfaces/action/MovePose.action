@@ -25,6 +25,7 @@ uint8 synchronization_mode
 
 bool enable_collision_check
 bool use_force_control                   # 开启力控
+bool enable_move_line                    # 开启直线运动
 float32 speed                            # 控制速度比例，范围：(0, 1]
 uint8[] hand_action_type                 # 灵巧手动作类型，未安装时留空
 sensor_msgs/PointCloud2 env_point_cloud
