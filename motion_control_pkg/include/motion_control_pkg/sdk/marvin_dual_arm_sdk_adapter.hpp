@@ -23,8 +23,21 @@ public:
   bool beginCommandBatch() override;
   bool clearServoError(ArmChannel channel) override;
   bool setPositionMode(ArmChannel channel) override;
+  bool setTorqueMode(ArmChannel channel) override;
   bool setJointLimits(
     ArmChannel channel, int velocity_ratio, int acceleration_ratio) override;
+  bool setTool(
+    ArmChannel channel, const ToolParameters & parameters) override;
+  bool setJointImpedanceGains(
+    ArmChannel channel,
+    const std::array<double, kArmDof> & stiffness,
+    const std::array<double, kArmDof> & damping) override;
+  bool setCartesianImpedanceGains(
+    ArmChannel channel,
+    const std::array<double, kArmDof> & stiffness,
+    const std::array<double, kArmDof> & damping) override;
+  bool setImpedanceType(
+    ArmChannel channel, ArmControlMode mode) override;
   bool setJointPosition(
     ArmChannel channel,
     const std::array<double, kArmDof> & joints) override;

@@ -28,7 +28,33 @@
     
     right_arm_tool: suck    #根据机器人实际配置修改
     right_arm_tool_tf: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
-    
+
+    # control_mode=1 时，MoveJoints 使用关节阻抗，MovePose 使用笛卡尔阻抗。
+    left_joint_impedance_stiffness: [5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0]
+    left_joint_impedance_damping: [0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
+    left_joint_impedance_velocity_ratio: 10
+    left_joint_impedance_acceleration_ratio: 10
+    right_joint_impedance_stiffness: [5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0]
+    right_joint_impedance_damping: [0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
+    right_joint_impedance_velocity_ratio: 10
+    right_joint_impedance_acceleration_ratio: 10
+
+    left_cartesian_impedance_stiffness: [10000.0, 10000.0, 10000.0, 600.0, 600.0, 600.0, 20.0]
+    left_cartesian_impedance_damping: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 1.0]
+    left_cartesian_impedance_velocity_ratio: 20
+    left_cartesian_impedance_acceleration_ratio: 20
+    right_cartesian_impedance_stiffness: [10000.0, 10000.0, 10000.0, 600.0, 600.0, 600.0, 20.0]
+    right_cartesian_impedance_damping: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 1.0]
+    right_cartesian_impedance_velocity_ratio: 20
+    right_cartesian_impedance_acceleration_ratio: 20
+
+    # SDK 顺序：[M, MCP_X, MCP_Y, MCP_Z, I_XX, I_XY, I_XZ, I_YY, I_YZ, I_ZZ]。
+    left_tool_dynamics: [1.7, -0.36326579, -174.45006830, -0.57521107,
+      0.005674265845, 0.000000029998, -0.000035481733,
+      0.001812184129, 0.000014284801, 0.004925221043]
+    right_tool_dynamics: [0.35746, -0.36386, -128.866, -0.79,
+      0.000598, 0.0, 0.0, 0.000177, 0.000016, 0.000602]
+
     # chassis_joint_dir: [-1, 1]
 
     # chassis_max_accx: 1.56  #1.57对应电机端3000rpm/s

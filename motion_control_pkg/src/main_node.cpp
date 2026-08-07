@@ -12,6 +12,7 @@
 #include "miracle_lower_body_module.hpp"
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
+#include "motion_control_pkg/execution/gripper_command_validation.hpp"
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
 #include "motion_control_pkg/sdk/marvin_dual_arm_sdk_adapter.hpp"
@@ -202,6 +203,15 @@ private:
     {
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received movement request for part_id: %u", goal->arm_id);
+
+        if (goal->control_mode != MovePose::Goal::CONTROL_POSITION &&
+            goal->control_mode != MovePose::Goal::CONTROL_IMPEDANCE) {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "MovePose control_mode must be CONTROL_POSITION or "
+                "CONTROL_IMPEDANCE.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
 
         if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT) {
             const auto pose_validation =
@@ -419,6 +429,15 @@ private:
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received move joints request for part_id: %u", goal->arm_id);
 
+        if (goal->control_mode != MoveJoints::Goal::CONTROL_POSITION &&
+            goal->control_mode != MoveJoints::Goal::CONTROL_IMPEDANCE) {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "MoveJoints control_mode must be CONTROL_POSITION or "
+                "CONTROL_IMPEDANCE.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
         if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT) {
             const auto speed_validation =
                 motion_control_pkg::motion::validateSpeedScale(
@@ -582,32 +601,61 @@ private:
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received movement request for gripper_id: %u", goal->gripper_id);
 
-        RCLCPP_WARN(
-            this->get_logger(),
-            "ControlGripper is fail-closed because the tool-control stage has "
-            "not completed offline or real-robot validation.");
-        return rclcpp_action::GoalResponse::REJECT;
+        const auto validation =
+            motion_control_pkg::execution::validateControlGripperGoal(*goal);
+        if (!validation) {
+            RCLCPP_WARN(
+                this->get_logger(), "Rejecting ControlGripper goal: %s",
+                validation.error_message.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
+        const bool needs_left =
+            goal->gripper_id == GRIPPER_LEFT ||
+            goal->gripper_id == GRIPPER_BOTH;
+        const bool needs_right =
+            goal->gripper_id == GRIPPER_RIGHT ||
+            goal->gripper_id == GRIPPER_BOTH;
+        if ((needs_left && !dual_arm_module_->is_idle(ID_LEFT_TOOL)) ||
+            (needs_right && !dual_arm_module_->is_idle(ID_RIGHT_TOOL)))
+        {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "Rejecting ControlGripper goal because a requested tool is busy.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
     rclcpp_action::CancelResponse handle_cancel_control_gripper(
         const std::shared_ptr<GoalHandleControlGripper> goal_handle)
     {
         (void)goal_handle;
-        RCLCPP_INFO(this->get_logger(), "Received control gripper cancel request.");
-        return rclcpp_action::CancelResponse::ACCEPT;
+        RCLCPP_WARN(
+            this->get_logger(),
+            "Rejecting ControlGripper cancel request because a validated "
+            "physical stop command is not available for the Jodell gripper.");
+        return rclcpp_action::CancelResponse::REJECT;
     }
 
     void handle_accepted_control_gripper(
         const std::shared_ptr<GoalHandleControlGripper> goal_handle)
     {
-        // Goal requests are rejected above. Keep a defensive terminal path so
-        // an accidental direct callback invocation can never reach legacy
-        // Modbus commands before the tool-control stage is validated.
-        auto result = std::make_shared<ControlGripper::Result>();
-        result->success = ACTION_FAIL;
-        result->error_message =
-            "ControlGripper is unavailable before tool-stage validation";
-        goal_handle->abort(result);
+        std::string start_error;
+        if (!dual_arm_module_->start_execution_control_gripper(
+                goal_handle, start_error))
+        {
+            auto result = std::make_shared<ControlGripper::Result>();
+            result->success = ACTION_FAIL;
+            result->final_position.assign(2U, 0U);
+            result->final_torque.assign(2U, 0U);
+            result->error_message =
+                "ControlGripper lost the tool-resource race: " + start_error;
+            RCLCPP_ERROR(
+                this->get_logger(), "%s", result->error_message.c_str());
+            goal_handle->abort(result);
+        }
     }
 
 };

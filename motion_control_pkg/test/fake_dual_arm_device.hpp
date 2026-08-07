@@ -26,7 +26,12 @@ enum class FakeOperation
   kBeginCommandBatch,
   kClearServoError,
   kSetPositionMode,
+  kSetTorqueMode,
   kSetJointLimits,
+  kSetTool,
+  kSetJointImpedanceGains,
+  kSetCartesianImpedanceGains,
+  kSetImpedanceType,
   kSetJointPosition,
   kCommitCommandBatch,
 };
@@ -61,9 +66,24 @@ public:
   bool beginCommandBatch() override;
   bool clearServoError(motion_control_pkg::sdk::ArmChannel channel) override;
   bool setPositionMode(motion_control_pkg::sdk::ArmChannel channel) override;
+  bool setTorqueMode(motion_control_pkg::sdk::ArmChannel channel) override;
   bool setJointLimits(
     motion_control_pkg::sdk::ArmChannel channel,
     int velocity_ratio, int acceleration_ratio) override;
+  bool setTool(
+    motion_control_pkg::sdk::ArmChannel channel,
+    const motion_control_pkg::sdk::ToolParameters & parameters) override;
+  bool setJointImpedanceGains(
+    motion_control_pkg::sdk::ArmChannel channel,
+    const std::array<double, motion_control_pkg::sdk::kArmDof> & stiffness,
+    const std::array<double, motion_control_pkg::sdk::kArmDof> & damping) override;
+  bool setCartesianImpedanceGains(
+    motion_control_pkg::sdk::ArmChannel channel,
+    const std::array<double, motion_control_pkg::sdk::kArmDof> & stiffness,
+    const std::array<double, motion_control_pkg::sdk::kArmDof> & damping) override;
+  bool setImpedanceType(
+    motion_control_pkg::sdk::ArmChannel channel,
+    motion_control_pkg::sdk::ArmControlMode mode) override;
   bool setJointPosition(
     motion_control_pkg::sdk::ArmChannel channel,
     const std::array<double, motion_control_pkg::sdk::kArmDof> & joints) override;

@@ -3,6 +3,7 @@
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
 #include "motion_control_pkg/execution/control_period.hpp"
 #include "motion_control_pkg/execution/execution_control.hpp"
+#include "motion_control_pkg/execution/impedance_configuration.hpp"
 #include "motion_control_pkg/execution/joint_command.hpp"
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
@@ -266,6 +267,43 @@ DualArmModule::DualArmModule(
         throw std::invalid_argument(
             "DualArmModule requires injected SDK adapter and MiracleMAlgo");
     }
+    const std::vector<double> joint_stiffness{
+        5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0};
+    const std::vector<double> joint_damping{
+        0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2};
+    const std::vector<double> cartesian_stiffness{
+        10000.0, 10000.0, 10000.0, 600.0, 600.0, 600.0, 20.0};
+    const std::vector<double> cartesian_damping{
+        0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 1.0};
+    joint_impedance_parameters_[0] =
+        motion_control_pkg::execution::declareImpedanceParameters(
+        *shared_node, "left_joint_impedance", joint_stiffness,
+        joint_damping, 10, 10);
+    joint_impedance_parameters_[1] =
+        motion_control_pkg::execution::declareImpedanceParameters(
+        *shared_node, "right_joint_impedance", joint_stiffness,
+        joint_damping, 10, 10);
+    cartesian_impedance_parameters_[0] =
+        motion_control_pkg::execution::declareImpedanceParameters(
+        *shared_node, "left_cartesian_impedance", cartesian_stiffness,
+        cartesian_damping, 20, 20);
+    cartesian_impedance_parameters_[1] =
+        motion_control_pkg::execution::declareImpedanceParameters(
+        *shared_node, "right_cartesian_impedance", cartesian_stiffness,
+        cartesian_damping, 20, 20);
+
+    const std::vector<double> left_tool_dynamics{
+        1.7, -0.36326579, -174.45006830, -0.57521107,
+        0.005674265845, 0.000000029998, -0.000035481733,
+        0.001812184129, 0.000014284801, 0.004925221043};
+    const std::vector<double> right_tool_dynamics{
+        0.35746, -0.36386, -128.866, -0.79,
+        0.000598, 0.0, 0.0, 0.000177, 0.000016, 0.000602};
+    tool_parameters_[0] = motion_control_pkg::execution::declareToolParameters(
+        *shared_node, "left", left_model_end_to_tool_tcp_, left_tool_dynamics);
+    tool_parameters_[1] = motion_control_pkg::execution::declareToolParameters(
+        *shared_node, "right", right_model_end_to_tool_tcp_, right_tool_dynamics);
+
     sdk_command_gate_ =
         std::make_unique<motion_control_pkg::sdk::SdkCommandGate>(
         *arm_device_, arm_configuration_);
@@ -379,6 +417,55 @@ rclcpp::Node::SharedPtr DualArmModule::lockNode(const char *context) const
         RCLCPP_ERROR(rclcpp::get_logger("dual_arm_module"), "Node expired in %s", context);
     }
     return node;
+}
+
+motion_control_pkg::sdk::SdkCommandResult
+DualArmModule::configureGoalControlMode(
+    std::uint8_t control_mode,
+    motion_control_pkg::sdk::ArmControlMode impedance_mode,
+    const std::vector<motion_control_pkg::sdk::ArmChannel>& channels)
+{
+    using motion_control_pkg::sdk::ArmControlMode;
+    using motion_control_pkg::sdk::ArmControlModeCommand;
+    using motion_control_pkg::sdk::SdkCommandResult;
+
+    if (control_mode > 1U) {
+        return SdkCommandResult::failure(
+            "control_mode must be CONTROL_POSITION(0) or "
+            "CONTROL_IMPEDANCE(1)");
+    }
+    if (impedance_mode != ArmControlMode::kJointImpedance &&
+        impedance_mode != ArmControlMode::kCartesianImpedance)
+    {
+        return SdkCommandResult::failure(
+            "goal requested an unsupported impedance mode");
+    }
+
+    std::vector<ArmControlModeCommand> commands;
+    commands.reserve(channels.size());
+    for (const auto channel : channels) {
+        const auto index = static_cast<std::size_t>(channel);
+        if (index >= motion_control_pkg::sdk::kArmCount) {
+            return SdkCommandResult::failure(
+                "goal requested an invalid arm channel");
+        }
+        ArmControlModeCommand command;
+        command.channel = channel;
+        if (control_mode == 0U) {
+            command.mode = ArmControlMode::kPosition;
+            command.impedance.velocity_ratio = 100;
+            command.impedance.acceleration_ratio = 100;
+        } else {
+            command.mode = impedance_mode;
+            command.tool = tool_parameters_[index];
+            command.impedance =
+                impedance_mode == ArmControlMode::kJointImpedance ?
+                joint_impedance_parameters_[index] :
+                cartesian_impedance_parameters_[index];
+        }
+        commands.push_back(command);
+    }
+    return sdk_command_gate_->configureControlModes(commands);
 }
 
 DualArmModule::~DualArmModule()
@@ -1030,6 +1117,28 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
         return;
     }
     publish_feedback(
+        MoveJoints::Feedback::STATUS_EXECUTING, 15.0F, 15.0F,
+        goal->control_mode == MoveJoints::Goal::CONTROL_IMPEDANCE ?
+        "switching A/B to joint impedance mode" :
+        "switching A/B to position mode");
+    const auto mode_result = configureGoalControlMode(
+        goal->control_mode,
+        motion_control_pkg::sdk::ArmControlMode::kJointImpedance,
+        {motion_control_pkg::sdk::ArmChannel::kLeft,
+         motion_control_pkg::sdk::ArmChannel::kRight});
+    if (!mode_result) {
+        abort_goal(mode_result.error_message);
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MoveJoints canceled during control-mode transition");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MoveJoints timed out during control-mode transition");
+        return;
+    }
+    publish_feedback(
         MoveJoints::Feedback::STATUS_EXECUTING, 20.0F, 20.0F,
         "submitting synchronized A/B batches at 4 ms");
     if (!streamDualArmTrajectory(
@@ -1570,6 +1679,28 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         return;
     }
     publish_feedback(
+        MovePose::Feedback::STATUS_EXECUTING, 15.0F, 15.0F,
+        goal->control_mode == MovePose::Goal::CONTROL_IMPEDANCE ?
+        "switching A/B to Cartesian impedance mode" :
+        "switching A/B to position mode");
+    const auto mode_result = configureGoalControlMode(
+        goal->control_mode,
+        motion_control_pkg::sdk::ArmControlMode::kCartesianImpedance,
+        {motion_control_pkg::sdk::ArmChannel::kLeft,
+         motion_control_pkg::sdk::ArmChannel::kRight});
+    if (!mode_result) {
+        abort_goal(mode_result.error_message);
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MovePose canceled during control-mode transition");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MovePose timed out during control-mode transition");
+        return;
+    }
+    publish_feedback(
         MovePose::Feedback::STATUS_EXECUTING, 20.0F, 20.0F,
         "submitting synchronized pose trajectory batches at 4 ms");
     if (!streamDualArmTrajectory(
@@ -1914,6 +2045,27 @@ void DualArmModule::execution_loop_move_joint_impl(
     }
     if (deadline.expired()) {
         abort_goal("MoveJoints timed out before command submission");
+        return;
+    }
+    publish_feedback(
+        20.0F, std::string(arm_name) +
+        (goal->control_mode == MoveJoints::Goal::CONTROL_IMPEDANCE ?
+        " arm switching to joint impedance mode" :
+        " arm switching to position mode"));
+    const auto mode_result = configureGoalControlMode(
+        goal->control_mode,
+        motion_control_pkg::sdk::ArmControlMode::kJointImpedance,
+        {channel});
+    if (!mode_result) {
+        abort_goal(mode_result.error_message);
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MoveJoints canceled during control-mode transition");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MoveJoints timed out during control-mode transition");
         return;
     }
     if (!streamSingleArmTrajectory(
@@ -2358,6 +2510,27 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal("MovePose timed out before command submission");
         return;
     }
+    publish_feedback(
+        20.0F, std::string(arm_name) +
+        (goal->control_mode == MovePose::Goal::CONTROL_IMPEDANCE ?
+        " arm switching to Cartesian impedance mode" :
+        " arm switching to position mode"));
+    const auto mode_result = configureGoalControlMode(
+        goal->control_mode,
+        motion_control_pkg::sdk::ArmControlMode::kCartesianImpedance,
+        {channel});
+    if (!mode_result) {
+        abort_goal(mode_result.error_message);
+        return;
+    }
+    if (goal_handle->is_canceling()) {
+        cancel_goal("MovePose canceled during control-mode transition");
+        return;
+    }
+    if (deadline.expired()) {
+        abort_goal("MovePose timed out during control-mode transition");
+        return;
+    }
     if (!streamSingleArmTrajectory(
         *sdk_command_gate_, goal_handle, channel, command_points, deadline,
         "MovePose",
@@ -2457,31 +2630,47 @@ void DualArmModule::execution_loop_move_pose_impl(
     }
 }
 
-void DualArmModule::start_execution_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle)
+bool DualArmModule::start_execution_control_gripper(
+    std::shared_ptr<GoalHandleControlGripper> goal_handle,
+    std::string& error_message)
 {
-    // 如果之前有执行完的遗留线程，先清理掉
+    std::lock_guard<std::mutex> lock(control_gripper_start_mutex_);
+
+    if (is_executing_left_tool_.load() || is_executing_right_tool_.load()) {
+        error_message = "another ControlGripper goal is still executing";
+        return false;
+    }
+
     if (execution_thread_control_gripper_.joinable()) {
         execution_thread_control_gripper_.join();
     }
 
     const auto goal = goal_handle->get_goal();
-    // 标记为正在执行
-    if(goal->gripper_id == GRIPPER_LEFT)
-    {
+    if (goal->gripper_id == GRIPPER_LEFT) {
         is_executing_left_tool_.store(true);
-    }
-    else if(goal->gripper_id==GRIPPER_RIGHT)
-    {
+    } else if (goal->gripper_id == GRIPPER_RIGHT) {
         is_executing_right_tool_.store(true);
-    }
-    else if(goal->gripper_id==GRIPPER_BOTH)
-    {
+    } else if (goal->gripper_id == GRIPPER_BOTH) {
         is_executing_left_tool_.store(true);
         is_executing_right_tool_.store(true);
+    } else {
+        error_message = "unsupported gripper_id";
+        return false;
     }
 
-    // 启动线程（不再使用 detach）
-    execution_thread_control_gripper_ = std::thread(&DualArmModule::execution_loop_control_gripper, this, goal_handle);
+    try {
+        execution_thread_control_gripper_ = std::thread(
+            &DualArmModule::execution_loop_control_gripper, this, goal_handle);
+    } catch (const std::exception& exception) {
+        is_executing_left_tool_.store(false);
+        is_executing_right_tool_.store(false);
+        error_message = std::string("failed to create gripper worker: ") +
+            exception.what();
+        return false;
+    }
+
+    error_message.clear();
+    return true;
 }
 
 void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle)
@@ -2501,13 +2690,16 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
     motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
         first_busy_flag, second_busy_flag);
     ControlGripperTerminalGuard terminal(goal_handle);
-    rclcpp::Clock ros_clock(RCL_ROS_TIME);
-    // 起始时间：把msg里的stamp转成rclcpp::Time
-    rclcpp::Time start_time(goal->header.stamp);
-    const int64_t timeout_ns = static_cast<int64_t>(goal->timeout_ms) * 1000000LL;
+    const auto start_time = std::chrono::steady_clock::now();
+    const auto timeout = std::chrono::milliseconds(goal->timeout_ms);
 
     auto feedback = std::make_shared<ControlGripper::Feedback>();
     auto result = std::make_shared<ControlGripper::Result>();
+    feedback->current_position.assign(2U, 0U);
+    feedback->current_torque.assign(2U, 0U);
+    feedback->current_speed.assign(2U, 0U);
+    result->final_position.assign(2U, 0U);
+    result->final_torque.assign(2U, 0U);
     std::shared_ptr<Jodell_Control> jodell_control = std::make_shared<Jodell_Control>();
 
     Jodell_status rt_status[2] = {{}, {}};
@@ -2532,8 +2724,16 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             return;
         }
 
-        //左爪
-        jodell_control->Jodell_Move_Abs_A(goal->position[GRIPPER_LEFT], goal->max_torque[GRIPPER_LEFT], goal->speed[GRIPPER_LEFT]);
+        if (!jodell_control->Jodell_Move_Abs_A(
+                goal->position[GRIPPER_LEFT],
+                goal->max_torque[GRIPPER_LEFT],
+                goal->speed[GRIPPER_LEFT]))
+        {
+            result->success = ACTION_FAIL;
+            result->error_message = "Send gripper_A move command failed";
+            terminal.abort(result);
+            return;
+        }
         while (true)
         {
 
@@ -2549,10 +2749,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             }
 
             /* 超时检查 */
-            rclcpp::Time now = ros_clock.now();
-            int64_t diff_ns = (now - start_time).nanoseconds();
-
-            if(diff_ns >= timeout_ns)
+            if (std::chrono::steady_clock::now() - start_time >= timeout)
             {
                 RCLCPP_ERROR(rclcpp::get_logger("timeout"), "timeout exit");
                 result->success = ACTION_FAIL;
@@ -2566,12 +2763,20 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             }
             ret = jodell_control->Jodell_Status_A(&rt_status[GRIPPER_LEFT]);
 
-            if (ret)
+            if (!ret)
+            {
+                result->success = ACTION_FAIL;
+                result->error_message = "Get gripper_A status failed while moving";
+                terminal.abort(result);
+                return;
+            }
+            else
             {
                 log_jodell_status(rclcpp::get_logger("Jodell_Status_A"), rt_status[GRIPPER_LEFT]);
                 if(rt_status[GRIPPER_LEFT].gto == 0)
                 {
-                    control_gripper_result(rt_status, result, terminal);
+                    control_gripper_result(
+                        rt_status, goal->gripper_id, result, terminal);
                     break;
                 }
                 else
@@ -2580,6 +2785,9 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
                     feedback->current_torque[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].torque;
                     feedback->current_speed[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].speed;
                     feedback->progress_rate = get_progress_1000(init_position[GRIPPER_LEFT], goal->position[GRIPPER_LEFT], rt_status[GRIPPER_LEFT].position);
+                    if (auto node = lockNode(__func__)) {
+                        feedback->header.stamp = node->now();
+                    }
                     goal_handle->publish_feedback(feedback);
                 }
             }
@@ -2603,7 +2811,16 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             terminal.abort(result);
             return;
         }
-        jodell_control->Jodell_Move_Abs_B(goal->position[GRIPPER_RIGHT], goal->max_torque[GRIPPER_RIGHT], goal->speed[GRIPPER_RIGHT]);
+        if (!jodell_control->Jodell_Move_Abs_B(
+                goal->position[GRIPPER_RIGHT],
+                goal->max_torque[GRIPPER_RIGHT],
+                goal->speed[GRIPPER_RIGHT]))
+        {
+            result->success = ACTION_FAIL;
+            result->error_message = "Send gripper_B move command failed";
+            terminal.abort(result);
+            return;
+        }
 
         while (true)
         {
@@ -2620,10 +2837,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             }
 
             /* 超时检查 */
-            rclcpp::Time now = ros_clock.now();
-            int64_t diff_ns = (now - start_time).nanoseconds();
-
-            if(diff_ns >= timeout_ns)
+            if (std::chrono::steady_clock::now() - start_time >= timeout)
             {
                 RCLCPP_INFO(rclcpp::get_logger("timeout"), "timeout exit");
                 result->success = ACTION_FAIL;
@@ -2633,13 +2847,21 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             }
 
 
-            ret = jodell_control->Jodell_Status_A(&rt_status[GRIPPER_RIGHT]);
+            ret = jodell_control->Jodell_Status_B(&rt_status[GRIPPER_RIGHT]);
 
-            if (ret)
+            if (!ret)
+            {
+                result->success = ACTION_FAIL;
+                result->error_message = "Get gripper_B status failed while moving";
+                terminal.abort(result);
+                return;
+            }
+            else
             {
                 if(rt_status[GRIPPER_RIGHT].gto == 0)
                 {
-                    control_gripper_result(rt_status, result, terminal);
+                    control_gripper_result(
+                        rt_status, goal->gripper_id, result, terminal);
                     break;
                 }
                 else
@@ -2648,6 +2870,9 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
                     feedback->current_torque[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].torque;
                     feedback->current_speed[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].speed;
                     feedback->progress_rate = get_progress_1000(init_position[GRIPPER_RIGHT], goal->position[GRIPPER_RIGHT], rt_status[GRIPPER_RIGHT].position);
+                    if (auto node = lockNode(__func__)) {
+                        feedback->header.stamp = node->now();
+                    }
                     goal_handle->publish_feedback(feedback);
                 }
             }
@@ -2671,8 +2896,8 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             result->success = ACTION_FAIL;
             result->error_message = "Get gripper_A status failed";
             RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_A"), "Get gripper_A status failed");
-            //goal_handle->abort(result);
-            //return;
+            terminal.abort(result);
+            return;
         }
 
         ret = jodell_control->Jodell_Status_B(&rt_status[GRIPPER_RIGHT]);
@@ -2685,13 +2910,31 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             result->success = ACTION_FAIL;
             result->error_message = "Get gripper_B status failed";
             RCLCPP_ERROR(rclcpp::get_logger("Jodell_Status_B"), "Get gripper_B status failed");
-            //goal_handle->abort(result);
-            //return;
+            terminal.abort(result);
+            return;
         }
 
-        jodell_control->Jodell_Move_Abs_A(goal->position[GRIPPER_LEFT], goal->max_torque[GRIPPER_LEFT], goal->speed[GRIPPER_LEFT]);
-        
-        jodell_control->Jodell_Move_Abs_B(goal->position[GRIPPER_RIGHT], goal->max_torque[GRIPPER_RIGHT], goal->speed[GRIPPER_RIGHT]);
+        if (!jodell_control->Jodell_Move_Abs_A(
+                goal->position[GRIPPER_LEFT],
+                goal->max_torque[GRIPPER_LEFT],
+                goal->speed[GRIPPER_LEFT]))
+        {
+            result->success = ACTION_FAIL;
+            result->error_message = "Send gripper_A move command failed";
+            terminal.abort(result);
+            return;
+        }
+        if (!jodell_control->Jodell_Move_Abs_B(
+                goal->position[GRIPPER_RIGHT],
+                goal->max_torque[GRIPPER_RIGHT],
+                goal->speed[GRIPPER_RIGHT]))
+        {
+            result->success = ACTION_FAIL;
+            result->error_message =
+                "Send gripper_B move command failed after gripper_A command";
+            terminal.abort(result);
+            return;
+        }
 
         while (true)
         {
@@ -2708,10 +2951,7 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
             }
 
             /* 超时检查 */
-            rclcpp::Time now = ros_clock.now();
-            int64_t diff_ns = (now - start_time).nanoseconds();
-
-            if(diff_ns >= timeout_ns)
+            if (std::chrono::steady_clock::now() - start_time >= timeout)
             {
                 RCLCPP_INFO(rclcpp::get_logger("timeout"), "timeout exit");
                 result->success = ACTION_FAIL;
@@ -2723,11 +2963,20 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
 
             ret = jodell_control->Jodell_Status_A(&rt_status[GRIPPER_LEFT]);
             ret &= jodell_control->Jodell_Status_B(&rt_status[GRIPPER_RIGHT]);
-            if (ret)
+            if (!ret)
+            {
+                result->success = ACTION_FAIL;
+                result->error_message =
+                    "Get gripper status failed while moving both grippers";
+                terminal.abort(result);
+                return;
+            }
+            else
             {
                 if(rt_status[GRIPPER_LEFT].gto == 0 && rt_status[GRIPPER_RIGHT].gto == 0)
                 {
-                    control_gripper_result(rt_status, result, terminal);
+                    control_gripper_result(
+                        rt_status, goal->gripper_id, result, terminal);
                     break;
                 }
                 else
@@ -2738,7 +2987,17 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
                     feedback->current_position[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].position;
                     feedback->current_torque[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].torque;
                     feedback->current_speed[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].speed;
-                    feedback->progress_rate = get_progress_1000(init_position[GRIPPER_RIGHT], goal->position[GRIPPER_RIGHT], rt_status[GRIPPER_RIGHT].position);
+                    const float left_progress = get_progress_1000(
+                        init_position[GRIPPER_LEFT], goal->position[GRIPPER_LEFT],
+                        rt_status[GRIPPER_LEFT].position);
+                    const float right_progress = get_progress_1000(
+                        init_position[GRIPPER_RIGHT], goal->position[GRIPPER_RIGHT],
+                        rt_status[GRIPPER_RIGHT].position);
+                    feedback->progress_rate =
+                        0.5F * (left_progress + right_progress);
+                    if (auto node = lockNode(__func__)) {
+                        feedback->header.stamp = node->now();
+                    }
                     goal_handle->publish_feedback(feedback);
                 }
             }
@@ -2941,150 +3200,70 @@ float_t DualArmModule::get_progress_1000(int init_val, int tar_val, int curr_val
 
 void DualArmModule::control_gripper_result(
     Jodell_status *rt_status,
+    std::uint8_t gripper_id,
     std::shared_ptr<ControlGripper::Result> result,
     ControlGripperTerminalGuard& terminal)
 {
-    result->success = ACTION_SUCCESS;
-    if (rt_status[GRIPPER_LEFT].err_active || rt_status[GRIPPER_RIGHT].err_active)
-    {
-        result->success = ACTION_FAIL;
-        result->error_message = "err_active";
-    }
-    
-    if (rt_status[GRIPPER_LEFT].err_control || rt_status[GRIPPER_RIGHT].err_control)
-    {
-        result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_control";
-        } 
-        else 
-        {
-            result->error_message = +", err_active";
-        }
-        
-    }
+    result->final_position.assign(2U, 0U);
+    result->final_torque.assign(2U, 0U);
+    result->error_message.clear();
 
-    if (rt_status[GRIPPER_LEFT].err_comm || rt_status[GRIPPER_RIGHT].err_comm)
-    {
-        result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_comm";
-        } 
-        else 
-        {
-            result->error_message = +", err_comm";
-        }
-        
-    }
+    const auto append_error = [&result](
+        const char* gripper_name, const char* fault_name) {
+          if (!result->error_message.empty()) {
+              result->error_message += ", ";
+          }
+          result->error_message += gripper_name;
+          result->error_message += ":";
+          result->error_message += fault_name;
+        };
+    const auto collect_status = [&](std::size_t index, const char* name) {
+          const auto& status = rt_status[index];
+          result->final_position[index] = status.position;
+          result->final_torque[index] = status.torque;
+          if (status.err_active) {
+              append_error(name, "err_active");
+          }
+          if (status.err_control) {
+              append_error(name, "err_control");
+          }
+          if (status.err_comm) {
+              append_error(name, "err_comm");
+          }
+          if (status.err_over_current) {
+              append_error(name, "err_over_current");
+          }
+          if (status.err_voltage) {
+              append_error(name, "err_voltage");
+          }
+          if (status.err_enable) {
+              append_error(name, "err_enable");
+          }
+          if (status.err_over_temp) {
+              append_error(name, "err_over_temp");
+          }
+          if (status.err_self) {
+              append_error(name, "err_self");
+          }
+        };
 
-    if (rt_status[GRIPPER_LEFT].err_over_current || rt_status[GRIPPER_RIGHT].err_over_current)
-    {
-        result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_over_current";
-        } 
-        else 
-        {
-            result->error_message = +", err_over_current";
-        }
-        
+    if (gripper_id == GRIPPER_LEFT || gripper_id == GRIPPER_BOTH) {
+        collect_status(GRIPPER_LEFT, "left");
     }
-
-    if (rt_status[GRIPPER_LEFT].err_voltage || rt_status[GRIPPER_RIGHT].err_voltage)
-    {
-        result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_voltage";
-        } 
-        else 
-        {
-            result->error_message = +", err_voltage";
-        }
-        
+    if (gripper_id == GRIPPER_RIGHT || gripper_id == GRIPPER_BOTH) {
+        collect_status(GRIPPER_RIGHT, "right");
     }
 
-
-    if (rt_status[GRIPPER_LEFT].err_voltage || rt_status[GRIPPER_RIGHT].err_voltage)
-    {
+    if (!result->error_message.empty()) {
         result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_voltage";
-        } 
-        else 
-        {
-            result->error_message = +", err_voltage";
-        }
-        
-    }
-
-
-    if (rt_status[GRIPPER_LEFT].err_enable || rt_status[GRIPPER_RIGHT].err_voltage)
-    {
-        result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_enable";
-        } 
-        else 
-        {
-            result->error_message = +", err_enable";
-        }
-        
-    }
-
-
-    if (rt_status[GRIPPER_LEFT].err_over_temp || rt_status[GRIPPER_RIGHT].err_voltage)
-    {
-        result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_over_temp";
-        } 
-        else 
-        {
-            result->error_message = +", err_over_temp";
-        }
-        
-    }
-
-
-    if (rt_status[GRIPPER_LEFT].err_self || rt_status[GRIPPER_RIGHT].err_self)
-    {
-        result->success = ACTION_FAIL;
-        if (result->error_message.empty())
-        {
-            result->error_message = "err_self";
-        } 
-        else 
-        {
-            result->error_message = +", err_self";
-        }
-        
-    }
-
-    result->final_position[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].position;
-    result->final_position[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].position;
-    result->final_torque[GRIPPER_LEFT] = rt_status[GRIPPER_LEFT].torque;
-    result->final_torque[GRIPPER_RIGHT] = rt_status[GRIPPER_RIGHT].torque;
-    if(!result->error_message.empty())
-    {
-        result->success = ACTION_FAIL;
-        RCLCPP_ERROR(rclcpp::get_logger("control_gripper_result"), "%s", result->error_message.c_str());
+        RCLCPP_ERROR(
+            rclcpp::get_logger("control_gripper_result"), "%s",
+            result->error_message.c_str());
         terminal.abort(result);
-    }
-    else
-    {
+    } else {
         result->success = ACTION_SUCCESS;
-        
         terminal.succeed(result);
     }
-    
-    return;
 }
 void DualArmModule::heart_beat_cb()
 {

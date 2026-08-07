@@ -3,10 +3,12 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "motion_control_pkg/sdk/dual_arm_device_interface.hpp"
 
@@ -32,6 +34,15 @@ struct SdkCommandGateOptions
   std::chrono::microseconds clear_timeout{std::chrono::microseconds(8000)};
   std::chrono::microseconds clear_retry_interval{std::chrono::microseconds(200)};
   std::chrono::milliseconds clear_error_settle_time{std::chrono::milliseconds(200)};
+  std::chrono::milliseconds tool_parameter_settle_time{
+    std::chrono::milliseconds(20)};
+  std::chrono::milliseconds tool_readback_retry_interval{
+    std::chrono::milliseconds(20)};
+  std::size_t tool_readback_attempts{3};
+  std::chrono::milliseconds impedance_parameter_settle_time{
+    std::chrono::milliseconds(200)};
+  std::chrono::milliseconds impedance_mode_settle_time{
+    std::chrono::milliseconds(1000)};
 };
 
 /**
@@ -56,6 +67,9 @@ public:
   SdkCommandResult initializePositionMode(
     int velocity_ratio = 10, int acceleration_ratio = 10);
 
+  SdkCommandResult configureControlModes(
+    const std::vector<ArmControlModeCommand> & commands);
+
   SdkCommandResult sendJointPosition(
     ArmChannel channel,
     const std::array<double, kArmDof> & joints);
@@ -74,6 +88,7 @@ private:
   ActiveArmConfiguration configuration_;
   SdkCommandGateOptions options_;
   mutable std::mutex mutex_;
+  mutable std::mutex mode_transition_mutex_;
 };
 
 }  // namespace motion_control_pkg::sdk

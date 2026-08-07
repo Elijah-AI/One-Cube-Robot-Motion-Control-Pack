@@ -6,9 +6,11 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -72,7 +74,9 @@ public:
         geometry_msgs::msg::PoseStamped right_planning_target,
         std::chrono::steady_clock::time_point request_started_at);
 
-    void start_execution_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle);
+    bool start_execution_control_gripper(
+        std::shared_ptr<GoalHandleControlGripper> goal_handle,
+        std::string& error_message);
 
 
     void log_jodell_status(rclcpp::Logger logger, const Jodell_status& status);
@@ -120,6 +124,7 @@ private:
     std::thread execution_thread_move_dual_joints_;
     std::thread execution_thread_move_dual_pose_;
     std::thread execution_thread_control_gripper_;
+    std::mutex control_gripper_start_mutex_;
 
     std::atomic<bool> is_executing_left_arm_;
     std::atomic<bool> is_executing_right_arm_;
@@ -196,6 +201,7 @@ private:
         GoalHandleControlGripper, ControlGripper::Result>;
     void control_gripper_result(
         Jodell_status *rt_status,
+        std::uint8_t gripper_id,
         std::shared_ptr<ControlGripper::Result> result,
         ControlGripperTerminalGuard& terminal);
 
@@ -224,6 +230,10 @@ private:
         const geometry_msgs::msg::PoseStamped& input,
         geometry_msgs::msg::PoseStamped& output,
         std::string& error_message);
+    motion_control_pkg::sdk::SdkCommandResult configureGoalControlMode(
+        std::uint8_t control_mode,
+        motion_control_pkg::sdk::ArmControlMode impedance_mode,
+        const std::vector<motion_control_pkg::sdk::ArmChannel>& channels);
     void joint_command_cb();
     bool set_arm_control_mode(std::string& error_message);
     // Action ServersHeartBeat
@@ -257,6 +267,15 @@ private:
     std::string planning_frame_;
     Eigen::Isometry3d left_model_end_to_tool_tcp_;
     Eigen::Isometry3d right_model_end_to_tool_tcp_;
+    std::array<
+        motion_control_pkg::sdk::ImpedanceParameters,
+        motion_control_pkg::sdk::kArmCount> joint_impedance_parameters_;
+    std::array<
+        motion_control_pkg::sdk::ImpedanceParameters,
+        motion_control_pkg::sdk::kArmCount> cartesian_impedance_parameters_;
+    std::array<
+        motion_control_pkg::sdk::ToolParameters,
+        motion_control_pkg::sdk::kArmCount> tool_parameters_;
     motion_control_pkg::sdk::DualArmDeviceState dual_arm_state_;
     double r_joints_command_[7];//右臂关节命令
     double l_joints_command_[7];//左臂关节命令

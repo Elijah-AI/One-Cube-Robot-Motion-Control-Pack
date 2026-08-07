@@ -15,6 +15,8 @@ namespace
 
 using motion_control_pkg::sdk::ActiveArmConfiguration;
 using motion_control_pkg::sdk::ArmChannel;
+using motion_control_pkg::sdk::ArmControlMode;
+using motion_control_pkg::sdk::ArmControlModeCommand;
 using motion_control_pkg::sdk::SdkCommandGate;
 using motion_control_pkg::sdk::SdkCommandGateOptions;
 using motion_control_pkg::test::FakeCall;
@@ -109,6 +111,37 @@ TEST(SdkCommandGateTest, SdkCommitFailureIsReturnedToCaller)
     result.error_message.find("joint_command_commit"),
     std::string::npos);
   ASSERT_EQ(device.calls().size(), 4U);
+}
+
+TEST(SdkCommandGateTest, JointImpedanceUsesToolReadbackBeforeTorqueMode)
+{
+  FakeDualArmDevice device;
+  SdkCommandGateOptions options;
+  options.tool_parameter_settle_time = std::chrono::milliseconds::zero();
+  options.tool_readback_retry_interval = std::chrono::milliseconds::zero();
+  options.impedance_parameter_settle_time = std::chrono::milliseconds::zero();
+  options.impedance_mode_settle_time = std::chrono::milliseconds::zero();
+  SdkCommandGate gate(device, ActiveArmConfiguration::kDualArm, options);
+
+  ArmControlModeCommand command;
+  command.channel = ArmChannel::kLeft;
+  command.mode = ArmControlMode::kJointImpedance;
+  command.impedance.stiffness.fill(5.0);
+  command.impedance.damping.fill(0.2);
+  command.tool.dynamics[0] = 1.0;
+  command.tool.dynamics[4] = 0.01;
+  command.tool.dynamics[7] = 0.01;
+  command.tool.dynamics[9] = 0.01;
+
+  const auto result = gate.configureControlModes({command});
+
+  ASSERT_TRUE(result.success) << result.error_message;
+  EXPECT_EQ(device.callCount(FakeOperation::kSetTool), 1U);
+  EXPECT_EQ(device.callCount(FakeOperation::kReadState), 1U);
+  EXPECT_EQ(device.callCount(FakeOperation::kSetJointImpedanceGains), 1U);
+  EXPECT_EQ(device.callCount(FakeOperation::kSetTorqueMode), 1U);
+  EXPECT_EQ(device.callCount(FakeOperation::kSetImpedanceType), 1U);
+  EXPECT_EQ(device.callCount(FakeOperation::kCommitCommandBatch), 3U);
 }
 
 TEST(SdkCommandGateTest, JointWriteFailureStopsBatchBeforeCommit)

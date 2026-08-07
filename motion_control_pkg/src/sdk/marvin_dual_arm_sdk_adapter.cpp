@@ -55,6 +55,12 @@ bool MarvinDualArmSdkAdapter::readState(DualArmDeviceState & state)
       output.joint_velocity[joint] = vendor_state.m_Out[arm].m_FB_Joint_Vel[joint];
       output.joint_effort[joint] = vendor_state.m_Out[arm].m_FB_Joint_SToq[joint];
     }
+    for (std::size_t index = 0; index < kToolKinematicsSize; ++index) {
+      output.tool_kinematics[index] = vendor_state.m_In[arm].m_ToolKine[index];
+    }
+    for (std::size_t index = 0; index < kToolDynamicsSize; ++index) {
+      output.tool_dynamics[index] = vendor_state.m_In[arm].m_ToolDyn[index];
+    }
   }
   return true;
 }
@@ -81,12 +87,65 @@ bool MarvinDualArmSdkAdapter::setPositionMode(ArmChannel channel)
          OnSetTargetState_A(1) : OnSetTargetState_B(1);
 }
 
+bool MarvinDualArmSdkAdapter::setTorqueMode(ArmChannel channel)
+{
+  return channel == ArmChannel::kLeft ?
+         OnSetTargetState_A(3) : OnSetTargetState_B(3);
+}
+
 bool MarvinDualArmSdkAdapter::setJointLimits(
   ArmChannel channel, int velocity_ratio, int acceleration_ratio)
 {
   return channel == ArmChannel::kLeft ?
          OnSetJointLmt_A(velocity_ratio, acceleration_ratio) :
          OnSetJointLmt_B(velocity_ratio, acceleration_ratio);
+}
+
+bool MarvinDualArmSdkAdapter::setTool(
+  ArmChannel channel, const ToolParameters & parameters)
+{
+  auto vendor_kinematics = parameters.kinematics;
+  auto vendor_dynamics = parameters.dynamics;
+  return channel == ArmChannel::kLeft ?
+         OnSetTool_A(vendor_kinematics.data(), vendor_dynamics.data()) :
+         OnSetTool_B(vendor_kinematics.data(), vendor_dynamics.data());
+}
+
+bool MarvinDualArmSdkAdapter::setJointImpedanceGains(
+  ArmChannel channel,
+  const std::array<double, kArmDof> & stiffness,
+  const std::array<double, kArmDof> & damping)
+{
+  auto vendor_stiffness = stiffness;
+  auto vendor_damping = damping;
+  return channel == ArmChannel::kLeft ?
+         OnSetJointKD_A(vendor_stiffness.data(), vendor_damping.data()) :
+         OnSetJointKD_B(vendor_stiffness.data(), vendor_damping.data());
+}
+
+bool MarvinDualArmSdkAdapter::setCartesianImpedanceGains(
+  ArmChannel channel,
+  const std::array<double, kArmDof> & stiffness,
+  const std::array<double, kArmDof> & damping)
+{
+  auto vendor_stiffness = stiffness;
+  auto vendor_damping = damping;
+  return channel == ArmChannel::kLeft ?
+         OnSetCartKD_A(vendor_stiffness.data(), vendor_damping.data()) :
+         OnSetCartKD_B(vendor_stiffness.data(), vendor_damping.data());
+}
+
+bool MarvinDualArmSdkAdapter::setImpedanceType(
+  ArmChannel channel, ArmControlMode mode)
+{
+  if (mode != ArmControlMode::kJointImpedance &&
+    mode != ArmControlMode::kCartesianImpedance)
+  {
+    return false;
+  }
+  const int vendor_type = static_cast<int>(mode);
+  return channel == ArmChannel::kLeft ?
+         OnSetImpType_A(vendor_type) : OnSetImpType_B(vendor_type);
 }
 
 bool MarvinDualArmSdkAdapter::setJointPosition(
@@ -110,6 +169,7 @@ namespace
 {
 
 constexpr int kPositionModeState = 1;
+constexpr int kTorqueModeState = 3;
 constexpr double kDegreesToRadians = 0.017453292519943295;
 
 struct FakeAdapterRuntime
@@ -181,6 +241,8 @@ bool MarvinDualArmSdkAdapter::connect(const std::array<unsigned char, 4> & ip)
     arm.joint_position.fill(0.0);
     arm.joint_velocity.fill(0.0);
     arm.joint_effort.fill(0.0);
+    arm.tool_kinematics.fill(0.0);
+    arm.tool_dynamics.fill(0.0);
   }
 
   std::cout << "[FakeDualArmSdkAdapter] connect to "
@@ -255,6 +317,17 @@ bool MarvinDualArmSdkAdapter::setPositionMode(ArmChannel channel)
   return true;
 }
 
+bool MarvinDualArmSdkAdapter::setTorqueMode(ArmChannel channel)
+{
+  auto & fake = runtime();
+  std::lock_guard<std::mutex> lock(fake.mutex);
+  if (!fake.connected || !fake.batch_open) {
+    return false;
+  }
+  fake.state.arms[channelIndex(channel)].current_state = kTorqueModeState;
+  return true;
+}
+
 bool MarvinDualArmSdkAdapter::setJointLimits(
   ArmChannel channel, int velocity_ratio, int acceleration_ratio)
 {
@@ -268,6 +341,54 @@ bool MarvinDualArmSdkAdapter::setJointLimits(
             << " limits velocity_ratio=" << velocity_ratio
             << " acceleration_ratio=" << acceleration_ratio << std::endl;
   return true;
+}
+
+bool MarvinDualArmSdkAdapter::setTool(
+  ArmChannel channel, const ToolParameters & parameters)
+{
+  auto & fake = runtime();
+  std::lock_guard<std::mutex> lock(fake.mutex);
+  if (!fake.connected || !fake.batch_open ||
+      !isValidToolParameters(parameters))
+  {
+    return false;
+  }
+  auto & arm = fake.state.arms[channelIndex(channel)];
+  arm.tool_kinematics = parameters.kinematics;
+  arm.tool_dynamics = parameters.dynamics;
+  return true;
+}
+
+bool MarvinDualArmSdkAdapter::setJointImpedanceGains(
+  ArmChannel channel,
+  const std::array<double, kArmDof> & stiffness,
+  const std::array<double, kArmDof> & damping)
+{
+  (void)channel;
+  (void)stiffness;
+  (void)damping;
+  auto & fake = runtime();
+  std::lock_guard<std::mutex> lock(fake.mutex);
+  return fake.connected && fake.batch_open;
+}
+
+bool MarvinDualArmSdkAdapter::setCartesianImpedanceGains(
+  ArmChannel channel,
+  const std::array<double, kArmDof> & stiffness,
+  const std::array<double, kArmDof> & damping)
+{
+  return setJointImpedanceGains(channel, stiffness, damping);
+}
+
+bool MarvinDualArmSdkAdapter::setImpedanceType(
+  ArmChannel channel, ArmControlMode mode)
+{
+  (void)channel;
+  auto & fake = runtime();
+  std::lock_guard<std::mutex> lock(fake.mutex);
+  return fake.connected && fake.batch_open &&
+         (mode == ArmControlMode::kJointImpedance ||
+          mode == ArmControlMode::kCartesianImpedance);
 }
 
 bool MarvinDualArmSdkAdapter::setJointPosition(

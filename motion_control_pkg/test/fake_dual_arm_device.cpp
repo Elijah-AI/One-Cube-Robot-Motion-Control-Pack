@@ -76,6 +76,15 @@ bool FakeDualArmDevice::setPositionMode(
   return recordCall(std::move(call));
 }
 
+bool FakeDualArmDevice::setTorqueMode(
+  motion_control_pkg::sdk::ArmChannel channel)
+{
+  FakeCall call;
+  call.operation = FakeOperation::kSetTorqueMode;
+  call.channel = channel;
+  return recordCall(std::move(call));
+}
+
 bool FakeDualArmDevice::setJointLimits(
   motion_control_pkg::sdk::ArmChannel channel,
   int velocity_ratio, int acceleration_ratio)
@@ -85,6 +94,59 @@ bool FakeDualArmDevice::setJointLimits(
   call.channel = channel;
   call.velocity_ratio = velocity_ratio;
   call.acceleration_ratio = acceleration_ratio;
+  return recordCall(std::move(call));
+}
+
+bool FakeDualArmDevice::setTool(
+  motion_control_pkg::sdk::ArmChannel channel,
+  const motion_control_pkg::sdk::ToolParameters & parameters)
+{
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto & arm = state_.arms[static_cast<std::size_t>(channel)];
+    arm.tool_kinematics = parameters.kinematics;
+    arm.tool_dynamics = parameters.dynamics;
+  }
+  FakeCall call;
+  call.operation = FakeOperation::kSetTool;
+  call.channel = channel;
+  return recordCall(std::move(call));
+}
+
+bool FakeDualArmDevice::setJointImpedanceGains(
+  motion_control_pkg::sdk::ArmChannel channel,
+  const std::array<double, motion_control_pkg::sdk::kArmDof> & stiffness,
+  const std::array<double, motion_control_pkg::sdk::kArmDof> & damping)
+{
+  (void)stiffness;
+  (void)damping;
+  FakeCall call;
+  call.operation = FakeOperation::kSetJointImpedanceGains;
+  call.channel = channel;
+  return recordCall(std::move(call));
+}
+
+bool FakeDualArmDevice::setCartesianImpedanceGains(
+  motion_control_pkg::sdk::ArmChannel channel,
+  const std::array<double, motion_control_pkg::sdk::kArmDof> & stiffness,
+  const std::array<double, motion_control_pkg::sdk::kArmDof> & damping)
+{
+  (void)stiffness;
+  (void)damping;
+  FakeCall call;
+  call.operation = FakeOperation::kSetCartesianImpedanceGains;
+  call.channel = channel;
+  return recordCall(std::move(call));
+}
+
+bool FakeDualArmDevice::setImpedanceType(
+  motion_control_pkg::sdk::ArmChannel channel,
+  motion_control_pkg::sdk::ArmControlMode mode)
+{
+  (void)mode;
+  FakeCall call;
+  call.operation = FakeOperation::kSetImpedanceType;
+  call.channel = channel;
   return recordCall(std::move(call));
 }
 
