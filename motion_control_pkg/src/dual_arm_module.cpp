@@ -1286,14 +1286,32 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         return;
     }
 
-    // TF2 已在总节点把两个目标独立转换到中央 planning_frame。这里继续
+    geometry_msgs::msg::PoseStamped normalized_left;
+    geometry_msgs::msg::PoseStamped normalized_right;
+    std::string conversion_error;
+    if (!normalizePoseTargetToPlanningFrame(
+        left_planning_target, normalized_left, conversion_error))
+    {
+        abort_goal("left target: " + conversion_error);
+        return;
+    }
+    if (!normalizePoseTargetToPlanningFrame(
+        right_planning_target, normalized_right, conversion_error))
+    {
+        abort_goal("right target: " + conversion_error);
+        return;
+    }
+    const auto& effective_left = normalized_left;
+    const auto& effective_right = normalized_right;
+
+    // 两个目标独立通过内部 Pinocchio FK 转换到中央 planning_frame。继续
     // 复用现有 TCP 固定变换及 Pinocchio 模型帧转换，不建立第二棵 TF 树。
     const Eigen::Isometry3d left_planning_to_end =
         motion_control_pkg::kinematics::targetTcpToModelEndPose(
-        left_planning_target.pose, left_model_end_to_tool_tcp_);
+        effective_left.pose, left_model_end_to_tool_tcp_);
     const Eigen::Isometry3d right_planning_to_end =
         motion_control_pkg::kinematics::targetTcpToModelEndPose(
-        right_planning_target.pose, right_model_end_to_tool_tcp_);
+        effective_right.pose, right_model_end_to_tool_tcp_);
     Eigen::Isometry3d left_root_to_end = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d right_root_to_end = Eigen::Isometry3d::Identity();
     if (!miracle_algo_->transformPoseToModelRoot(
@@ -1532,14 +1550,16 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
 
     std::vector<motion_control_pkg::execution::JointCommand> left_commands;
     std::vector<motion_control_pkg::execution::JointCommand> right_commands;
-    std::string conversion_error;
-    if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
-        trajectories[0], left_commands, conversion_error) ||
-        !motion_control_pkg::motion::trajectoryToVendorDegrees(
-        trajectories[1], right_commands, conversion_error))
     {
-        abort_goal(conversion_error);
-        return;
+        std::string convert_msg;
+        if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
+            trajectories[0], left_commands, convert_msg) ||
+            !motion_control_pkg::motion::trajectoryToVendorDegrees(
+            trajectories[1], right_commands, convert_msg))
+        {
+            abort_goal(convert_msg);
+            return;
+        }
     }
     if (goal_handle->is_canceling()) {
         cancel_goal("MovePose canceled before atomic submission");
@@ -1566,10 +1586,10 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         95.0F, 95.0F, "waiting for both TCP targets to settle");
     const Eigen::Isometry3d left_target_tcp =
         motion_control_pkg::kinematics::poseToIsometry(
-        left_planning_target.pose);
+        effective_left.pose);
     const Eigen::Isometry3d right_target_tcp =
         motion_control_pkg::kinematics::poseToIsometry(
-        right_planning_target.pose);
+        effective_right.pose);
     std::array<std::optional<std::chrono::steady_clock::time_point>, 2>
         completed_at;
     while (!completed_at[0] || !completed_at[1]) {
@@ -2023,6 +2043,16 @@ void DualArmModule::execution_loop_move_pose_impl(
         return;
     }
 
+    geometry_msgs::msg::PoseStamped normalized_target;
+    std::string conversion_error;
+    if (!normalizePoseTargetToPlanningFrame(
+        planning_target, normalized_target, conversion_error))
+    {
+        abort_goal(conversion_error);
+        return;
+    }
+    const auto& effective_target = normalized_target;
+
     const std::size_t arm_index = static_cast<std::size_t>(channel);
     const bool is_left =
         channel == motion_control_pkg::sdk::ArmChannel::kLeft;
@@ -2149,7 +2179,7 @@ void DualArmModule::execution_loop_move_pose_impl(
     // planning_frame 目标交给同一 Pinocchio 模型转换到模型根坐标系。
     const Eigen::Isometry3d planning_to_model_end =
         motion_control_pkg::kinematics::targetTcpToModelEndPose(
-        planning_target.pose, model_end_to_tool_tcp);
+        effective_target.pose, model_end_to_tool_tcp);
     Eigen::Isometry3d root_to_model_end = Eigen::Isometry3d::Identity();
     if (!miracle_algo_->transformPoseToModelRoot(
         planning_frame_, full_start_q, planning_to_model_end,
@@ -2262,19 +2292,19 @@ void DualArmModule::execution_loop_move_pose_impl(
     const bool use_ruckig = pose_path.kind ==
         motion_control_pkg::motion::PoseTrajectoryKind::kRuckigPointToPoint;
     const char* planner_name = use_ruckig ? "Ruckig" : "TOPPRA";
-    std::string conversion_error;
+    std::string planner_error;
     std::vector<std::vector<double>> planned_positions;
     const bool planned = use_ruckig ?
         planRuckigSamples(
             *miracle_algo_, waypoint_positions.front(), waypoint_positions.back(),
             scaled_limits.velocity, scaled_limits.acceleration,
-            scaled_limits.jerk, planned_positions, conversion_error) :
+            scaled_limits.jerk, planned_positions, planner_error) :
         planToppraSamples(
             *miracle_algo_, waypoint_positions, scaled_limits.velocity,
-            scaled_limits.acceleration, planned_positions, conversion_error);
+            scaled_limits.acceleration, planned_positions, planner_error);
     if (!planned) {
         abort_goal(std::string(arm_name) + " arm " + planner_name +
-            " time parameterization failed: " + conversion_error);
+            " time parameterization failed: " + planner_error);
         return;
     }
     const auto trajectory_validation =
@@ -2315,7 +2345,7 @@ void DualArmModule::execution_loop_move_pose_impl(
     // Pinocchio FK，并以工具 TCP 平移误差（米）填充 final_distance_error。
     auto next_feedback = std::chrono::steady_clock::now();
     const Eigen::Isometry3d target_tcp =
-        motion_control_pkg::kinematics::poseToIsometry(planning_target.pose);
+        motion_control_pkg::kinematics::poseToIsometry(effective_target.pose);
     while (true) {
         if (goal_handle->is_canceling()) {
             cancel_goal(
@@ -3128,6 +3158,88 @@ bool DualArmModule::computeToolTcpPose(
 
     tool_tcp_pose = motion_control_pkg::kinematics::composeToolTcpPose(
         planning_to_model_end, model_end_to_tool_tcp);
+    error_message.clear();
+    return true;
+}
+
+bool DualArmModule::normalizePoseTargetToPlanningFrame(
+    const geometry_msgs::msg::PoseStamped& input,
+    geometry_msgs::msg::PoseStamped& output,
+    std::string& error_message)
+{
+    const auto normalized =
+        motion_control_pkg::kinematics::validateAndNormalizePoseStamped(input);
+    if (!normalized.success) {
+        error_message = normalized.error_message;
+        return false;
+    }
+    if (normalized.pose.header.frame_id == planning_frame_) {
+        output = normalized.pose;
+        output.header.frame_id = planning_frame_;
+        error_message.clear();
+        return true;
+    }
+    RCLCPP_INFO_STREAM(rclcpp::get_logger("dual_arm_module"),
+        "[normalizePoseTargetToPlanningFrame] before: frame_id="
+        << normalized.pose.header.frame_id
+        << ", xyz=[" << normalized.pose.pose.position.x << ","
+        << normalized.pose.pose.position.y << ","
+        << normalized.pose.pose.position.z << "], quat=["
+        << normalized.pose.pose.orientation.x << ","
+        << normalized.pose.pose.orientation.y << ","
+        << normalized.pose.pose.orientation.z << ","
+        << normalized.pose.pose.orientation.w << "]");
+    std::vector<double> full_q;
+    if (!miracle_algo_->getFullJointState(full_q)) {
+        error_message =
+            "Failed to obtain the Pinocchio full-body state before pose frame conversion";
+        return false;
+    }
+    Eigen::Matrix4d T_planning_source = Eigen::Matrix4d::Identity();
+    if (!miracle_algo_->getForwardKinematics(
+        planning_frame_, normalized.pose.header.frame_id, T_planning_source))
+    {
+        error_message =
+            "Pinocchio FK failed for pose conversion from " +
+            planning_frame_ + " to " + normalized.pose.header.frame_id;
+        return false;
+    }
+    Eigen::Isometry3d T_planning_source_iso;
+    T_planning_source_iso.matrix() = T_planning_source;
+    if (!T_planning_source_iso.matrix().allFinite()) {
+        error_message =
+            "Pinocchio FK pose conversion matrix contains non-finite values";
+        return false;
+    }
+    const Eigen::Isometry3d source_to_point =
+        motion_control_pkg::kinematics::poseToIsometry(
+        normalized.pose.pose);
+    const Eigen::Isometry3d planning_to_point =
+        T_planning_source_iso * source_to_point;
+    output.header = normalized.pose.header;
+    output.header.frame_id = planning_frame_;
+    output.pose = motion_control_pkg::kinematics::isometryToPose(
+        planning_to_point);
+    const auto final_check =
+        motion_control_pkg::kinematics::validateAndNormalizePoseStamped(output);
+    if (!final_check.success) {
+        error_message =
+            "Pose after internal frame conversion is invalid: " +
+            final_check.error_message;
+        return false;
+    }
+    output = final_check.pose;
+    output.header.frame_id = planning_frame_;
+    RCLCPP_INFO_STREAM(rclcpp::get_logger("dual_arm_module"),
+        "[normalizePoseTargetToPlanningFrame] after : frame_id="
+        << output.header.frame_id
+        << ", xyz=[" << output.pose.position.x << ","
+        << output.pose.position.y << ","
+        << output.pose.position.z << "], quat=["
+        << output.pose.orientation.x << ","
+        << output.pose.orientation.y << ","
+        << output.pose.orientation.z << ","
+        << output.pose.orientation.w << "]");
     error_message.clear();
     return true;
 }

@@ -218,6 +218,12 @@ private:
         const Eigen::Isometry3d& model_end_to_tool_tcp,
         geometry_msgs::msg::Pose& tool_tcp_pose,
         std::string& error_message);
+    // 将外部传入的任意 frame_id PoseStamped 通过 Pinocchio 内部 FK 转换
+    // 到 planning_frame_；等价于原 PoseFrameTransformer，但不依赖外部 TF。
+    bool normalizePoseTargetToPlanningFrame(
+        const geometry_msgs::msg::PoseStamped& input,
+        geometry_msgs::msg::PoseStamped& output,
+        std::string& error_message);
     void joint_command_cb();
     bool set_arm_control_mode(std::string& error_message);
     // Action ServersHeartBeat

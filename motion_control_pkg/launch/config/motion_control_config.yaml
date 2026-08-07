@@ -24,7 +24,7 @@
     tf_lookup_timeout_sec: 0.2
 
     left_arm_tool: gripper  #根据机器人实际配置修改
-    left_arm_tool_tf: [0.0, 0.0, 0.1785, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
+    left_arm_tool_tf: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
     
     right_arm_tool: suck    #根据机器人实际配置修改
     right_arm_tool_tf: [0.0, 0.0, 0.1785, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP

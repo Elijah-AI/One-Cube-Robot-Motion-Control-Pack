@@ -1,9 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
-
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -73,7 +70,6 @@ public:
         lower_body_module_->initGmcaModule(miracleAlgo_ptr_);
 
         std::string planning_frame = "base_link";
-        double tf_lookup_timeout_sec = 0.2;
         std::string left_arm_tool = "gripper";
         std::string right_arm_tool = "suck";
         std::vector<double> left_arm_tool_tf{
@@ -81,14 +77,11 @@ public:
         std::vector<double> right_arm_tool_tf{
             0.0, 0.0, 0.1785, 0.0, 0.0, 0.0, 1.0};
         this->declare_parameter("dual_arm_planning_frame", planning_frame);
-        this->declare_parameter(
-            "tf_lookup_timeout_sec", tf_lookup_timeout_sec);
         this->declare_parameter("left_arm_tool", left_arm_tool);
         this->declare_parameter("right_arm_tool", right_arm_tool);
         this->declare_parameter("left_arm_tool_tf", left_arm_tool_tf);
         this->declare_parameter("right_arm_tool_tf", right_arm_tool_tf);
         this->get_parameter("dual_arm_planning_frame", planning_frame);
-        this->get_parameter("tf_lookup_timeout_sec", tf_lookup_timeout_sec);
         this->get_parameter("left_arm_tool", left_arm_tool);
         this->get_parameter("right_arm_tool", right_arm_tool);
         this->get_parameter("left_arm_tool_tf", left_arm_tool_tf);
@@ -98,11 +91,6 @@ public:
             !miracleAlgo_ptr_->getModel().existFrame(planning_frame)) {
             throw std::invalid_argument(
                 "dual_arm_planning_frame must name a frame in the robot model");
-        }
-        if (!std::isfinite(tf_lookup_timeout_sec) ||
-            tf_lookup_timeout_sec < 0.0) {
-            throw std::invalid_argument(
-                "tf_lookup_timeout_sec must be finite and non-negative");
         }
         const auto left_tool_transform =
             motion_control_pkg::kinematics::parseToolTransform(
@@ -117,17 +105,9 @@ public:
             throw std::invalid_argument(right_tool_transform.error_message);
         }
 
-        // 沿用总节点负责统一入口的现有分层：这里只补入唯一 TF2
-        // Buffer/Listener；双臂模块只接收已转换到 planning_frame 的目标。
-        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
-        tf_buffer_->setUsingDedicatedThread(true);
-        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(
-            *tf_buffer_, shared_from_this(), true);
-        pose_frame_transformer_ = std::make_unique<
-            motion_control_pkg::kinematics::PoseFrameTransformer>(
-            *tf_buffer_, planning_frame, tf_lookup_timeout_sec);
-
         // 双臂 SDK 与整机算法对象由主节点统一创建并注入，模块构造阶段不连接硬件。
+        // 目标位姿的 frame 转换下沉到 DualArmModule 执行接口内部，通过 Pinocchio
+        // FK 完成，不依赖外部 TF 发布。
         std::string active_arm_configuration = "dual_arm";
         this->declare_parameter(
             "active_arm_configuration", active_arm_configuration);
@@ -204,10 +184,6 @@ private:
     std::shared_ptr<MiracleHeadModule> head_module_;
     std::shared_ptr<MiracleLowerBodyModule> lower_body_module_;
 
-    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-    std::unique_ptr<motion_control_pkg::kinematics::PoseFrameTransformer>
-    pose_frame_transformer_;
     std::shared_ptr<motion_control_pkg::sdk::DualArmDeviceInterface>
     dual_arm_device_;
     motion_control_pkg::sdk::ActiveArmConfiguration
@@ -398,79 +374,34 @@ private:
                 auto result = std::make_shared<MovePose::Result>();
                 result->success = ACTION_FAIL;
                 result->error_message =
-                    "MovePose goal canceled before TF transformation";
+                    "MovePose goal canceled before dispatch";
                 goal_handle->canceled(result);
-                return;
-            }
-            const auto transformed =
-                pose_frame_transformer_->transformToPlanningFrame(
-                goal->target_pose);
-            if (!transformed.success) {
-                auto result = std::make_shared<MovePose::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message = transformed.error_message;
-                RCLCPP_ERROR(
-                    this->get_logger(), "%s", result->error_message.c_str());
-                goal_handle->abort(result);
                 return;
             }
             RCLCPP_INFO(
                 this->get_logger(),
-                "Dispatching dual-arm target transformed from %s to %s.",
-                goal->target_pose.header.frame_id.c_str(),
-                transformed.pose.header.frame_id.c_str());
+                "Dispatching single-arm MovePose target with frame_id=%s",
+                goal->target_pose.header.frame_id.c_str());
             dual_arm_module_->start_execution_move_pose(
-                goal_handle, transformed.pose);
+                goal_handle, goal->target_pose);
         } else if (goal->arm_id == ARM_BOTH) {
             const auto request_started_at = std::chrono::steady_clock::now();
             if (goal_handle->is_canceling()) {
                 auto result = std::make_shared<MovePose::Result>();
                 result->success = ACTION_FAIL;
                 result->error_message =
-                    "ARM_BOTH MovePose canceled before TF transformation";
+                    "ARM_BOTH MovePose canceled before dispatch";
                 goal_handle->canceled(result);
                 return;
             }
-            const auto left = pose_frame_transformer_->transformToPlanningFrame(
-                goal->left_target_pose);
-            if (!left.success) {
-                auto result = std::make_shared<MovePose::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message = "left target: " + left.error_message;
-                goal_handle->abort(result);
-                return;
-            }
-            if (goal_handle->is_canceling()) {
-                auto result = std::make_shared<MovePose::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message =
-                    "ARM_BOTH MovePose canceled between TF transforms";
-                goal_handle->canceled(result);
-                return;
-            }
-            const auto right = pose_frame_transformer_->transformToPlanningFrame(
-                goal->right_target_pose);
-            if (!right.success) {
-                auto result = std::make_shared<MovePose::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message = "right target: " + right.error_message;
-                goal_handle->abort(result);
-                return;
-            }
-            if (std::chrono::steady_clock::now() - request_started_at >=
-                std::chrono::milliseconds(goal->timeout_ms))
-            {
-                auto result = std::make_shared<MovePose::Result>();
-                result->success = ACTION_FAIL;
-                result->error_message =
-                    "ARM_BOTH MovePose timeout expired during TF transforms";
-                result->execution_time = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - request_started_at).count();
-                goal_handle->abort(result);
-                return;
-            }
+            RCLCPP_INFO(
+                this->get_logger(),
+                "Dispatching ARM_BOTH MovePose: left_frame=%s right_frame=%s",
+                goal->left_target_pose.header.frame_id.c_str(),
+                goal->right_target_pose.header.frame_id.c_str());
             dual_arm_module_->start_execution_move_dual_arm_pose(
-                goal_handle, left.pose, right.pose, request_started_at);
+                goal_handle, goal->left_target_pose, goal->right_target_pose,
+                request_started_at);
         }
         else if (goal->arm_id == LEG) {
             RCLCPP_INFO(this->get_logger(), "Dispatching task to leg.");

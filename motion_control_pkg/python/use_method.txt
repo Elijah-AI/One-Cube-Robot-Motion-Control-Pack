@@ -72,18 +72,18 @@ python3 action_client_test.py move_joints \
     task_id: 'MANUAL_LEFT_POSE_01',
     arm_id: 0,
     target_pose: {
-      header: {frame_id: base_link},
+      header: {frame_id: body_link},
       pose: {
         position: {
-          x: 0.98041,
-          y: 0.51958,
-          z: 1.44463
+          x: 0.158851,
+          y: 0.708368,
+          z: 0.727751
         },
         orientation: {
-          x: -0.486658,
-          y: 0.471915,
-          z: -0.446717,
-          w: 0.583871
+          x: -0.326008,
+          y: -0.0717908,
+          z: -0.151689,
+          w: 0.930352
         }
       }
     },
