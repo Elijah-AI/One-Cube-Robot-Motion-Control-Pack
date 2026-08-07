@@ -687,7 +687,7 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
     //         return oss.str();
     //     }());
 
-
+    Eigen::VectorXd err(6);
     for (int i=0; i<IT_MAX; i++) {
         // pinocchio::forwardKinematics(model_, *data_, q_res);
         // pinocchio::updateFramePlacements(model_, *data_);
@@ -695,7 +695,7 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
         pinocchio::updateFramePlacements(model_, *data_);
         
         const pinocchio::SE3 iMd = data_->oMf[ee_id].actInv(oMdes);
-        Eigen::VectorXd err = pinocchio::log6(iMd).toVector();
+        err = pinocchio::log6(iMd).toVector();
         //打印误差
         // RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "[SolveIK] err norm: %f", err.norm());
 
@@ -736,7 +736,7 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
     }
     
     if (!success) {
-        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "solveIK: failed to converge after %d iterations.", IT_MAX);
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "solveIK: failed to converge after %d iterations. Error norm: %f", IT_MAX, err.norm());
     }
     return success;
 }
@@ -770,15 +770,16 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
     Eigen::MatrixXd J_right(6, model_.nv);
 
     bool success = false;
-
+    Eigen::VectorXd err_left(6);
+    Eigen::VectorXd err_right(6);
     for (int i=0; i<IT_MAX; i++) {
         pinocchio::forwardKinematics(model_, *data_, q_res);
         pinocchio::updateFramePlacements(model_, *data_);
 
         const pinocchio::SE3 iMd_left = data_->oMf[left_ee_frame_id_].actInv(oMdes_left);
         const pinocchio::SE3 iMd_right = data_->oMf[right_ee_frame_id_].actInv(oMdes_right);
-        Eigen::VectorXd err_left = pinocchio::log6(iMd_left).toVector();
-        Eigen::VectorXd err_right = pinocchio::log6(iMd_right).toVector();
+        err_left = pinocchio::log6(iMd_left).toVector();
+        err_right = pinocchio::log6(iMd_right).toVector();
         if (err_left.norm() < eps && err_right.norm() < eps) {
             success = true;
             RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "solveDualIK: converged in %d iterations. Left err: %f, Right err: %f", i, err_left.norm(), err_right.norm());
@@ -815,7 +816,7 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
     }
 
     if (!success) {
-        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "solveDualIK: failed to converge after %d iterations.", IT_MAX);
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "solveDualIK: failed to converge after %d iterations. Left err: %f, Right err: %f", IT_MAX, err_left.norm(), err_right.norm());
     }
     //打印出ik结果，横置打印,只打印左右臂的关节角度
     RCLCPP_INFO_STREAM(rclcpp::get_logger("MiracleMAlgo"), "[SolveIK] Left arm IK result: " << q_res(left_arm_q_indices_).transpose());

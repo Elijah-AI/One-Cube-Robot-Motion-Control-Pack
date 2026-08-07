@@ -2879,7 +2879,7 @@ bool DualArmModule::init_set_tcp(std::string& error_message)
 
 bool DualArmModule::set_arm_control_mode(std::string& error_message)
 {
-    const auto result = sdk_command_gate_->initializePositionMode(10, 10);
+    const auto result = sdk_command_gate_->initializePositionMode(100, 100);
     if (!result) {
         error_message = result.error_message;
         return false;
