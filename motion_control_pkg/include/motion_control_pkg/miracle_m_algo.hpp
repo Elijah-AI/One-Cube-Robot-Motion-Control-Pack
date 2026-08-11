@@ -299,6 +299,13 @@ public:
                                   std::vector<std::vector<double>>& path,
                                   double step_size = 0.01);
 
+    bool planDualArmCartesianLine(const std::vector<double>& start_q,
+                                           const std::vector<double>& left_end_poseture,
+                                           const std::vector<double>& right_end_poseture,
+                                           const double& dt,const double& v_max,
+                                           const double& a_max, const double& j_max,
+                                           std::vector<std::vector<double>>& path);
+
     // --- Single Arm Planning ---
     // start_q/path use full-body q. The inactive joints remain fixed during planning.
     bool planSingleArmJointSpace(bool is_left,

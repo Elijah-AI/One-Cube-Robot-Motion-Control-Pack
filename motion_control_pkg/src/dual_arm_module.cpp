@@ -1413,8 +1413,6 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
     const auto& effective_left = normalized_left;
     const auto& effective_right = normalized_right;
 
-    // 两个目标独立通过内部 Pinocchio FK 转换到中央 planning_frame。继续
-    // 复用现有 TCP 固定变换及 Pinocchio 模型帧转换，不建立第二棵 TF 树。
     const Eigen::Isometry3d left_planning_to_end =
         motion_control_pkg::kinematics::targetTcpToModelEndPose(
         effective_left.pose, left_model_end_to_tool_tcp_);
@@ -1436,51 +1434,8 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
 
     std::vector<double> dual_goal;
     std::vector<std::vector<double>> full_path;
-    if (goal->enable_collision_check) {
-        if (!miracle_algo_->planDualArmCartesianGoal(
-            full_start_q, left_root_to_end, right_root_to_end, full_path))
-        {
-            abort_goal(
-                "Existing dual-arm Pinocchio IK/Coal/OMPL pose planner failed");
-            return;
-        }
-        if (full_path.empty() ||
-            !miracle_algo_->extractSingleArmJoints(
-            true, full_path.back(), dual_goal))
-        {
-            abort_goal("Dual-arm pose planner returned an invalid left goal");
-            return;
-        }
-        std::vector<double> right_goal;
-        if (!miracle_algo_->extractSingleArmJoints(
-            false, full_path.back(), right_goal))
-        {
-            abort_goal("Dual-arm pose planner returned an invalid right goal");
-            return;
-        }
-        dual_goal.insert(dual_goal.end(), right_goal.begin(), right_goal.end());
-    } else if (!miracle_algo_->solveDualArmCartesianIk(
-        full_start_q, left_root_to_end, right_root_to_end, dual_goal))
-    {
-        abort_goal("Existing Pinocchio dual-arm IK failed");
-        return;
-    }
-    if (dual_goal.size() != 14U) {
-        abort_goal("Dual-arm IK did not return fourteen arm joints");
-        return;
-    }
-
-    motion_control_pkg::motion::JointVector left_start{};
-    motion_control_pkg::motion::JointVector right_start{};
-    motion_control_pkg::motion::JointVector left_target{};
-    motion_control_pkg::motion::JointVector right_target{};
-    std::copy(left_current.begin(), left_current.end(), left_start.begin());
-    std::copy(right_current.begin(), right_current.end(), right_start.begin());
-    std::copy(dual_goal.begin(), dual_goal.begin() + arm_dof_,
-        left_target.begin());
-    std::copy(dual_goal.begin() + arm_dof_, dual_goal.end(),
-        right_target.begin());
-
+    std::vector<std::vector<double>> planned_positions;
+    
     struct ArmPlanningData
     {
         motion_control_pkg::motion::PositionLimitIntersection limits;
@@ -1488,121 +1443,238 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         motion_control_pkg::motion::CcsJoint67Table joint67{};
     };
     std::array<ArmPlanningData, 2> arm_data;
-    const std::array<motion_control_pkg::motion::JointVector, 2> starts{
-        left_start, right_start};
-    const std::array<motion_control_pkg::motion::JointVector, 2> targets{
-        left_target, right_target};
-    for (std::size_t arm = 0; arm < arm_data.size(); ++arm) {
+
+    auto init_arm_planning_data = [&](std::size_t arm_index) -> bool {
         std::vector<double> model_lower(arm_dof_);
         std::vector<double> model_upper(arm_dof_);
         if (!miracle_algo_->getChainJointsLimt(
-            static_cast<int>(arm), model_lower, model_upper))
+            static_cast<int>(arm_index), model_lower, model_upper))
         {
-            abort_goal("Failed to obtain dual-arm Pinocchio joint limits");
-            return;
+            return false;
         }
-        arm_data[arm].limits =
+        arm_data[arm_index].limits =
             motion_control_pkg::motion::intersectPositionLimits(
-            arm == 0U ? l_q_lower_limits_ : r_q_lower_limits_,
-            arm == 0U ? l_q_upper_limits_ : r_q_upper_limits_,
+            arm_index == 0U ? l_q_lower_limits_ : r_q_lower_limits_,
+            arm_index == 0U ? l_q_upper_limits_ : r_q_upper_limits_,
             model_lower, model_upper);
-        arm_data[arm].motion =
+        arm_data[arm_index].motion =
             motion_control_pkg::motion::scaleMotionLimits(
-            arm == 0U ? l_v_limit_ : r_v_limit_,
-            arm == 0U ? l_a_limit_ : r_a_limit_,
-            arm == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed);
-        if (!arm_data[arm].limits.valid || !arm_data[arm].motion.valid) {
-            abort_goal(arm_data[arm].limits.valid ?
-                arm_data[arm].motion.error_message :
-                arm_data[arm].limits.error_message);
-            return;
+            arm_index == 0U ? l_v_limit_ : r_v_limit_,
+            arm_index == 0U ? l_a_limit_ : r_a_limit_,
+            arm_index == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed);
+        if (!arm_data[arm_index].limits.valid || !arm_data[arm_index].motion.valid) {
+            return false;
         }
-        for (std::size_t row = 0; row < arm_data[arm].joint67.size(); ++row) {
+        for (std::size_t row = 0; row < arm_data[arm_index].joint67.size(); ++row) {
             for (std::size_t column = 0;
-                column < arm_data[arm].joint67[row].size(); ++column)
+                column < arm_data[arm_index].joint67[row].size(); ++column)
             {
-                arm_data[arm].joint67[row][column] = bd_[arm][row][column];
+                arm_data[arm_index].joint67[row][column] = bd_[arm_index][row][column];
             }
         }
-        const auto start_check =
-            motion_control_pkg::motion::validateJointTarget(
-            starts[arm], arm_data[arm].limits.lower,
-            arm_data[arm].limits.upper, arm_data[arm].joint67);
-        const auto target_check =
-            motion_control_pkg::motion::validateJointTarget(
-            targets[arm], arm_data[arm].limits.lower,
-            arm_data[arm].limits.upper, arm_data[arm].joint67);
-        if (!start_check.valid || !target_check.valid) {
-            abort_goal(
-                std::string(arm == 0U ? "left" : "right") +
-                " arm IK constraint failed: " +
-                (start_check.valid ? target_check.error_message :
-                start_check.error_message));
+        return true;
+    };
+
+    if(goal->enable_move_line)
+    {
+        if (!init_arm_planning_data(0) || !init_arm_planning_data(1)) {
+            abort_goal("Failed to initialize arm planning data for cartesian line");
             return;
         }
-    }
 
-    std::vector<std::vector<double>> dual_path;
-    if (goal->enable_collision_check) {
-        dual_path.reserve(full_path.size());
-        for (const auto& full_q : full_path) {
-            std::vector<double> left;
-            std::vector<double> right;
-            if (!miracle_algo_->extractSingleArmJoints(true, full_q, left) ||
-                !miracle_algo_->extractSingleArmJoints(false, full_q, right))
+        double lx = left_root_to_end.translation().x();
+        double ly = left_root_to_end.translation().y();
+        double lz = left_root_to_end.translation().z();
+        Eigen::Quaterniond left_q_root_to_model_end(left_root_to_end.rotation());
+        // 确保四元数归一化，防止底层库崩溃
+        left_q_root_to_model_end.normalize();
+        double lqx = left_q_root_to_model_end.x();
+        double lqy = left_q_root_to_model_end.y();
+        double lqz = left_q_root_to_model_end.z();
+        double lqw = left_q_root_to_model_end.w();
+        std::vector<double> left_end_poseture={lx,ly,lz,lqx,lqy,lqz,lqw};
+
+        double rx = right_root_to_end.translation().x();
+        double ry = right_root_to_end.translation().y();
+        double rz = right_root_to_end.translation().z();
+        Eigen::Quaterniond right_q_root_to_model_end(right_root_to_end.rotation());
+        // 确保四元数归一化
+        right_q_root_to_model_end.normalize();
+        double rqx = right_q_root_to_model_end.x();
+        double rqy = right_q_root_to_model_end.y();
+        double rqz = right_q_root_to_model_end.z();
+        double rqw = right_q_root_to_model_end.w();
+        std::vector<double> right_end_poseture={rx,ry,rz,rqx,rqy,rqz,rqw};
+        
+        RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "Calling planDualArmCartesianLine...");
+        auto start_time = std::chrono::high_resolution_clock::now();
+        bool plan_success = miracle_algo_->planDualArmCartesianLine(
+            full_start_q, left_end_poseture, right_end_poseture, 
+            0.004, goal->speed*CARTES_V_MAX, goal->speed*CARTES_A_MAX,
+            goal->speed*CARTES_J_MAX, planned_positions);
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> duration_ms = end_time - start_time;
+        RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "dealling time: %f ms",duration_ms.count());
+        if (!plan_success) {
+            abort_goal("Dual-arm Cartesian line planning failed (returned false)");
+            return;
+        }
+        RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "shuangbi guihua wancheng");
+
+        // 【关键防御】检查 planned_positions 是否为空
+        if (planned_positions.empty()) {
+            abort_goal("Dual-arm Cartesian line planner returned empty trajectory");
+            return;
+        }
+        
+        RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "Plan succeeded with %zu points", planned_positions.size());
+    }
+    else
+    {
+        if (goal->enable_collision_check) {
+            if (!miracle_algo_->planDualArmCartesianGoal(
+            full_start_q, left_root_to_end, right_root_to_end, full_path))
             {
-                abort_goal("Dual-arm pose path contains an invalid full-body waypoint");
+                abort_goal(
+                    "Existing dual-arm Pinocchio IK/Coal/OMPL pose planner failed");
                 return;
             }
-            left.insert(left.end(), right.begin(), right.end());
-            dual_path.push_back(std::move(left));
+
+            if (full_path.empty() ||
+                !miracle_algo_->extractSingleArmJoints(
+                true, full_path.back(), dual_goal))
+            {
+                abort_goal("Dual-arm pose planner returned an invalid left goal");
+                return;
+            }
+            std::vector<double> right_goal;
+            if (!miracle_algo_->extractSingleArmJoints(
+                false, full_path.back(), right_goal))
+            {
+                abort_goal("Dual-arm pose planner returned an invalid right goal");
+                return;
+            }
+            dual_goal.insert(dual_goal.end(), right_goal.begin(), right_goal.end());
+        } else if (!miracle_algo_->solveDualArmCartesianIk(
+            full_start_q, left_root_to_end, right_root_to_end, dual_goal))
+        {
+            abort_goal("Existing Pinocchio dual-arm IK failed");
+            return;
         }
-    } else {
-        dual_path = {
-            std::vector<double>(left_start.begin(), left_start.end()),
-            std::vector<double>(left_target.begin(), left_target.end())};
-        dual_path[0].insert(
-            dual_path[0].end(), right_start.begin(), right_start.end());
-        dual_path[1].insert(
-            dual_path[1].end(), right_target.begin(), right_target.end());
-    }
-    if (dual_path.size() < 2U) {
-        abort_goal("Dual-arm pose planner returned fewer than two waypoints");
-        return;
+        if (dual_goal.size() != 14U) {
+            abort_goal("Dual-arm IK did not return fourteen arm joints");
+            return;
+        }
+
+        motion_control_pkg::motion::JointVector left_start{};
+        motion_control_pkg::motion::JointVector right_start{};
+        motion_control_pkg::motion::JointVector left_target{};
+        motion_control_pkg::motion::JointVector right_target{};
+        std::copy(left_current.begin(), left_current.end(), left_start.begin());
+        std::copy(right_current.begin(), right_current.end(), right_start.begin());
+        std::copy(dual_goal.begin(), dual_goal.begin() + arm_dof_,
+            left_target.begin());
+        std::copy(dual_goal.begin() + arm_dof_, dual_goal.end(),
+            right_target.begin());
+
+        if (!init_arm_planning_data(0) || !init_arm_planning_data(1)) {
+            abort_goal("Failed to initialize arm planning data");
+            return;
+        }
+
+        const std::array<motion_control_pkg::motion::JointVector, 2> starts{
+            left_start, right_start};
+        const std::array<motion_control_pkg::motion::JointVector, 2> targets{
+            left_target, right_target};
+        
+        for (std::size_t arm = 0; arm < arm_data.size(); ++arm) {
+            const auto start_check =
+                motion_control_pkg::motion::validateJointTarget(
+                starts[arm], arm_data[arm].limits.lower,
+                arm_data[arm].limits.upper, arm_data[arm].joint67);
+            const auto target_check =
+                motion_control_pkg::motion::validateJointTarget(
+                targets[arm], arm_data[arm].limits.lower,
+                arm_data[arm].limits.upper, arm_data[arm].joint67);
+            if (!start_check.valid || !target_check.valid) {
+                abort_goal(
+                    std::string(arm == 0U ? "left" : "right") +
+                    " arm IK constraint failed: " +
+                    (start_check.valid ? target_check.error_message :
+                    start_check.error_message));
+                return;
+            }
+        }
+
+        std::vector<std::vector<double>> dual_path;
+        if (goal->enable_collision_check) {
+            dual_path.reserve(full_path.size());
+            for (const auto& full_q : full_path) {
+                std::vector<double> left;
+                std::vector<double> right;
+                if (!miracle_algo_->extractSingleArmJoints(true, full_q, left) ||
+                    !miracle_algo_->extractSingleArmJoints(false, full_q, right))
+                {
+                    abort_goal("Dual-arm pose path contains an invalid full-body waypoint");
+                    return;
+                }
+                left.insert(left.end(), right.begin(), right.end());
+                dual_path.push_back(std::move(left));
+            }
+        } else {
+            dual_path = {
+                std::vector<double>(left_start.begin(), left_start.end()),
+                std::vector<double>(left_target.begin(), left_target.end())};
+            dual_path[0].insert(
+                dual_path[0].end(), right_start.begin(), right_start.end());
+            dual_path[1].insert(
+                dual_path[1].end(), right_target.begin(), right_target.end());
+        }
+        if (dual_path.size() < 2U) {
+            abort_goal("Dual-arm pose planner returned fewer than two waypoints");
+            return;
+        }
+
+        std::vector<double> combined_velocity;
+        std::vector<double> combined_acceleration;
+        std::vector<double> combined_jerk;
+        for (const auto& data : arm_data) {
+            combined_velocity.insert(
+                combined_velocity.end(),
+                data.motion.velocity.begin(), data.motion.velocity.end());
+            combined_acceleration.insert(
+                combined_acceleration.end(),
+                data.motion.acceleration.begin(), data.motion.acceleration.end());
+            combined_jerk.insert(
+                combined_jerk.end(),
+                data.motion.jerk.begin(), data.motion.jerk.end());
+        }
+        
+        std::string planning_error;
+        const bool planned = dual_path.size() == 2U ?
+            planRuckigSamples(
+                *miracle_algo_, dual_path.front(), dual_path.back(),
+                combined_velocity, combined_acceleration, combined_jerk,
+                planned_positions, planning_error) :
+            planToppraSamples(
+                *miracle_algo_, dual_path, combined_velocity, combined_acceleration,
+                planned_positions, planning_error);
+        if (!planned || planned_positions.empty()) {
+            abort_goal("Dual-arm pose 14-DOF time parameterization failed: " +
+                planning_error);
+            return;
+        }
     }
 
-    std::vector<double> combined_velocity;
-    std::vector<double> combined_acceleration;
-    std::vector<double> combined_jerk;
-    for (const auto& data : arm_data) {
-        combined_velocity.insert(
-            combined_velocity.end(),
-            data.motion.velocity.begin(), data.motion.velocity.end());
-        combined_acceleration.insert(
-            combined_acceleration.end(),
-            data.motion.acceleration.begin(), data.motion.acceleration.end());
-        combined_jerk.insert(
-            combined_jerk.end(),
-            data.motion.jerk.begin(), data.motion.jerk.end());
-    }
-    std::vector<std::vector<double>> planned_positions;
-    std::string planning_error;
-    const bool planned = dual_path.size() == 2U ?
-        planRuckigSamples(
-            *miracle_algo_, dual_path.front(), dual_path.back(),
-            combined_velocity, combined_acceleration, combined_jerk,
-            planned_positions, planning_error) :
-        planToppraSamples(
-            *miracle_algo_, dual_path, combined_velocity, combined_acceleration,
-            planned_positions, planning_error);
-    if (!planned || planned_positions.empty()) {
-        abort_goal("Dual-arm pose 14-DOF time parameterization failed: " +
-            planning_error);
+    // 【关键防御】再次检查 planned_positions
+    if (planned_positions.empty()) {
+        abort_goal("Trajectory planning resulted in empty positions");
         return;
     }
 
     std::array<std::vector<std::vector<double>>, 2> trajectories;
     for (const auto& point : planned_positions) {
+        // 防御性检查：point 大小必须正确
         if (point.size() != 2U * static_cast<std::size_t>(arm_dof_)) {
             abort_goal("Dual-arm pose trajectory sample does not contain 14 joints");
             return;
@@ -1610,6 +1682,13 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         trajectories[0].emplace_back(point.begin(), point.begin() + arm_dof_);
         trajectories[1].emplace_back(point.begin() + arm_dof_, point.end());
     }
+    
+    // 如果 trajectories 为空（理论上不可能，因为上面检查了 planned_positions 非空），则报错
+    if (trajectories[0].empty() || trajectories[1].empty()) {
+        abort_goal("Generated trajectories are empty");
+        return;
+    }
+
     for (std::size_t arm = 0; arm < trajectories.size(); ++arm) {
         const auto validation =
             motion_control_pkg::motion::validateTrajectoryPositions(
@@ -1622,8 +1701,8 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
             return;
         }
     }
+    
 
-    // 对 TOPPRA 的每个联合采样再次使用同一个 Pinocchio/Coal 碰撞接口。
     if (goal->enable_collision_check) {
         bool collision_free = true;
         for (std::size_t sample = 0;

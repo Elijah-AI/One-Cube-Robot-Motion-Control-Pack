@@ -171,7 +171,7 @@ python3 action_client_test.py move_joints \
         position: {
           x: 0.98041,
           y: 0.51958,
-          z: 1.44463
+          z: 1.24463
         },
         orientation: {
           x: -0.486658,
@@ -188,7 +188,7 @@ python3 action_client_test.py move_joints \
         position: {
           x: 0.96041,
           y: -0.53958,
-          z: 1.44463
+          z: 1.49463
         },
         orientation: {
           x: -0.486658,
@@ -202,6 +202,7 @@ python3 action_client_test.py move_joints \
     synchronization_mode: 0,
     enable_collision_check: false,
     use_force_control: false,
-    speed: 0.5,
+    enable_move_line: true,
+    speed: 0.3,
     timeout_ms: 45000}" \
   --feedback
