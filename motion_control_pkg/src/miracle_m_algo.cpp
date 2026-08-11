@@ -1028,6 +1028,80 @@ bool MiracleMAlgo::planDualArmCartesianPath(const std::vector<double>& start_q,
     return true;
 }
 
+bool MiracleMAlgo::planDualArmCartesianLine(const std::vector<double>& start_q,
+                                           const std::vector<double>& left_end_poseture,
+                                           const std::vector<double>& right_end_poseture,
+                                           const double& dt,const double& v_max,
+                                           const double& a_max, const double& j_max,
+                                           std::vector<std::vector<double>>& path) { 
+    
+    std::vector<std::vector<double>> left_path,right_path;
+
+    bool left_success = false;
+    bool right_success = false;
+
+    // 1. 定义线程任务 Lambda
+    auto left_task = [&]() {
+        left_success = planSingleArmCartesianLine(true, start_q, left_end_poseture, dt, v_max, a_max, j_max, left_path);
+    };
+
+    auto right_task = [&]() {
+        right_success = planSingleArmCartesianLine(false, start_q, right_end_poseture, dt, v_max, a_max, j_max, right_path);
+    };
+
+    // 2. 创建并立即启动线程
+    std::thread t_left(left_task);
+    std::thread t_right(right_task);
+
+    // 3. 等待两个线程执行完毕
+    t_left.join();
+    t_right.join();
+
+    // 4. 检查执行结果
+    if (!left_success) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "planDualArmCartesianLine: failed to plan left arm path");
+        return false;
+    }
+    if (!right_success) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "planDualArmCartesianLine: failed to plan right arm path");
+        return false;
+    }
+
+    std::vector<double> full_q;
+    
+    size_t sync_size = std::max(left_path.size(), right_path.size());
+    int min_points_size = std::min(left_path.size(),right_path.size());
+    path.clear();
+    if(left_path.size()>=right_path.size()){
+        for(int i=0; i<right_path.size(); ++i) {
+            full_q=left_path[i];
+            full_q.insert(full_q.end(),right_path[i].begin(),right_path[i].end());
+            path.push_back(full_q);
+        }
+        for(int i=right_path.size(); i<left_path.size(); ++i){
+            full_q=left_path[i];
+            full_q.insert(full_q.end(),right_path.back().begin(),right_path.back().end());
+            path.push_back(full_q);
+        }
+    }
+    else{
+        for(int i=0; i<left_path.size(); ++i) {
+            full_q=left_path[i];
+            full_q.insert(full_q.end(),right_path[i].begin(),right_path[i].end());
+            path.push_back(full_q);
+        }
+        for(int i=left_path.size(); i<right_path.size(); ++i){
+            full_q=left_path.back();
+            full_q.insert(full_q.end(),right_path[i].begin(),right_path[i].end());
+            path.push_back(full_q);
+        }
+    }
+    
+        
+    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "shuangbi guihua wancheng inside");
+    return true;
+}
+
 bool MiracleMAlgo::planSingleArmCartesianPath(bool is_left,
                                                  const std::vector<double>& start_q,
                                                  const Eigen::Isometry3d& goal,
@@ -1120,16 +1194,19 @@ bool MiracleMAlgo::planSingleArmCartesianLine(bool is_left, const std::vector<do
                                                     const double& a_max, const double& j_max,
                                                     std::vector<std::vector<double>>& path)
 {
+    // std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    pinocchio::Data local_data(model_); 
+    pinocchio::GeometryData local_geom_data(geom_model_);
     Eigen::VectorXd q_current = toEigenConfig(start_q);
-    pinocchio::forwardKinematics(model_, *data_, q_current);
-    pinocchio::updateFramePlacements(model_, *data_);
+    pinocchio::forwardKinematics(model_, local_data, q_current);
+    pinocchio::updateFramePlacements(model_, local_data);
     
     pinocchio::FrameIndex ee_id = is_left ? left_ee_frame_id_ : right_ee_frame_id_;
     pinocchio::SE3 start_poseture = data_->oMf[ee_id];
     Eigen::Vector3d start_pose=start_poseture.translation();
     Eigen::Vector3d end_pose(end_poseture[0], end_poseture[1], end_poseture[2]);
-    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "end pose: %f,%f,%f", 
-                                    end_poseture[0],end_poseture[1],end_poseture[2]);
+    // RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "end pose: %f,%f,%f", 
+    //                                 end_poseture[0],end_poseture[1],end_poseture[2]);
     Eigen::Vector3d delta_X = end_pose - start_pose;
     double d_pos = delta_X.norm();
     if (d_pos < 1e-2)
@@ -1202,12 +1279,10 @@ bool MiracleMAlgo::planSingleArmCartesianLine(bool is_left, const std::vector<do
         
         output.pass_to_input(input);
     }
-
+    path.clear();
     std::vector<double> current_full_q = start_q;
     std::vector<double>point_q(7);
     for(size_t i=0;i<pose_path.size();i++){
-        RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "path i: %f,%f,%f,%f,%f,%f,%f", 
-                                    pose_path[i][0],pose_path[i][1],pose_path[i][2],pose_path[i][3],pose_path[i][4],pose_path[i][5],pose_path[i][6]);
         Eigen::Vector3d xk(pose_path[i][0],pose_path[i][1],pose_path[i][2]);
         Eigen::Quaterniond qk(pose_path[i][6],pose_path[i][3],pose_path[i][4],pose_path[i][5]);
         Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
