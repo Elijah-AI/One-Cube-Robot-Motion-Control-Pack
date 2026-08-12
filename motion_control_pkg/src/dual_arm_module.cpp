@@ -1325,19 +1325,7 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         abort_goal(speed_validation.error_message);
         return;
     }
-    const auto unsupported_bound = [](const auto& bound) {
-        return std::any_of(bound.begin(), bound.end(), [](float value) {
-            return !std::isfinite(value) || value != 0.0F;
-        });
-    };
-    if (unsupported_bound(goal->left_bound_size) ||
-        unsupported_bound(goal->right_bound_size))
-    {
-        abort_goal(
-            "Non-zero tool envelopes are unavailable without an existing "
-            "attached collision-object interface");
-        return;
-    }
+    
     if (!init_robot_link_ || !l_init_arm_params_) {
         abort_goal("Dual-arm robot link or kinematics is not initialized");
         return;
@@ -1410,6 +1398,15 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         abort_goal("right target: " + conversion_error);
         return;
     }
+
+    //加上偏移量
+    normalized_left.pose.position.x +=  goal->left_bound_size[0];
+    normalized_left.pose.position.y +=  goal->left_bound_size[1];
+    normalized_left.pose.position.z +=  goal->left_bound_size[2];
+    normalized_right.pose.position.x +=  goal->right_bound_size[0];
+    normalized_right.pose.position.y +=  goal->right_bound_size[1];
+    normalized_right.pose.position.z +=  goal->right_bound_size[2];
+
     const auto& effective_left = normalized_left;
     const auto& effective_right = normalized_right;
 
@@ -2282,6 +2279,12 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal(conversion_error);
         return;
     }
+
+    //加上偏移量
+    normalized_target.pose.position.x +=  goal->bound_size[0];
+    normalized_target.pose.position.y +=  goal->bound_size[1];
+    normalized_target.pose.position.z +=  goal->bound_size[2];
+
     const auto& effective_target = normalized_target;
 
     const std::size_t arm_index = static_cast<std::size_t>(channel);
@@ -2311,28 +2314,16 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal("MovePose hand actions are not implemented before the tool stage");
         return;
     }
-    const auto& point_cloud = goal->env_point_cloud;
-    if (!point_cloud.data.empty() || point_cloud.width != 0U ||
-        point_cloud.height != 0U)
-    {
-        abort_goal(
-            "MovePose environment point cloud was not loaded into the "
-            "MiracleMAlgo collision world");
-        return;
-    }
-    if (!goal->bound_size.empty() &&
-        (goal->bound_size.size() != 3U ||
-        !std::all_of(
-            goal->bound_size.begin(), goal->bound_size.end(),
-            [](float value) {
-                return std::isfinite(value) && value > 0.0F;
-            })))
-    {
-        abort_goal(
-            "MovePose bound_size must be empty or contain three finite "
-            "positive dimensions in metres");
-        return;
-    }
+    // const auto& point_cloud = goal->env_point_cloud;
+    // if (!point_cloud.data.empty() || point_cloud.width != 0U ||
+    //     point_cloud.height != 0U)
+    // {
+    //     abort_goal(
+    //         "MovePose environment point cloud was not loaded into the "
+    //         "MiracleMAlgo collision world");
+    //     return;
+    // }
+
     if (!l_init_arm_params_) {
         abort_goal("Robot kinematics parameters are not initialized");
         return;

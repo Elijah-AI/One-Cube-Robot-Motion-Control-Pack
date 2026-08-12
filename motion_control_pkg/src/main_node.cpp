@@ -249,28 +249,28 @@ private:
                     !std::all_of(
                         goal->bound_size.begin(), goal->bound_size.end(),
                         [](float value) {
-                            return std::isfinite(value) && value > 0.0F;
+                            return std::isfinite(value);
                         }))
                 {
                     RCLCPP_WARN(
                         this->get_logger(),
                         "MovePose bound_size must be empty or contain three "
-                        "finite positive dimensions in metres.");
+                        "finite dimensions in metres.");
                     return rclcpp_action::GoalResponse::REJECT;
                 }
             }
-            const auto& point_cloud = goal->env_point_cloud;
-            if (!point_cloud.data.empty() || point_cloud.width != 0U ||
-                point_cloud.height != 0U)
-            {
-                // 当前依赖中没有已接入 MiracleMAlgo/Coal 的 PointCloud2
-                // 场景导入器；显式拒绝，避免把未参与碰撞检测的数据静默忽略。
-                RCLCPP_WARN(
-                    this->get_logger(),
-                    "MovePose environment point clouds are unavailable until "
-                    "an existing collision-world importer is integrated.");
-                return rclcpp_action::GoalResponse::REJECT;
-            }
+            // const auto& point_cloud = goal->env_point_cloud;
+            // if (!point_cloud.data.empty() || point_cloud.width != 0U ||
+            //     point_cloud.height != 0U)
+            // {
+            //     // 当前依赖中没有已接入 MiracleMAlgo/Coal 的 PointCloud2
+            //     // 场景导入器；显式拒绝，避免把未参与碰撞检测的数据静默忽略。
+            //     RCLCPP_WARN(
+            //         this->get_logger(),
+            //         "MovePose environment point clouds are unavailable until "
+            //         "an existing collision-world importer is integrated.");
+            //     return rclcpp_action::GoalResponse::REJECT;
+            // }
         }
 
         if (goal->arm_id == ARM_BOTH) {
@@ -305,19 +305,19 @@ private:
                     "ARM_BOTH MovePose force/tool actions are not implemented");
                 return rclcpp_action::GoalResponse::REJECT;
             }
-            const auto& point_cloud = goal->env_point_cloud;
-            if (!point_cloud.data.empty() || point_cloud.width != 0U ||
-                point_cloud.height != 0U)
-            {
-                RCLCPP_WARN(
-                    this->get_logger(),
-                    "ARM_BOTH MovePose point clouds are not connected to the "
-                    "collision world");
-                return rclcpp_action::GoalResponse::REJECT;
-            }
+            // const auto& point_cloud = goal->env_point_cloud;
+            // if (!point_cloud.data.empty() || point_cloud.width != 0U ||
+            //     point_cloud.height != 0U)
+            // {
+            //     RCLCPP_WARN(
+            //         this->get_logger(),
+            //         "ARM_BOTH MovePose point clouds are not connected to the "
+            //         "collision world");
+            //     return rclcpp_action::GoalResponse::REJECT;
+            // }
             const auto unsupported_bound = [](const auto& bound) {
                 return std::any_of(bound.begin(), bound.end(), [](float value) {
-                    return !std::isfinite(value) || value != 0.0F;
+                    return !std::isfinite(value);
                 });
             };
             if (unsupported_bound(goal->left_bound_size) ||
@@ -325,8 +325,7 @@ private:
             {
                 RCLCPP_WARN(
                     this->get_logger(),
-                    "ARM_BOTH MovePose non-zero tool envelopes require an "
-                    "attached collision-object interface");
+                    "ARM_BOTH MovePose left/right bound_size invalid");
                 return rclcpp_action::GoalResponse::REJECT;
             }
         }

@@ -311,12 +311,23 @@ uint8_t Jodell_Control::Jodell_modbus_register_read_A(uint16_t start_addr, uint1
     OnClearChDataA();
     long data_size = 8;
     usleep(50000);
+    long target_recv_len = cnt*2 + 5;
     bool result = OnSetChDataA(hex_str, data_size, ch[left]);
-
+    
     if (result)
     {
-        usleep(20000);
-        return OnGetChDataA(data, (long *)&ch[left]);
+        int cnt = 100;
+        while(cnt--)
+        {
+            usleep(2000);
+            long channel = static_cast<long>(ch[left]);
+            long size = OnGetChDataA(data, &channel);
+            if (size >= target_recv_len)
+            {
+                return size;
+            }
+        }
+        return 0;
     }
     else 
     {
@@ -350,12 +361,23 @@ uint8_t Jodell_Control::Jodell_modbus_register_read_B(uint16_t start_addr, uint1
     OnClearChDataB();
     long data_size = 8;
     usleep(50000);
+    long target_recv_len = cnt*2 + 5;
     bool result = OnSetChDataB(hex_str, data_size, ch[right]);
 
     if (result)
     {
-        usleep(20000);
-        return OnGetChDataB(data, (long *)&ch[right]);
+        int cnt = 100;
+        while(cnt--)
+        {
+            usleep(2000);
+            long channel = static_cast<long>(ch[right]);
+            long size = OnGetChDataB(data, &channel);
+            if (size >= target_recv_len)
+            {
+                return size;
+            }
+        }
+        return 0;
     }
     else 
     {

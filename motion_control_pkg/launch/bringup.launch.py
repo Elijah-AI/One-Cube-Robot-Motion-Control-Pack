@@ -13,10 +13,11 @@ def generate_launch_description():
     mesh_dir = os.path.dirname(pkg_share)   #父级目录
     
     # driver_package_dir = get_package_share_directory('miracle_driver')
-    # param_file = "/opt/tq/motion_control/config/motion_control_config.yaml"
-    motion_control_pkg = FindPackageShare('motion_control_pkg').find('motion_control_pkg')
-    param_file = os.path.join(motion_control_pkg, 'launch', 'config', 'motion_control_config.yaml')
     
+    motion_control_pkg = FindPackageShare('motion_control_pkg').find('motion_control_pkg')
+    # param_file = os.path.join(motion_control_pkg, 'launch', 'config', 'motion_control_config.yaml')
+    param_file = "/opt/onecube/motion_control/config/motion_control_config.yaml"
+
     driver_config = LaunchConfiguration('driver_config')
     
     

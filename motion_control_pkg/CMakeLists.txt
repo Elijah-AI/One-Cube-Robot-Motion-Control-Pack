@@ -168,12 +168,12 @@ set(SOURCES
     src/miracle_head_module.cpp
     src/miracle_lower_body_module.cpp
     src/miracle_m_algo.cpp
+    src/common/gripper/Modbus_Jodell.cpp
     # src/common/ctrl/PVT_ctrl.cpp
     # src/common/mpc/mpc.cpp
     # src/common/pino/pino_kin_dyn.cpp
     # src/common/wbc/priority_tasks.cpp
     # src/common/wbc/wbc_priority.cpp
-    src/common/gripper‌/Modbus_Jodell.cpp
     # src/common/motion/fcl_wrapper.cpp
     # Stage 0-7 的生产节点只负责 Marvin 双臂。头部、下肢和 EtherCAT
     # 仍保留源码，但在各自完成离线与真机验证前不编入本节点。
