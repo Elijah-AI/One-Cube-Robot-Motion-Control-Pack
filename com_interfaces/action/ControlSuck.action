@@ -1,5 +1,5 @@
 # Goal
-# 吸盘编号仅预留接口；GPIO 驱动和状态回读本阶段不实现。
+# GPIO4_B2 控制左吸盘，GPIO4_B0 控制右吸盘。
 uint8 SUCK_LEFT=0
 uint8 SUCK_RIGHT=1
 uint8 SUCK_BOTH=2
@@ -7,7 +7,7 @@ uint8 SUCK_BOTH=2
 std_msgs/Header header
 string task_id
 uint8 suck_id        #0：左吸盘，1：右吸盘，2：双吸盘
-bool[] active        #打开/关闭
+bool[] active        #[左, 右]，true：打开，false：关闭
 int64 timeout_ms
 
 ---

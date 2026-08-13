@@ -32,6 +32,7 @@
 */
 
 #include "miracle_m_algo.hpp"
+#include <cstddef>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/frames.hpp>
@@ -1069,28 +1070,28 @@ bool MiracleMAlgo::planDualArmCartesianLine(const std::vector<double>& start_q,
 
     std::vector<double> full_q;
     
-    size_t sync_size = std::max(left_path.size(), right_path.size());
-    int min_points_size = std::min(left_path.size(),right_path.size());
+    // size_t sync_size = std::max(left_path.size(), right_path.size());
+    // int min_points_size = std::min(left_path.size(),right_path.size());
     path.clear();
     if(left_path.size()>=right_path.size()){
-        for(int i=0; i<right_path.size(); ++i) {
+        for(size_t i=0; i<right_path.size(); ++i) {
             full_q=left_path[i];
             full_q.insert(full_q.end(),right_path[i].begin(),right_path[i].end());
             path.push_back(full_q);
         }
-        for(int i=right_path.size(); i<left_path.size(); ++i){
+        for(size_t i=right_path.size(); i<left_path.size(); ++i){
             full_q=left_path[i];
             full_q.insert(full_q.end(),right_path.back().begin(),right_path.back().end());
             path.push_back(full_q);
         }
     }
     else{
-        for(int i=0; i<left_path.size(); ++i) {
+        for(size_t i=0; i<left_path.size(); ++i) {
             full_q=left_path[i];
             full_q.insert(full_q.end(),right_path[i].begin(),right_path[i].end());
             path.push_back(full_q);
         }
-        for(int i=left_path.size(); i<right_path.size(); ++i){
+        for(size_t i=left_path.size(); i<right_path.size(); ++i){
             full_q=left_path.back();
             full_q.insert(full_q.end(),right_path[i].begin(),right_path[i].end());
             path.push_back(full_q);

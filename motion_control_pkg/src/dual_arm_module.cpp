@@ -8,10 +8,12 @@
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
 #include "motion_control_pkg/motion/pose_space_control.hpp"
+#include "motion_control_pkg/suck/neardi47_gpio.h"
 
 #include <std_msgs/msg/header.hpp>
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <ctime>
 #include <limits>
 #include <memory>
@@ -365,8 +367,7 @@ DualArmModule::DualArmModule(
     l_jerk_limit_.resize(arm_dof_);
    
     this->motor_status_pub_ = shared_node->create_publisher<MotorStatus>("/Control/MotorInfo",10);
-    joint_feedback_timer_ = shared_node->create_wall_timer(50ms,
-    std::bind(&DualArmModule::motor_statu_cb, this));
+    joint_feedback_timer_ = shared_node->create_wall_timer(10ms,std::bind(&DualArmModule::motor_statu_cb, this));
     motor_status_msg_ = com_interfaces::msg::MotorStatus();
     init_motor_status();
 
@@ -491,6 +492,19 @@ DualArmModule::~DualArmModule()
     }
     if (execution_thread_control_gripper_.joinable()) {
         execution_thread_control_gripper_.join();
+    }
+    if (execution_thread_control_suck_.joinable()) {
+        execution_thread_control_suck_.join();
+    }
+    if (suck_gpio_initialized_) {
+        if (neardi47_gpio_write(true, true) < 0) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("ControlSuck"),
+                "Failed to switch suction GPIO outputs off during shutdown: %s",
+                std::strerror(errno));
+        }
+        neardi47_gpio_deinit();
+        suck_gpio_initialized_ = false;
     }
     if (sdk_connected_ && sdk_command_gate_) {
         const auto release_result = sdk_command_gate_->release();
@@ -789,6 +803,10 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
         result->success = false;
         result->error_message = message;
         update_time();
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "Dual-arm MoveJoints failed: %s",
+            result->error_message.c_str());
         terminal.abort(result);
     };
     const auto cancel_goal = [&](const std::string& message) {
@@ -1286,6 +1304,10 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         result->success = false;
         result->error_message = message;
         update_time();
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "Dual-arm MovePose failed: %s",
+            result->error_message.c_str());
         terminal.abort(result);
     };
     const auto cancel_goal = [&](const std::string& message) {
@@ -1904,6 +1926,12 @@ void DualArmModule::execution_loop_move_joint_impl(
         result->success = ACTION_FAIL;
         result->error_message = message;
         update_execution_time();
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "MoveJoints (%s arm) failed: %s",
+            channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+            "left" : "right",
+            result->error_message.c_str());
         terminal.abort(result);
     };
     const auto cancel_goal = [&](const std::string& message) {
@@ -2245,6 +2273,12 @@ void DualArmModule::execution_loop_move_pose_impl(
         result->success = ACTION_FAIL;
         result->error_message = message;
         update_execution_time();
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "MovePose (%s arm) failed: %s",
+            channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
+            "left" : "right",
+            result->error_message.c_str());
         terminal.abort(result);
     };
     const auto cancel_goal = [&](const std::string& message) {
@@ -2284,6 +2318,12 @@ void DualArmModule::execution_loop_move_pose_impl(
     normalized_target.pose.position.x +=  goal->bound_size[0];
     normalized_target.pose.position.y +=  goal->bound_size[1];
     normalized_target.pose.position.z +=  goal->bound_size[2];
+
+    //使用固定姿态，测试y轴180度,z轴90度，固定轴
+    normalized_target.pose.orientation.x = -0.7071068;
+    normalized_target.pose.orientation.y = 0.7071068;
+    normalized_target.pose.orientation.z = 0.0;
+    normalized_target.pose.orientation.w = 0.0;
 
     const auto& effective_target = normalized_target;
 
@@ -2704,10 +2744,21 @@ bool DualArmModule::start_execution_control_gripper(
     std::shared_ptr<GoalHandleControlGripper> goal_handle,
     std::string& error_message)
 {
-    std::lock_guard<std::mutex> lock(control_gripper_start_mutex_);
+    const auto goal = goal_handle->get_goal();
+    const bool need_left = goal->gripper_id == GRIPPER_LEFT ||
+        goal->gripper_id == GRIPPER_BOTH;
+    const bool need_right = goal->gripper_id == GRIPPER_RIGHT ||
+        goal->gripper_id == GRIPPER_BOTH;
+    if (!need_left && !need_right) {
+        error_message = "unsupported gripper_id";
+        return false;
+    }
 
-    if (is_executing_left_tool_.load() || is_executing_right_tool_.load()) {
-        error_message = "another ControlGripper goal is still executing";
+    std::lock_guard<std::mutex> lock(control_tool_start_mutex_);
+    if ((need_left && is_executing_left_tool_.load()) ||
+        (need_right && is_executing_right_tool_.load()))
+    {
+        error_message = "a requested tool is still executing another goal";
         return false;
     }
 
@@ -2715,25 +2766,23 @@ bool DualArmModule::start_execution_control_gripper(
         execution_thread_control_gripper_.join();
     }
 
-    const auto goal = goal_handle->get_goal();
-    if (goal->gripper_id == GRIPPER_LEFT) {
+    if (need_left) {
         is_executing_left_tool_.store(true);
-    } else if (goal->gripper_id == GRIPPER_RIGHT) {
+    }
+    if (need_right) {
         is_executing_right_tool_.store(true);
-    } else if (goal->gripper_id == GRIPPER_BOTH) {
-        is_executing_left_tool_.store(true);
-        is_executing_right_tool_.store(true);
-    } else {
-        error_message = "unsupported gripper_id";
-        return false;
     }
 
     try {
         execution_thread_control_gripper_ = std::thread(
             &DualArmModule::execution_loop_control_gripper, this, goal_handle);
     } catch (const std::exception& exception) {
-        is_executing_left_tool_.store(false);
-        is_executing_right_tool_.store(false);
+        if (need_left) {
+            is_executing_left_tool_.store(false);
+        }
+        if (need_right) {
+            is_executing_right_tool_.store(false);
+        }
         error_message = std::string("failed to create gripper worker: ") +
             exception.what();
         return false;
@@ -2741,6 +2790,150 @@ bool DualArmModule::start_execution_control_gripper(
 
     error_message.clear();
     return true;
+}
+
+bool DualArmModule::start_execution_control_suck(
+    std::shared_ptr<GoalHandleControlSuck> goal_handle,
+    std::string& error_message)
+{
+    const auto goal = goal_handle->get_goal();
+    const bool need_left = goal->suck_id == ControlSuck::Goal::SUCK_LEFT ||
+        goal->suck_id == ControlSuck::Goal::SUCK_BOTH;
+    const bool need_right = goal->suck_id == ControlSuck::Goal::SUCK_RIGHT ||
+        goal->suck_id == ControlSuck::Goal::SUCK_BOTH;
+    if (!need_left && !need_right) {
+        error_message = "unsupported suck_id";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(control_tool_start_mutex_);
+    if ((need_left && is_executing_left_tool_.load()) ||
+        (need_right && is_executing_right_tool_.load()))
+    {
+        error_message = "a requested tool is still executing another goal";
+        return false;
+    }
+
+    if (execution_thread_control_suck_.joinable()) {
+        execution_thread_control_suck_.join();
+    }
+
+    if (need_left) {
+        is_executing_left_tool_.store(true);
+    }
+    if (need_right) {
+        is_executing_right_tool_.store(true);
+    }
+
+    try {
+        execution_thread_control_suck_ = std::thread(
+            &DualArmModule::execution_loop_control_suck, this, goal_handle);
+    } catch (const std::exception& exception) {
+        if (need_left) {
+            is_executing_left_tool_.store(false);
+        }
+        if (need_right) {
+            is_executing_right_tool_.store(false);
+        }
+        error_message = std::string("failed to create suck worker: ") +
+            exception.what();
+        return false;
+    }
+
+    error_message.clear();
+    return true;
+}
+
+void DualArmModule::execution_loop_control_suck(
+    std::shared_ptr<GoalHandleControlSuck> goal_handle)
+{
+    const auto goal = goal_handle->get_goal();
+    const bool need_left = goal->suck_id == ControlSuck::Goal::SUCK_LEFT ||
+        goal->suck_id == ControlSuck::Goal::SUCK_BOTH;
+    const bool need_right = goal->suck_id == ControlSuck::Goal::SUCK_RIGHT ||
+        goal->suck_id == ControlSuck::Goal::SUCK_BOTH;
+
+    std::atomic<bool> * first_busy_flag = need_left ?
+        &is_executing_left_tool_ : &is_executing_right_tool_;
+    std::atomic<bool> * second_busy_flag = need_left && need_right ?
+        &is_executing_right_tool_ : nullptr;
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        first_busy_flag, second_busy_flag);
+    ControlSuckTerminalGuard terminal(goal_handle);
+    motion_control_pkg::execution::SteadyDeadline deadline(
+        std::chrono::milliseconds(goal->timeout_ms));
+
+    auto feedback = std::make_shared<ControlSuck::Feedback>();
+    auto result = std::make_shared<ControlSuck::Result>();
+    const auto publish_feedback = [&](float progress) {
+        feedback->progress_rate = progress;
+        if (auto node = lockNode(__func__)) {
+            feedback->header.stamp = node->now();
+        }
+        goal_handle->publish_feedback(feedback);
+    };
+    const auto abort_gpio = [&](const std::string& message) {
+        result->success = ACTION_FAIL;
+        result->error_message = message;
+        RCLCPP_ERROR(
+            rclcpp::get_logger("ControlSuck"), "%s", message.c_str());
+        terminal.abort(result);
+    };
+
+    publish_feedback(0.0F);
+    if (deadline.expired()) {
+        abort_gpio("ControlSuck timed out before GPIO initialization");
+        return;
+    }
+
+    std::lock_guard<std::mutex> gpio_lock(suck_gpio_mutex_);
+
+    if (!suck_gpio_initialized_) {
+        if (neardi47_gpio_init(left_suck_active_, right_suck_active_) < 0) {
+            const int error_number = errno;
+            abort_gpio(
+                std::string("Failed to initialize /dev/gpiochip4: ") +
+                std::strerror(error_number));
+            return;
+        }
+        suck_gpio_initialized_ = true;
+    }
+
+    publish_feedback(50.0F);
+    if (deadline.expired()) {
+        abort_gpio("ControlSuck timed out before setting GPIO output");
+        return;
+    }
+
+    int write_result = 0;
+    if (need_left && need_right) {
+        write_result = neardi47_gpio_write(!goal->active[0], !goal->active[1]);
+    } else if (need_left) {
+        write_result = neardi47_gpio4_b2_write(!goal->active[0]);
+    } else {
+        write_result = neardi47_gpio4_b0_write(!goal->active[1]);
+    }
+    if (write_result < 0) {
+        const int error_number = errno;
+        neardi47_gpio_deinit();
+        suck_gpio_initialized_ = false;
+        abort_gpio(
+            std::string("Failed to set suction GPIO output: ") +
+            std::strerror(error_number));
+        return;
+    }
+
+    if (need_left) {
+        left_suck_active_ = goal->active[0];
+    }
+    if (need_right) {
+        right_suck_active_ = goal->active[1];
+    }
+
+    publish_feedback(100.0F);
+    result->success = ACTION_SUCCESS;
+    result->error_message.clear();
+    terminal.succeed(result);
 }
 
 void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle)
@@ -3083,6 +3276,28 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
         terminal.abort(result);
         return;
     }
+    /***测试****/
+    // Eigen::Matrix4d T_test = Eigen::Matrix4d::Identity();
+    // const bool fk_test_ok = miracle_algo_->getForwardKinematics(
+    //      "head_pitch_link", "body_link",T_test);
+    // if (!fk_test_ok) {
+    //     RCLCPP_ERROR(
+    //         rclcpp::get_logger("DualArmModule_FKTest"),
+    //         "Failed to get forward kinematics from body_link to "
+    //         "head_pitch_link");
+    // } else {
+    //     RCLCPP_INFO(
+    //         rclcpp::get_logger("DualArmModule_FKTest"),
+    //         "T_test (head_pitch_link -> body_link): "
+    //         "[[%.9f, %.9f, %.9f, %.9f], "
+    //         "[%.9f, %.9f, %.9f, %.9f], "
+    //         "[%.9f, %.9f, %.9f, %.9f], "
+    //         "[%.9f, %.9f, %.9f, %.9f]]",
+    //         T_test(0, 0), T_test(0, 1), T_test(0, 2), T_test(0, 3),
+    //         T_test(1, 0), T_test(1, 1), T_test(1, 2), T_test(1, 3),
+    //         T_test(2, 0), T_test(2, 1), T_test(2, 2), T_test(2, 3),
+    //         T_test(3, 0), T_test(3, 1), T_test(3, 2), T_test(3, 3));
+    // }
 
 
 }

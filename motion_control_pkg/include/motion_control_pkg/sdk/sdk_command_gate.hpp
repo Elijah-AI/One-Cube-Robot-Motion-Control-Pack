@@ -31,7 +31,7 @@ struct SdkCommandResult
 
 struct SdkCommandGateOptions
 {
-  std::chrono::microseconds clear_timeout{std::chrono::microseconds(8000)};
+  std::chrono::microseconds clear_timeout{std::chrono::microseconds(20000)};
   std::chrono::microseconds clear_retry_interval{std::chrono::microseconds(200)};
   std::chrono::milliseconds clear_error_settle_time{std::chrono::milliseconds(200)};
   std::chrono::milliseconds tool_parameter_settle_time{

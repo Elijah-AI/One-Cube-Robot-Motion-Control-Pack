@@ -2327,4 +2327,22 @@
 
   <!-- 左臂结束 -->
 
+  <!-- 测试显示 -->
+  <link
+    name="test_box">
+  </link>
+
+  <joint
+    name="test_box_joint"
+    type="fixed">
+    <!-- <origin
+      xyz="0.808956 -0.239638 -0.202226"
+      rpy="1.574989 0.736049 -1.598288" /> -->
+    <origin xyz="1.09885 0.26945 0.824731" rpy="3.14159 0.0 -1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="test_box" />
+  </joint>
+
 </robot>

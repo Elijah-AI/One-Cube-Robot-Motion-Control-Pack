@@ -13,6 +13,7 @@
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
 #include "motion_control_pkg/execution/gripper_command_validation.hpp"
+#include "motion_control_pkg/execution/suck_command_validation.hpp"
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
 #include "motion_control_pkg/sdk/marvin_dual_arm_sdk_adapter.hpp"
@@ -71,22 +72,30 @@ public:
         lower_body_module_->initGmcaModule(miracleAlgo_ptr_);
 
         std::string planning_frame = "base_link";
-        std::string left_arm_tool = "gripper";
-        std::string right_arm_tool = "suck";
         std::vector<double> left_arm_tool_tf{
             0.0, 0.0, 0.1785, 0.0, 0.0, 0.0, 1.0};
         std::vector<double> right_arm_tool_tf{
             0.0, 0.0, 0.1785, 0.0, 0.0, 0.0, 1.0};
         this->declare_parameter("dual_arm_planning_frame", planning_frame);
-        this->declare_parameter("left_arm_tool", left_arm_tool);
-        this->declare_parameter("right_arm_tool", right_arm_tool);
+        this->declare_parameter("left_arm_tool", left_arm_tool_);
+        this->declare_parameter("right_arm_tool", right_arm_tool_);
         this->declare_parameter("left_arm_tool_tf", left_arm_tool_tf);
         this->declare_parameter("right_arm_tool_tf", right_arm_tool_tf);
         this->get_parameter("dual_arm_planning_frame", planning_frame);
-        this->get_parameter("left_arm_tool", left_arm_tool);
-        this->get_parameter("right_arm_tool", right_arm_tool);
+        this->get_parameter("left_arm_tool", left_arm_tool_);
+        this->get_parameter("right_arm_tool", right_arm_tool_);
         this->get_parameter("left_arm_tool_tf", left_arm_tool_tf);
         this->get_parameter("right_arm_tool_tf", right_arm_tool_tf);
+
+        const auto is_supported_tool = [](const std::string& tool) {
+            return tool == "gripper" || tool == "suck" || tool == "none";
+        };
+        if (!is_supported_tool(left_arm_tool_) ||
+            !is_supported_tool(right_arm_tool_))
+        {
+            throw std::invalid_argument(
+                "left_arm_tool/right_arm_tool must be gripper, suck, or none");
+        }
 
         if (planning_frame.empty() ||
             !miracleAlgo_ptr_->getModel().existFrame(planning_frame)) {
@@ -148,7 +157,7 @@ public:
             "Dual arm initialized with configuration=%s, planning_frame=%s, "
             "left_tool=%s, right_tool=%s and SDK config=%s",
             active_arm_configuration.c_str(), planning_frame.c_str(),
-            left_arm_tool.c_str(), right_arm_tool.c_str(),
+            left_arm_tool_.c_str(), right_arm_tool_.c_str(),
             sdk_config_path.c_str());
 
         // 2. 创建全局唯一的 Action Server
@@ -176,6 +185,14 @@ public:
             std::bind(&RobotControlNode::handle_accepted_control_gripper, this, std::placeholders::_1)
         );
 
+        control_suck_action_server_ = rclcpp_action::create_server<ControlSuck>(
+            this,
+            "/Control/control_suck",
+            std::bind(&RobotControlNode::handle_goal_control_suck, this, std::placeholders::_1, std::placeholders::_2),
+            std::bind(&RobotControlNode::handle_cancel_control_suck, this, std::placeholders::_1),
+            std::bind(&RobotControlNode::handle_accepted_control_suck, this, std::placeholders::_1)
+        );
+
         RCLCPP_INFO(this->get_logger(), "Robot Control Action Server is ready.");
     }
 
@@ -191,9 +208,12 @@ private:
     active_arm_configuration_{
         motion_control_pkg::sdk::ActiveArmConfiguration::kDualArm};
     std::shared_ptr<DualArmModule> dual_arm_module_;
+    std::string left_arm_tool_{"suck"};
+    std::string right_arm_tool_{"gripper"};
     rclcpp_action::Server<MovePose>::SharedPtr move_pose_action_server_;
     rclcpp_action::Server<MoveJoints>::SharedPtr move_joints_action_server_;
     rclcpp_action::Server<ControlGripper>::SharedPtr control_gripper_action_server_;
+    rclcpp_action::Server<ControlSuck>::SharedPtr control_suck_action_server_;
 
     // ================== 核心分发逻辑 ==================
 
@@ -610,11 +630,21 @@ private:
         }
 
         const bool needs_left =
-            goal->gripper_id == GRIPPER_LEFT ||
-            goal->gripper_id == GRIPPER_BOTH;
+            goal->gripper_id == ControlGripper::Goal::GRIPPER_LEFT ||
+            goal->gripper_id == ControlGripper::Goal::GRIPPER_BOTH;
         const bool needs_right =
-            goal->gripper_id == GRIPPER_RIGHT ||
-            goal->gripper_id == GRIPPER_BOTH;
+            goal->gripper_id == ControlGripper::Goal::GRIPPER_RIGHT ||
+            goal->gripper_id == ControlGripper::Goal::GRIPPER_BOTH;
+        if ((needs_left && left_arm_tool_ != "gripper") ||
+            (needs_right && right_arm_tool_ != "gripper"))
+        {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "Rejecting ControlGripper goal: configured tools are "
+                "left=%s, right=%s.",
+                left_arm_tool_.c_str(), right_arm_tool_.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if ((needs_left && !dual_arm_module_->is_idle(ID_LEFT_TOOL)) ||
             (needs_right && !dual_arm_module_->is_idle(ID_RIGHT_TOOL)))
         {
@@ -651,6 +681,80 @@ private:
             result->final_torque.assign(2U, 0U);
             result->error_message =
                 "ControlGripper lost the tool-resource race: " + start_error;
+            RCLCPP_ERROR(
+                this->get_logger(), "%s", result->error_message.c_str());
+            goal_handle->abort(result);
+        }
+    }
+
+    rclcpp_action::GoalResponse handle_goal_control_suck(
+        const rclcpp_action::GoalUUID & uuid,
+        std::shared_ptr<const ControlSuck::Goal> goal)
+    {
+        (void)uuid;
+        RCLCPP_INFO(
+            this->get_logger(), "Received suction request for suck_id: %u",
+            goal->suck_id);
+
+        const auto validation =
+            motion_control_pkg::execution::validateControlSuckGoal(*goal);
+        if (!validation) {
+            RCLCPP_WARN(
+                this->get_logger(), "Rejecting ControlSuck goal: %s",
+                validation.error_message.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
+        const bool needs_left =
+            goal->suck_id == ControlSuck::Goal::SUCK_LEFT ||
+            goal->suck_id == ControlSuck::Goal::SUCK_BOTH;
+        const bool needs_right =
+            goal->suck_id == ControlSuck::Goal::SUCK_RIGHT ||
+            goal->suck_id == ControlSuck::Goal::SUCK_BOTH;
+        if ((needs_left && left_arm_tool_ != "suck") ||
+            (needs_right && right_arm_tool_ != "suck"))
+        {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "Rejecting ControlSuck goal: configured tools are "
+                "left=%s, right=%s.",
+                left_arm_tool_.c_str(), right_arm_tool_.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if ((needs_left && !dual_arm_module_->is_idle(ID_LEFT_TOOL)) ||
+            (needs_right && !dual_arm_module_->is_idle(ID_RIGHT_TOOL)))
+        {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "Rejecting ControlSuck goal because a requested tool is busy.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    rclcpp_action::CancelResponse handle_cancel_control_suck(
+        const std::shared_ptr<GoalHandleControlSuck> goal_handle)
+    {
+        (void)goal_handle;
+        RCLCPP_WARN(
+            this->get_logger(),
+            "Rejecting ControlSuck cancel request because the GPIO command "
+            "completes immediately.");
+        return rclcpp_action::CancelResponse::REJECT;
+    }
+
+    void handle_accepted_control_suck(
+        const std::shared_ptr<GoalHandleControlSuck> goal_handle)
+    {
+        std::string start_error;
+        if (!dual_arm_module_->start_execution_control_suck(
+                goal_handle, start_error))
+        {
+            auto result = std::make_shared<ControlSuck::Result>();
+            result->success = ACTION_FAIL;
+            result->error_message =
+                "ControlSuck lost the tool-resource race: " + start_error;
             RCLCPP_ERROR(
                 this->get_logger(), "%s", result->error_message.c_str());
             goal_handle->abort(result);

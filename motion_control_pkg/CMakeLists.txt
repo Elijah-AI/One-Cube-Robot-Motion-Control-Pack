@@ -188,8 +188,10 @@ set(SOURCES
 if(NEED_PSEUDO_DRIVER_SDK)
     list(APPEND SOURCES src/ethercat_bus_manager_fake.cpp)
     list(APPEND SOURCES src/loong_driver_sdk_stub.cpp)
+    list(APPEND SOURCES src/common/suck/neardi47_gpio_fake.c)
 else()
     list(APPEND SOURCES src/ethercat_bus_manager.cpp)
+    list(APPEND SOURCES src/common/suck/neardi47_gpio.c)
 endif()
 
 # 创建可执行节点

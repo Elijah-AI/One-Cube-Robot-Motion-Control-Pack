@@ -77,6 +77,9 @@ public:
     bool start_execution_control_gripper(
         std::shared_ptr<GoalHandleControlGripper> goal_handle,
         std::string& error_message);
+    bool start_execution_control_suck(
+        std::shared_ptr<GoalHandleControlSuck> goal_handle,
+        std::string& error_message);
 
 
     void log_jodell_status(rclcpp::Logger logger, const Jodell_status& status);
@@ -111,6 +114,7 @@ private:
         std::chrono::steady_clock::time_point request_started_at);
 
     void execution_loop_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle);
+    void execution_loop_control_suck(std::shared_ptr<GoalHandleControlSuck> goal_handle);
 
     rclcpp::Node::SharedPtr lockNode(const char *context) const;
 
@@ -124,7 +128,9 @@ private:
     std::thread execution_thread_move_dual_joints_;
     std::thread execution_thread_move_dual_pose_;
     std::thread execution_thread_control_gripper_;
-    std::mutex control_gripper_start_mutex_;
+    std::thread execution_thread_control_suck_;
+    std::mutex control_tool_start_mutex_;
+    std::mutex suck_gpio_mutex_;
 
     std::atomic<bool> is_executing_left_arm_;
     std::atomic<bool> is_executing_right_arm_;
@@ -199,6 +205,9 @@ private:
     using ControlGripperTerminalGuard =
         motion_control_pkg::execution::ActionTerminalGuard<
         GoalHandleControlGripper, ControlGripper::Result>;
+    using ControlSuckTerminalGuard =
+        motion_control_pkg::execution::ActionTerminalGuard<
+        GoalHandleControlSuck, ControlSuck::Result>;
     void control_gripper_result(
         Jodell_status *rt_status,
         std::uint8_t gripper_id,
@@ -281,6 +290,9 @@ private:
     double l_joints_command_[7];//左臂关节命令
     bool sdk_connected_ = false;
     bool init_robot_link_ = false;
+    bool suck_gpio_initialized_ = false;
+    bool left_suck_active_ = false;
+    bool right_suck_active_ = false;
     mutable std::mutex arm_status_mtx_;
       mutable std::mutex arm_claim_mtx_;
       const int arm_dof_ = 7;
