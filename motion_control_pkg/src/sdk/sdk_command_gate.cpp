@@ -1,6 +1,7 @@
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <thread>
 
 namespace motion_control_pkg::sdk
@@ -364,7 +365,40 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
+  const auto batch_start_time = std::chrono::steady_clock::now();
+  const auto batch_start_timestamp_ms = std::chrono::duration_cast<
+    std::chrono::milliseconds>(
+    std::chrono::system_clock::now().time_since_epoch()).count();
   if (!beginCommandBatchWithRetry()) {
+    const auto failure_time = std::chrono::steady_clock::now();
+    const auto failure_timestamp_ms = std::chrono::duration_cast<
+      std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto begin_elapsed_us = std::chrono::duration_cast<
+      std::chrono::microseconds>(failure_time - batch_start_time).count();
+    if (has_last_joint_command_commit_time_) {
+      const auto since_last_commit_us = std::chrono::duration_cast<
+        std::chrono::microseconds>(
+        failure_time - last_joint_command_commit_time_).count();
+      std::fprintf(
+        stderr,
+        "[SdkCommandGate] begin_timestamp_ms=%lld failure_timestamp_ms=%lld "
+        "joint batch begin=false begin_elapsed_us=%lld "
+        "since_last_commit_us=%lld\n",
+        static_cast<long long>(batch_start_timestamp_ms),
+        static_cast<long long>(failure_timestamp_ms),
+        static_cast<long long>(begin_elapsed_us),
+        static_cast<long long>(since_last_commit_us));
+    } else {
+      std::fprintf(
+        stderr,
+        "[SdkCommandGate] begin_timestamp_ms=%lld failure_timestamp_ms=%lld "
+        "joint batch begin=false begin_elapsed_us=%lld "
+        "since_last_commit_us=N/A\n",
+        static_cast<long long>(batch_start_timestamp_ms),
+        static_cast<long long>(failure_timestamp_ms),
+        static_cast<long long>(begin_elapsed_us));
+    }
     return fail("joint_command_begin");
   }
   if (left_joints &&
@@ -377,9 +411,26 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
   {
     return fail("set_right_joint_position");
   }
-  if (!device_.commitCommandBatch()) {
+  const bool commit_succeeded = device_.commitCommandBatch();
+  const auto batch_end_time = std::chrono::steady_clock::now();
+  // const auto batch_elapsed_us = std::chrono::duration_cast<
+  //   std::chrono::microseconds>(batch_end_time - batch_start_time).count();
+  // const auto batch_end_timestamp_ms = std::chrono::duration_cast<
+  //   std::chrono::milliseconds>(
+  //   std::chrono::system_clock::now().time_since_epoch()).count();
+  // std::fprintf(
+  //   stderr,
+  //   "[SdkCommandGate] begin_timestamp_ms=%lld commit_timestamp_ms=%lld "
+  //   "joint batch begin-to-commit elapsed_us=%lld commit=%s\n",
+  //   static_cast<long long>(batch_start_timestamp_ms),
+  //   static_cast<long long>(batch_end_timestamp_ms),
+  //   static_cast<long long>(batch_elapsed_us),
+  //   commit_succeeded ? "true" : "false");
+  if (!commit_succeeded) {
     return fail("joint_command_commit");
   }
+  last_joint_command_commit_time_ = batch_end_time;
+  has_last_joint_command_commit_time_ = true;
   return SdkCommandResult::ok();
 }
 

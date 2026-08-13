@@ -2320,10 +2320,10 @@ void DualArmModule::execution_loop_move_pose_impl(
     normalized_target.pose.position.z +=  goal->bound_size[2];
 
     //使用固定姿态，测试y轴180度,z轴90度，固定轴
-    normalized_target.pose.orientation.x = -0.7071068;
-    normalized_target.pose.orientation.y = 0.7071068;
-    normalized_target.pose.orientation.z = 0.0;
-    normalized_target.pose.orientation.w = 0.0;
+    // normalized_target.pose.orientation.x = -0.7071068;
+    // normalized_target.pose.orientation.y = 0.7071068;
+    // normalized_target.pose.orientation.z = 0.0;
+    // normalized_target.pose.orientation.w = 0.0;
 
     const auto& effective_target = normalized_target;
 

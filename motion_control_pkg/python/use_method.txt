@@ -84,7 +84,7 @@ ros2 action send_goal --feedback \
       'leg_joint1','leg_joint2','leg_joint3','body_joint'
     ],
     position: [
-      -0.8, 1.6, -0.8, 0.0
+      -1.0, 2.1, -1.0, 0.0
     ],
     enable_collision_check: false,
     speed: 0.3,
@@ -131,8 +131,8 @@ ros2 action send_goal --feedback \
       'Joint5_L','Joint6_L','Joint7_L'
     ],
     position: [
-      0.8, -0.5, 0.6, -0.4,
-      0.7, -0.2, -0.3
+      1.7, -1.2, -1.7, -1.6,
+      0.0, 0.0, 0.0
     ],
     enable_collision_check: false,
     speed: 0.2,
