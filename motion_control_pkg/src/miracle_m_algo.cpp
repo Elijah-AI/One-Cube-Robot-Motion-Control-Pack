@@ -32,7 +32,9 @@
 */
 
 #include "miracle_m_algo.hpp"
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/frames.hpp>
@@ -335,6 +337,21 @@ bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
         }
     }
 
+    // The mobile base must not pitch beyond the configured 30 degree safety
+    // limit.  Keep this check in the common full-state validator so that
+    // sampled OMPL and time-parameterized states use the same constraint.
+    if (model_.existFrame("body_link")) {
+        pinocchio::forwardKinematics(model_, *data_, full_q);
+        pinocchio::updateFramePlacements(model_, *data_);
+        const Eigen::Matrix3d& rotation =
+            data_->oMf[model_.getFrameId("body_link")].rotation();
+        const double pitch = std::atan2(
+            -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
+        if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
+            return false;
+        }
+    }
+
     pinocchio::updateGeometryPlacements(model_, *data_, geom_model_, *geom_data_, full_q);
     if (pinocchio::computeCollisions(geom_model_, *geom_data_, false)) {
         std::cout << "[isFullQValid] Collision detected. Pairs:" << std::endl;
@@ -431,6 +448,18 @@ bool MiracleMAlgo::isStateValid(const ompl::base::State* state,
             return false;
         }
     }
+
+    if (model_.existFrame("body_link")) {
+        pinocchio::forwardKinematics(model_, *data_, q);
+        pinocchio::updateFramePlacements(model_, *data_);
+        const Eigen::Matrix3d& rotation =
+            data_->oMf[model_.getFrameId("body_link")].rotation();
+        const double pitch = std::atan2(
+            -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
+        if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
+            return false;
+        }
+    }
     
     return !collision;
 }
@@ -490,6 +519,88 @@ bool MiracleMAlgo::planDualArmJointSpace(const std::vector<double>& start_q,
         return true;
     }
     return false;
+}
+
+bool MiracleMAlgo::planWholeBodyJointSpace(
+    const std::vector<double>& start_q,
+    const std::vector<double>& goal_q,
+    bool use_left,
+    bool use_right,
+    std::vector<std::vector<double>>& path)
+{
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    path.clear();
+    if (start_q.size() != static_cast<std::size_t>(model_.nq) ||
+        goal_q.size() != static_cast<std::size_t>(model_.nq) ||
+        (!use_left && !use_right) || leg_q_indices_.empty()) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planWholeBodyJointSpace: invalid configuration size or active joints");
+        return false;
+    }
+
+    std::vector<size_t> active_indices;
+    if (use_left) {
+        active_indices.insert(
+            active_indices.end(), left_arm_q_indices_.begin(), left_arm_q_indices_.end());
+    }
+    if (use_right) {
+        active_indices.insert(
+            active_indices.end(), right_arm_q_indices_.begin(), right_arm_q_indices_.end());
+    }
+    active_indices.insert(
+        active_indices.end(), leg_q_indices_.begin(), leg_q_indices_.end());
+
+    const Eigen::VectorXd fixed_full_q = toEigenConfig(start_q);
+    auto setup = createPlannerSetup(active_indices, fixed_full_q);
+    ompl::base::ScopedState<> start(setup->getStateSpace());
+    ompl::base::ScopedState<> target(setup->getStateSpace());
+    for (std::size_t index = 0; index < active_indices.size(); ++index) {
+        start[index] = start_q[active_indices[index]];
+        target[index] = goal_q[active_indices[index]];
+    }
+    if (!isStateValid(start.get(), active_indices, fixed_full_q) ||
+        !isStateValid(target.get(), active_indices, fixed_full_q)) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planWholeBodyJointSpace: start or goal state is invalid");
+        return false;
+    }
+    bool same_state = true;
+    for (std::size_t index = 0; index < active_indices.size(); ++index) {
+        if (std::abs(start[index] - target[index]) > 1e-10) {
+            same_state = false;
+            break;
+        }
+    }
+    if (same_state) {
+        path = {start_q, goal_q};
+        return true;
+    }
+    setup->setStartAndGoalStates(start, target);
+    if (!setup->solve(5.0)) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planWholeBodyJointSpace: OMPL failed to find a path");
+        return false;
+    }
+
+    setup->simplifySolution();
+    ompl::geometric::PathGeometric& solution = setup->getSolutionPath();
+    if (solution.getStateCount() > 2U) {
+        solution.interpolate(solution.getStateCount() * 10U);
+    }
+    path.reserve(solution.getStateCount());
+    for (std::size_t state_index = 0; state_index < solution.getStateCount(); ++state_index) {
+        const auto* state = solution.getState(state_index)->as<
+            ompl::base::RealVectorStateSpace::StateType>();
+        std::vector<double> full_q = start_q;
+        for (std::size_t joint_index = 0; joint_index < active_indices.size(); ++joint_index) {
+            full_q[active_indices[joint_index]] = state->values[joint_index];
+        }
+        path.push_back(std::move(full_q));
+    }
+    return path.size() >= 2U;
 }
 
 // --- Single Arm Implementations ---
@@ -601,6 +712,28 @@ bool MiracleMAlgo::getForwardKinematics(const std::string& source_frame,
 
     T_source_target = sMt.toHomogeneousMatrix();
     return true;
+}
+
+bool MiracleMAlgo::getFramePoseAtConfiguration(
+    const std::string& source_frame,
+    const std::string& target_frame,
+    const std::vector<double>& full_q,
+    Eigen::Isometry3d& source_to_target)
+{
+    if (full_q.size() != static_cast<size_t>(model_.nq) ||
+        !model_.existFrame(source_frame) || !model_.existFrame(target_frame)) {
+        return false;
+    }
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    const Eigen::VectorXd q = toEigenConfig(full_q);
+    pinocchio::forwardKinematics(model_, *data_, q);
+    pinocchio::updateFramePlacements(model_, *data_);
+    const auto source_id = model_.getFrameId(source_frame);
+    const auto target_id = model_.getFrameId(target_frame);
+    source_to_target = Eigen::Isometry3d::Identity();
+    source_to_target.matrix() =
+        data_->oMf[source_id].actInv(data_->oMf[target_id]).toHomogeneousMatrix();
+    return source_to_target.matrix().allFinite();
 }
 
 
@@ -825,6 +958,263 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
     return success;
 }
 
+bool MiracleMAlgo::solveWholeBodyIK(
+    const Eigen::VectorXd& q_init,
+    const std::optional<Eigen::Isometry3d>& left_goal,
+    const std::optional<Eigen::Isometry3d>& right_goal,
+    Eigen::VectorXd& q_res,
+    const std::array<double, 4>& leg_weights,
+    double body_pitch_limit_rad)
+{
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    if (q_init.size() != model_.nq || !q_init.allFinite()) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: invalid q_init, got size=%ld expected=%d finite=%s",
+            static_cast<long>(q_init.size()), model_.nq,
+            q_init.allFinite() ? "true" : "false");
+        return false;
+    }
+    if (!left_goal && !right_goal) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: no Cartesian goal was provided");
+        return false;
+    }
+    if (leg_v_indices_.size() != leg_weights.size()) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: leg velocity index count=%zu does not match weight count=%zu",
+            leg_v_indices_.size(), leg_weights.size());
+        return false;
+    }
+    for (std::size_t index = 0; index < leg_weights.size(); ++index) {
+        if (!std::isfinite(leg_weights[index]) || leg_weights[index] <= 0.0) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "solveWholeBodyIK: invalid leg weight[%zu]=%.6f; weight must be finite and > 0",
+                index, leg_weights[index]);
+            return false;
+        }
+    }
+    if (!std::isfinite(body_pitch_limit_rad) || body_pitch_limit_rad <= 0.0) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: invalid body pitch limit=%.6f rad",
+            body_pitch_limit_rad);
+        return false;
+    }
+    if (left_goal && !left_goal->matrix().allFinite()) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: left Cartesian goal contains NaN or Inf");
+        return false;
+    }
+    if (right_goal && !right_goal->matrix().allFinite()) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: right Cartesian goal contains NaN or Inf");
+        return false;
+    }
+
+    std::vector<int> active_v;
+    if (left_goal) {
+        active_v.insert(active_v.end(), left_arm_v_indices_.begin(), left_arm_v_indices_.end());
+    }
+    if (right_goal) {
+        active_v.insert(active_v.end(), right_arm_v_indices_.begin(), right_arm_v_indices_.end());
+    }
+    active_v.insert(active_v.end(), leg_v_indices_.begin(), leg_v_indices_.end());
+    if (active_v.empty()) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: no active arm or leg velocity index was found");
+        return false;
+    }
+
+    const auto body_pitch_ok = [&](const Eigen::VectorXd& q, double* pitch_out) {
+        if (!model_.existFrame("body_link")) {
+            if (pitch_out) {
+                *pitch_out = 0.0;
+            }
+            return true;
+        }
+        pinocchio::forwardKinematics(model_, *data_, q);
+        pinocchio::updateFramePlacements(model_, *data_);
+        const Eigen::Matrix3d& rotation = data_->oMf[model_.getFrameId("body_link")].rotation();
+        const double pitch = std::atan2(
+            -rotation(2, 0),
+            std::hypot(rotation(0, 0), rotation(1, 0)));
+        if (pitch_out) {
+            *pitch_out = pitch;
+        }
+        return std::abs(pitch) <= body_pitch_limit_rad;
+    };
+
+    q_res = q_init;
+    constexpr int kIterationLimit = 2000;
+    constexpr double kErrorTolerance = 1e-5;
+    constexpr double kDamping = 1e-4;
+    constexpr double kStep = 0.5;
+    bool converged = false;
+    int iterations = 0;
+    double last_error_norm = std::numeric_limits<double>::infinity();
+    double last_pitch_rad = 0.0;
+    std::string failure_reason = "iteration limit reached";
+
+    for (int iteration = 0; iteration < kIterationLimit; ++iteration) {
+        iterations = iteration + 1;
+        pinocchio::forwardKinematics(model_, *data_, q_res);
+        pinocchio::computeJointJacobians(model_, *data_, q_res);
+        pinocchio::updateFramePlacements(model_, *data_);
+
+        std::vector<Eigen::MatrixXd> task_jacobians;
+        std::vector<Eigen::VectorXd> task_errors;
+        const auto append_task = [&](const std::optional<Eigen::Isometry3d>& goal,
+                                     pinocchio::FrameIndex frame_id) {
+            if (!goal) {
+                return;
+            }
+            const pinocchio::SE3 desired(goal->rotation(), goal->translation());
+            const pinocchio::SE3 error_pose = data_->oMf[frame_id].actInv(desired);
+            task_errors.push_back(pinocchio::log6(error_pose).toVector());
+            Eigen::MatrixXd jacobian(6, model_.nv);
+            pinocchio::getFrameJacobian(
+                model_, *data_, frame_id, pinocchio::LOCAL, jacobian);
+            task_jacobians.push_back(std::move(jacobian));
+        };
+        append_task(left_goal, left_ee_frame_id_);
+        append_task(right_goal, right_ee_frame_id_);
+
+        const int task_rows = static_cast<int>(task_errors.size()) * 6;
+        Eigen::MatrixXd reduced_jacobian(task_rows, active_v.size());
+        Eigen::VectorXd error(task_rows);
+        for (std::size_t task = 0; task < task_errors.size(); ++task) {
+            error.segment(static_cast<Eigen::Index>(task * 6), 6) = task_errors[task];
+            for (std::size_t column = 0; column < active_v.size(); ++column) {
+                reduced_jacobian.block(
+                    static_cast<Eigen::Index>(task * 6),
+                    static_cast<Eigen::Index>(column), 6, 1) =
+                    task_jacobians[task].col(active_v[column]);
+            }
+        }
+        if (!error.allFinite()) {
+            failure_reason = "Cartesian task error contains NaN or Inf";
+            break;
+        }
+        last_error_norm = error.norm();
+        if (error.norm() < kErrorTolerance) {
+            converged = body_pitch_ok(q_res, &last_pitch_rad);
+            if (!converged) {
+                failure_reason = "converged Cartesian pose exceeds body pitch limit";
+            }
+            break;
+        }
+        if (!reduced_jacobian.allFinite()) {
+            failure_reason = "active task Jacobian contains NaN or Inf";
+            break;
+        }
+
+        Eigen::VectorXd h_inverse = Eigen::VectorXd::Ones(active_v.size());
+        for (std::size_t index = 0; index < active_v.size(); ++index) {
+            const auto leg_it = std::find(
+                leg_v_indices_.begin(), leg_v_indices_.end(), active_v[index]);
+            if (leg_it != leg_v_indices_.end()) {
+                const std::size_t leg_index = static_cast<std::size_t>(
+                    std::distance(leg_v_indices_.begin(), leg_it));
+                const double leg_weight = leg_weights[leg_index];
+                h_inverse(static_cast<Eigen::Index>(index)) =
+                    1.0 / (leg_weight * leg_weight);
+            }
+        }
+        const Eigen::MatrixXd weighted_jacobian =
+            reduced_jacobian * h_inverse.asDiagonal() * reduced_jacobian.transpose();
+        if (!weighted_jacobian.allFinite()) {
+            failure_reason = "weighted Jacobian contains NaN or Inf";
+            break;
+        }
+        Eigen::MatrixXd damped = weighted_jacobian;
+        damped.diagonal().array() += kDamping * kDamping;
+        Eigen::LDLT<Eigen::MatrixXd> linear_solver(damped);
+        if (linear_solver.info() != Eigen::Success) {
+            failure_reason = "damped Jacobian factorization failed";
+            break;
+        }
+        const Eigen::VectorXd solved_error = linear_solver.solve(error);
+        if (!solved_error.allFinite()) {
+            failure_reason = "damped Jacobian solve produced NaN or Inf";
+            break;
+        }
+        const Eigen::VectorXd delta_reduced =
+            h_inverse.asDiagonal() * reduced_jacobian.transpose() *
+            solved_error;
+        if (!delta_reduced.allFinite()) {
+            failure_reason = "joint velocity increment contains NaN or Inf";
+            break;
+        }
+
+        Eigen::VectorXd delta_full = Eigen::VectorXd::Zero(model_.nv);
+        for (std::size_t index = 0; index < active_v.size(); ++index) {
+            delta_full(active_v[index]) = delta_reduced(static_cast<Eigen::Index>(index));
+        }
+
+        bool accepted_step = false;
+        bool pitch_rejected = false;
+        bool invalid_size_candidate = false;
+        bool nonfinite_candidate = false;
+        double scale = kStep;
+        for (int trial = 0; trial < 8; ++trial) {
+            Eigen::VectorXd candidate = pinocchio::integrate(
+                model_, q_res, delta_full * scale);
+            if (candidate.size() != model_.nq) {
+                invalid_size_candidate = true;
+                scale *= 0.5;
+                continue;
+            }
+            if (!candidate.allFinite()) {
+                nonfinite_candidate = true;
+                scale *= 0.5;
+                continue;
+            }
+            for (Eigen::Index index = 0; index < candidate.size(); ++index) {
+                candidate(index) = std::clamp(
+                    candidate(index), model_.lowerPositionLimit(index),
+                    model_.upperPositionLimit(index));
+            }
+            if (body_pitch_ok(candidate, &last_pitch_rad)) {
+                q_res = std::move(candidate);
+                accepted_step = true;
+                break;
+            }
+            pitch_rejected = true;
+            scale *= 0.5;
+        }
+        if (!accepted_step) {
+            if (pitch_rejected) {
+                failure_reason = "all line-search candidates exceed body pitch limit";
+            } else if (invalid_size_candidate) {
+                failure_reason = "pinocchio::integrate returned an invalid configuration size";
+            } else if (nonfinite_candidate) {
+                failure_reason = "integrated candidate configuration contains NaN or Inf";
+            } else {
+                failure_reason = "no valid line-search candidate was accepted";
+            }
+            break;
+        }
+    }
+
+    if (!converged) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK failed: reason=%s, iterations=%d/%d, residual=%.6e, "
+            "body_pitch=%.3f deg (%.6f rad), limit=%.3f deg (%.6f rad)",
+            failure_reason.c_str(), iterations, kIterationLimit, last_error_norm,
+            last_pitch_rad * 57.29577951308232, last_pitch_rad,
+            body_pitch_limit_rad * 57.29577951308232, body_pitch_limit_rad);
+    }
+    return converged;
+}
+
 bool MiracleMAlgo::planDualArmCartesianGoal(const std::vector<double>& start_q,
                                                const Eigen::Isometry3d& left_goal,
                                                const Eigen::Isometry3d& right_goal,
@@ -936,6 +1326,63 @@ bool MiracleMAlgo::extractSingleArmJoints(
     for (size_t index = 0; index < indices.size(); ++index) {
         arm_q[index] = full_q[indices[index]];
     }
+    return true;
+}
+
+bool MiracleMAlgo::extractLegJoints(
+    const std::vector<double>& full_q,
+    std::vector<double>& leg_q) const
+{
+    leg_q.clear();
+    if (full_q.size() != static_cast<size_t>(model_.nq)) {
+        return false;
+    }
+    leg_q.reserve(leg_q_indices_.size());
+    for (const std::size_t index : leg_q_indices_) {
+        if (index >= full_q.size()) {
+            leg_q.clear();
+            return false;
+        }
+        leg_q.push_back(full_q[index]);
+    }
+    return true;
+}
+
+bool MiracleMAlgo::mergeWholeBodyJoints(
+    const std::vector<double>& reference_full_q,
+    bool use_left,
+    bool use_right,
+    const std::vector<double>& active_joints,
+    std::vector<double>& full_q) const
+{
+    full_q.clear();
+    if (reference_full_q.size() != static_cast<std::size_t>(model_.nq) ||
+        (!use_left && !use_right)) {
+        return false;
+    }
+    const std::size_t expected_size =
+        (use_left ? left_arm_q_indices_.size() : 0U) +
+        (use_right ? right_arm_q_indices_.size() : 0U) +
+        leg_q_indices_.size();
+    if (active_joints.size() != expected_size) {
+        return false;
+    }
+
+    full_q = reference_full_q;
+    std::size_t offset = 0U;
+    const auto assign = [&](const std::vector<std::size_t>& indices) {
+        for (std::size_t index = 0; index < indices.size(); ++index) {
+            full_q[indices[index]] = active_joints[offset + index];
+        }
+        offset += indices.size();
+    };
+    if (use_left) {
+        assign(left_arm_q_indices_);
+    }
+    if (use_right) {
+        assign(right_arm_q_indices_);
+    }
+    assign(leg_q_indices_);
     return true;
 }
 

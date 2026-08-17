@@ -3,6 +3,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <cstdint>
 #include <std_msgs/msg/header.hpp>
 // 引入自动生成的Action头文件
 #include "com_interfaces/action/pick_and_place.hpp"
@@ -120,6 +121,11 @@ enum
     ID_LEFT_TOOL = 5,
     ID_RIGHT_TOOL = 6,
 };
+
+// MovePose 全身模式：5=左臂+腿，6=右臂+腿，7=双臂+腿。
+constexpr std::uint8_t WHOLE_BODY_LEFT = 5;
+constexpr std::uint8_t WHOLE_BODY_RIGHT = 6;
+constexpr std::uint8_t WHOLE_BODY_BOTH = 7;
 
 
 

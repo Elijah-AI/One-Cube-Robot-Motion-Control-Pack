@@ -96,24 +96,24 @@ ros2 action send_goal --feedback \
   com_interfaces/action/MovePose \
   "{header: {frame_id: base_link},
     task_id: 'MANUAL_LEFT_POSE_01',
-    arm_id: 0,
+    arm_id: 5,
     target_pose: {
-      header: {frame_id: head_pitch_link},
+      header: {frame_id: base_link},
       pose: {
         position: {
-          x: 0.809191,
-          y: -0.238137,
-          z: -0.202854
+          x: 0.95,
+          y: 0.16,
+          z: 0.96
         },
         orientation: {
-          x: -0.657273,
-          y: 0.239505,
-          z: -0.714153,
-          w: -0.0247918
+          x: 0.7071068,
+          y: -0.7071068,
+          z: 0.0,
+          w: 0.0
         }
       }
     },
-    bound_size: [0.0, 0.0, 0.1],
+    bound_size: [0.0, 0.0, 0.0],
     enable_collision_check: false,
     use_force_control: false,
     speed: 0.2,

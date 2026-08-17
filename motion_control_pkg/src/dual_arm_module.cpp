@@ -2792,6 +2792,129 @@ bool DualArmModule::start_execution_control_gripper(
     return true;
 }
 
+bool DualArmModule::execute_preplanned_trajectory(
+    const std::vector<std::vector<double>>& left_positions,
+    const std::vector<std::vector<double>>& right_positions,
+    std::uint8_t control_mode,
+    const std::chrono::steady_clock::time_point& start_time,
+    const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+    std::string& error_message)
+{
+    const bool need_left = !left_positions.empty();
+    const bool need_right = !right_positions.empty();
+    if (!need_left && !need_right) {
+        error_message = "preplanned dual-arm trajectory is empty";
+        return false;
+    }
+    if ((need_left && left_positions.front().size() != 7U) ||
+        (need_right && right_positions.front().size() != 7U))
+    {
+        error_message = "preplanned arm trajectory must contain seven joints";
+        return false;
+    }
+    if (need_left && need_right && left_positions.size() != right_positions.size()) {
+        error_message = "preplanned dual-arm trajectories must have equal sample counts";
+        return false;
+    }
+
+    if (cancel && cancel->requested()) {
+        error_message = "preplanned trajectory canceled before execution";
+        return false;
+    }
+
+    std::vector<motion_control_pkg::execution::JointCommand> left_commands;
+    std::vector<motion_control_pkg::execution::JointCommand> right_commands;
+    if (need_left && !motion_control_pkg::motion::trajectoryToVendorDegrees(
+        left_positions, left_commands, error_message)) {
+        return false;
+    }
+    if (need_right && !motion_control_pkg::motion::trajectoryToVendorDegrees(
+        right_positions, right_commands, error_message)) {
+        return false;
+    }
+
+    std::vector<motion_control_pkg::sdk::ArmChannel> channels;
+    if (need_left) {
+        channels.push_back(motion_control_pkg::sdk::ArmChannel::kLeft);
+    }
+    if (need_right) {
+        channels.push_back(motion_control_pkg::sdk::ArmChannel::kRight);
+    }
+    const auto mode_result = configureGoalControlMode(
+        control_mode,
+        motion_control_pkg::sdk::ArmControlMode::kCartesianImpedance,
+        channels);
+    if (!mode_result) {
+        error_message = mode_result.error_message;
+        return false;
+    }
+
+    std::this_thread::sleep_until(start_time);
+    const std::size_t sample_count = need_left ? left_commands.size() : right_commands.size();
+    for (std::size_t index = 0; index < sample_count; ++index) {
+        if (cancel && cancel->requested()) {
+            error_message = "preplanned arm trajectory canceled";
+            return false;
+        }
+        const auto send_result = sdk_command_gate_->sendJointPositions(
+            need_left ? std::optional<motion_control_pkg::execution::JointCommand>(left_commands[index]) :
+                        std::nullopt,
+            need_right ? std::optional<motion_control_pkg::execution::JointCommand>(right_commands[index]) :
+                         std::nullopt);
+        if (!send_result) {
+            error_message = send_result.error_message;
+            return false;
+        }
+        if (index + 1U < sample_count) {
+            std::this_thread::sleep_until(
+                start_time + std::chrono::milliseconds(4) * static_cast<long long>(index + 1U));
+        }
+    }
+    error_message.clear();
+    return true;
+}
+
+bool DualArmModule::reserve_preplanned_trajectory_resources(
+    bool need_left, bool need_right, std::string& error_message)
+{
+    return tryClaimArms(need_left, need_right, error_message);
+}
+
+void DualArmModule::release_preplanned_trajectory_resources(
+    bool release_left, bool release_right) noexcept
+{
+    releaseArms(release_left, release_right);
+}
+
+bool DualArmModule::get_joint_motion_limits(
+    bool is_left,
+    std::vector<double>& velocity,
+    std::vector<double>& acceleration,
+    std::vector<double>& jerk) const
+{
+    const auto& source_velocity = is_left ? l_v_limit_ : r_v_limit_;
+    const auto& source_acceleration = is_left ? l_a_limit_ : r_a_limit_;
+    const auto& source_jerk = is_left ? l_jerk_limit_ : r_jerk_limit_;
+    if (source_velocity.size() != static_cast<std::size_t>(arm_dof_) ||
+        source_acceleration.size() != static_cast<std::size_t>(arm_dof_) ||
+        source_jerk.size() != static_cast<std::size_t>(arm_dof_) ||
+        !std::all_of(source_velocity.begin(), source_velocity.end(),
+            [](double value) { return std::isfinite(value) && value > 0.0; }) ||
+        !std::all_of(source_acceleration.begin(), source_acceleration.end(),
+            [](double value) { return std::isfinite(value) && value > 0.0; }) ||
+        !std::all_of(source_jerk.begin(), source_jerk.end(),
+            [](double value) { return std::isfinite(value) && value > 0.0; })) {
+        velocity.clear();
+        acceleration.clear();
+        jerk.clear();
+        return false;
+    }
+    velocity = source_velocity;
+    acceleration = source_acceleration;
+    jerk = source_jerk;
+    return true;
+}
+
 bool DualArmModule::start_execution_control_suck(
     std::shared_ptr<GoalHandleControlSuck> goal_handle,
     std::string& error_message)

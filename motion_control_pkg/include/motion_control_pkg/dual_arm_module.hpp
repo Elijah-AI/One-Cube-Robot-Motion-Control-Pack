@@ -20,6 +20,7 @@
 #include "main_node.hpp"
 // 双臂通信经统一 Adapter/Gate 访问，公共模块不再直接依赖 MarvinSDK.h。
 #include "motion_control_pkg/execution/action_terminal_guard.hpp"
+#include "motion_control_pkg/execution/execution_control.hpp"
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
@@ -77,6 +78,30 @@ public:
     bool start_execution_control_gripper(
         std::shared_ptr<GoalHandleControlGripper> goal_handle,
         std::string& error_message);
+
+    // 执行全身模块已经完成 IK 和轨迹规划的弧度制关节轨迹。
+    // 调用者必须先通过 reserve_preplanned_trajectory_resources() 预约资源，
+    // 并在执行结束后通过 release_preplanned_trajectory_resources() 释放资源。
+    bool execute_preplanned_trajectory(
+        const std::vector<std::vector<double>>& left_positions,
+        const std::vector<std::vector<double>>& right_positions,
+        std::uint8_t control_mode,
+        const std::chrono::steady_clock::time_point& start_time,
+        const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+        std::string& error_message);
+
+    // Reserve arm execution flags before whole-body planning starts.
+    bool reserve_preplanned_trajectory_resources(
+        bool need_left, bool need_right, std::string& error_message);
+    void release_preplanned_trajectory_resources(
+        bool release_left, bool release_right) noexcept;
+
+    // 返回与现有 MovePose 时间参数化相同的关节运动限幅（弧度制）。
+    bool get_joint_motion_limits(
+        bool is_left,
+        std::vector<double>& velocity,
+        std::vector<double>& acceleration,
+        std::vector<double>& jerk) const;
     bool start_execution_control_suck(
         std::shared_ptr<GoalHandleControlSuck> goal_handle,
         std::string& error_message);

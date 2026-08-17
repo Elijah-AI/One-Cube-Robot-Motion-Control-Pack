@@ -18,6 +18,7 @@ __pycache__/
 
 # Runtime captures and local caches
 .cache/
+.vscode/
 .colcon/
 *.bag
 *.db3
