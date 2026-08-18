@@ -376,10 +376,10 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
       std::chrono::system_clock::now().time_since_epoch()).count();
     const auto begin_elapsed_us = std::chrono::duration_cast<
       std::chrono::microseconds>(failure_time - batch_start_time).count();
+    const auto since_last_commit_us = has_last_joint_command_commit_time_ ?
+      std::chrono::duration_cast<std::chrono::microseconds>(
+      failure_time - last_joint_command_commit_time_).count() : -1;
     if (has_last_joint_command_commit_time_) {
-      const auto since_last_commit_us = std::chrono::duration_cast<
-        std::chrono::microseconds>(
-        failure_time - last_joint_command_commit_time_).count();
       std::fprintf(
         stderr,
         "[SdkCommandGate] begin_timestamp_ms=%lld failure_timestamp_ms=%lld "
@@ -399,7 +399,11 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
         static_cast<long long>(failure_timestamp_ms),
         static_cast<long long>(begin_elapsed_us));
     }
-    return fail("joint_command_begin");
+    return fail(
+      "joint_command_begin; begin_elapsed_us=" +
+      std::to_string(begin_elapsed_us) + "; since_last_commit_us=" +
+      (has_last_joint_command_commit_time_ ?
+      std::to_string(since_last_commit_us) : "N/A"));
   }
   if (left_joints &&
     !device_.setJointPosition(ArmChannel::kLeft, *left_joints))
