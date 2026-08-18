@@ -33,6 +33,7 @@
 
 #include "miracle_m_algo.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <limits>
 #include <pinocchio/parsers/urdf.hpp>
@@ -42,6 +43,7 @@
 #include <pinocchio/algorithm/geometry.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
 #include <pinocchio/collision/collision.hpp>
+#include <pinocchio/collision/distance.hpp>
 #include <coal/collision.h>
 #include <coal/shape/geometric_shapes.h>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
@@ -964,7 +966,119 @@ bool MiracleMAlgo::solveWholeBodyIK(
     const std::optional<Eigen::Isometry3d>& right_goal,
     Eigen::VectorXd& q_res,
     const std::array<double, 4>& leg_weights,
-    double body_pitch_limit_rad)
+    double body_pitch_limit_rad,
+    double timeout_seconds)
+{
+    if (!std::isfinite(timeout_seconds) || timeout_seconds <= 0.0) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveWholeBodyIK: invalid timeout %.6f seconds",
+            timeout_seconds);
+        return false;
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(timeout_seconds));
+    std::vector<Eigen::VectorXd> seeds;
+    seeds.push_back(q_init);
+    {
+        std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+        if (q_init.size() == model_.nq && q_init.allFinite()) {
+            const auto add_seed = [&](int velocity_index, double offset) {
+                if (velocity_index < 0 || velocity_index >= model_.nv) {
+                    return;
+                }
+                Eigen::VectorXd delta = Eigen::VectorXd::Zero(model_.nv);
+                delta(velocity_index) = offset;
+                Eigen::VectorXd seed = pinocchio::integrate(model_, q_init, delta);
+                if (seed.size() == model_.nq && seed.allFinite()) {
+                    seeds.push_back(std::move(seed));
+                }
+            };
+            const auto add_symmetric_seeds = [&](const std::vector<int>& indices,
+                                                 double offset) {
+                if (!indices.empty()) {
+                    add_seed(indices.front(), offset);
+                    add_seed(indices.front(), -offset);
+                }
+            };
+
+            // Leg and body perturbations change the posture while preserving the
+            // requested Cartesian task, giving the redundant IK solver other
+            // collision-free branches to try.
+            add_symmetric_seeds(leg_v_indices_, 0.15);
+            if (leg_v_indices_.size() > 2U) {
+                add_seed(leg_v_indices_[2], 0.20);
+                add_seed(leg_v_indices_[2], -0.20);
+            }
+            if (leg_v_indices_.size() > 3U) {
+                add_seed(leg_v_indices_[3], 0.12);
+                add_seed(leg_v_indices_[3], -0.12);
+            }
+
+            const auto add_elbow_seeds = [&](const std::vector<int>& indices) {
+                if (indices.size() > 2U) {
+                    add_seed(indices[2], 0.25);
+                    add_seed(indices[2], -0.25);
+                }
+                if (indices.size() > 4U) {
+                    add_seed(indices[4], 0.20);
+                    add_seed(indices[4], -0.20);
+                }
+            };
+            if (left_goal) {
+                add_elbow_seeds(left_arm_v_indices_);
+            }
+            if (right_goal) {
+                add_elbow_seeds(right_arm_v_indices_);
+            }
+        }
+    }
+
+    for (std::size_t seed_index = 0; seed_index < seeds.size(); ++seed_index) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "solveWholeBodyIK: timeout after %.3f seconds while trying seed %zu/%zu",
+                timeout_seconds, seed_index + 1U, seeds.size());
+            return false;
+        }
+        Eigen::VectorXd candidate;
+        if (solveWholeBodyIKOnce(
+                seeds[seed_index], left_goal, right_goal, candidate,
+                leg_weights, body_pitch_limit_rad, deadline)) {
+            if (isFullQValid(candidate)) {
+                q_res = std::move(candidate);
+                if (seed_index > 0U) {
+                    RCLCPP_INFO(
+                        rclcpp::get_logger("MiracleMAlgo"),
+                        "solveWholeBodyIK: collision-free solution found with retry seed %zu/%zu",
+                        seed_index + 1U, seeds.size());
+                }
+                return true;
+            }
+            RCLCPP_WARN(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "solveWholeBodyIK: seed %zu/%zu converged but final configuration is in collision",
+                seed_index + 1U, seeds.size());
+        }
+    }
+
+    RCLCPP_ERROR(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "solveWholeBodyIK: all %zu initial seeds failed to produce a collision-free solution",
+        seeds.size());
+    return false;
+}
+
+bool MiracleMAlgo::solveWholeBodyIKOnce(
+    const Eigen::VectorXd& q_init,
+    const std::optional<Eigen::Isometry3d>& left_goal,
+    const std::optional<Eigen::Isometry3d>& right_goal,
+    Eigen::VectorXd& q_res,
+    const std::array<double, 4>& leg_weights,
+    double body_pitch_limit_rad,
+    std::chrono::steady_clock::time_point deadline)
 {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     if (q_init.size() != model_.nq || !q_init.allFinite()) {
@@ -1051,8 +1165,45 @@ bool MiracleMAlgo::solveWholeBodyIK(
         return std::abs(pitch) <= body_pitch_limit_rad;
     };
 
+    // Use a soft barrier around every configured collision pair.  The gradient
+    // is evaluated numerically in velocity coordinates so free-flyer and other
+    // non-Euclidean Pinocchio configurations are integrated correctly.
+    constexpr double kCollisionSafetyDistance = 0.05;
+    constexpr double kCollisionGradientStep = 1e-4;
+    constexpr double kCollisionGradientGain = 0.35;
+    const auto collision_cost = [&](const Eigen::VectorXd& q) {
+        pinocchio::updateGeometryPlacements(model_, *data_, geom_model_, *geom_data_, q);
+        pinocchio::computeDistances(geom_model_, *geom_data_);
+        double cost = 0.0;
+        for (const auto& result : geom_data_->distanceResults) {
+            if (!std::isfinite(result.min_distance) ||
+                result.min_distance >= kCollisionSafetyDistance) {
+                continue;
+            }
+            const double penetration = kCollisionSafetyDistance - result.min_distance;
+            cost += 0.5 * penetration * penetration;
+        }
+        return cost;
+    };
+    const auto collision_gradient = [&](const Eigen::VectorXd& q) {
+        Eigen::VectorXd gradient = Eigen::VectorXd::Zero(active_v.size());
+        if (collision_cost(q) <= 0.0) {
+            return gradient;
+        }
+        for (std::size_t index = 0; index < active_v.size(); ++index) {
+            Eigen::VectorXd delta = Eigen::VectorXd::Zero(model_.nv);
+            delta(active_v[index]) = kCollisionGradientStep;
+            const Eigen::VectorXd q_plus = pinocchio::integrate(model_, q, delta);
+            const Eigen::VectorXd q_minus = pinocchio::integrate(model_, q, -delta);
+            gradient(static_cast<Eigen::Index>(index)) =
+                (collision_cost(q_plus) - collision_cost(q_minus)) /
+                (2.0 * kCollisionGradientStep);
+        }
+        return gradient;
+    };
+
     q_res = q_init;
-    constexpr int kIterationLimit = 2000;
+    constexpr int kIterationLimit = 1000;
     constexpr double kErrorTolerance = 1e-5;
     constexpr double kDamping = 1e-4;
     constexpr double kStep = 0.5;
@@ -1063,6 +1214,10 @@ bool MiracleMAlgo::solveWholeBodyIK(
     std::string failure_reason = "iteration limit reached";
 
     for (int iteration = 0; iteration < kIterationLimit; ++iteration) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            failure_reason = "solve timeout reached";
+            break;
+        }
         iterations = iteration + 1;
         pinocchio::forwardKinematics(model_, *data_, q_res);
         pinocchio::computeJointJacobians(model_, *data_, q_res);
@@ -1103,12 +1258,15 @@ bool MiracleMAlgo::solveWholeBodyIK(
             break;
         }
         last_error_norm = error.norm();
-        if (error.norm() < kErrorTolerance) {
+        if (error.norm() < kErrorTolerance && collision_cost(q_res) <= 0.0) {
             converged = body_pitch_ok(q_res, &last_pitch_rad);
             if (!converged) {
                 failure_reason = "converged Cartesian pose exceeds body pitch limit";
             }
             break;
+        }
+        if (error.norm() < kErrorTolerance) {
+            failure_reason = "Cartesian pose converged but collision barrier is active";
         }
         if (!reduced_jacobian.allFinite()) {
             failure_reason = "active task Jacobian contains NaN or Inf";
@@ -1153,16 +1311,39 @@ bool MiracleMAlgo::solveWholeBodyIK(
             break;
         }
 
+        Eigen::MatrixXd task_pseudoinverse =
+            h_inverse.asDiagonal() * reduced_jacobian.transpose() *
+            linear_solver.solve(Eigen::MatrixXd::Identity(task_rows, task_rows));
+        const Eigen::VectorXd collision_grad = collision_gradient(q_res);
+        if (!task_pseudoinverse.allFinite() || !collision_grad.allFinite()) {
+            failure_reason = "collision gradient computation produced NaN or Inf";
+            break;
+        }
+        const Eigen::MatrixXd nullspace_projector =
+            Eigen::MatrixXd::Identity(active_v.size(), active_v.size()) -
+            task_pseudoinverse * reduced_jacobian;
+        const Eigen::VectorXd collision_delta =
+            -kCollisionGradientGain * nullspace_projector * collision_grad;
+        if (!collision_delta.allFinite()) {
+            failure_reason = "collision avoidance increment contains NaN or Inf";
+            break;
+        }
+        const Eigen::VectorXd total_delta_reduced =
+            delta_reduced + collision_delta;
+
         Eigen::VectorXd delta_full = Eigen::VectorXd::Zero(model_.nv);
         for (std::size_t index = 0; index < active_v.size(); ++index) {
-            delta_full(active_v[index]) = delta_reduced(static_cast<Eigen::Index>(index));
+            delta_full(active_v[index]) =
+                total_delta_reduced(static_cast<Eigen::Index>(index));
         }
 
         bool accepted_step = false;
         bool pitch_rejected = false;
+        bool collision_rejected = false;
         bool invalid_size_candidate = false;
         bool nonfinite_candidate = false;
         double scale = kStep;
+        const double current_collision_cost = collision_cost(q_res);
         for (int trial = 0; trial < 8; ++trial) {
             Eigen::VectorXd candidate = pinocchio::integrate(
                 model_, q_res, delta_full * scale);
@@ -1182,6 +1363,11 @@ bool MiracleMAlgo::solveWholeBodyIK(
                     model_.upperPositionLimit(index));
             }
             if (body_pitch_ok(candidate, &last_pitch_rad)) {
+                if (collision_cost(candidate) > current_collision_cost + 1e-10) {
+                    collision_rejected = true;
+                    scale *= 0.5;
+                    continue;
+                }
                 q_res = std::move(candidate);
                 accepted_step = true;
                 break;
@@ -1192,6 +1378,8 @@ bool MiracleMAlgo::solveWholeBodyIK(
         if (!accepted_step) {
             if (pitch_rejected) {
                 failure_reason = "all line-search candidates exceed body pitch limit";
+            } else if (collision_rejected) {
+                failure_reason = "all line-search candidates increase collision cost";
             } else if (invalid_size_candidate) {
                 failure_reason = "pinocchio::integrate returned an invalid configuration size";
             } else if (nonfinite_candidate) {
