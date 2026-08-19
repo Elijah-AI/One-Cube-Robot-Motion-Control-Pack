@@ -32,6 +32,7 @@
 #ifndef MIRACLE_MOTION_ALGO_HPP_
 #define MIRACLE_MOTION_ALGO_HPP_
 
+#include <chrono>
 #include <string>
 #include <vector>
 #include <memory>
@@ -351,7 +352,9 @@ public:
         const std::array<double, 4>& leg_weights =
             std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
         double body_pitch_limit_rad = 30.0 * 0.017453292519943295,
-        double timeout_seconds = 10.0);
+        double timeout_seconds = 10.0,
+        std::size_t max_seed_attempts = 0U,
+        bool enable_collision_avoidance = true);
     bool extractSingleArmJoints(bool is_left,
                                 const std::vector<double>& full_q,
                                 std::vector<double>& arm_q) const;
@@ -731,7 +734,8 @@ private:
         Eigen::VectorXd& q_res,
         const std::array<double, 4>& leg_weights,
         double body_pitch_limit_rad,
-        std::chrono::steady_clock::time_point deadline);
+        std::chrono::steady_clock::time_point deadline,
+        bool enable_collision_avoidance);
 
     // Helper to create OMPL setup dynamically based on active joints
     std::shared_ptr<ompl::geometric::SimpleSetup> createPlannerSetup(const std::vector<size_t>& active_indices, 

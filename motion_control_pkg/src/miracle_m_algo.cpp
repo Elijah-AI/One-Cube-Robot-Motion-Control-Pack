@@ -967,7 +967,9 @@ bool MiracleMAlgo::solveWholeBodyIK(
     Eigen::VectorXd& q_res,
     const std::array<double, 4>& leg_weights,
     double body_pitch_limit_rad,
-    double timeout_seconds)
+    double timeout_seconds,
+    std::size_t max_seed_attempts,
+    bool enable_collision_avoidance)
 {
     if (!std::isfinite(timeout_seconds) || timeout_seconds <= 0.0) {
         RCLCPP_ERROR(
@@ -986,6 +988,9 @@ bool MiracleMAlgo::solveWholeBodyIK(
         if (q_init.size() == model_.nq && q_init.allFinite()) {
             const auto add_seed = [&](int velocity_index, double offset) {
                 if (velocity_index < 0 || velocity_index >= model_.nv) {
+                    return;
+                }
+                if (max_seed_attempts > 0U && seeds.size() >= max_seed_attempts) {
                     return;
                 }
                 Eigen::VectorXd delta = Eigen::VectorXd::Zero(model_.nv);
@@ -1035,39 +1040,43 @@ bool MiracleMAlgo::solveWholeBodyIK(
         }
     }
 
-    for (std::size_t seed_index = 0; seed_index < seeds.size(); ++seed_index) {
+    const std::size_t seed_count = max_seed_attempts == 0U ? seeds.size() :
+        std::min(max_seed_attempts, seeds.size());
+    for (std::size_t seed_index = 0; seed_index < seed_count; ++seed_index) {
         if (std::chrono::steady_clock::now() >= deadline) {
             RCLCPP_ERROR(
                 rclcpp::get_logger("MiracleMAlgo"),
                 "solveWholeBodyIK: timeout after %.3f seconds while trying seed %zu/%zu",
-                timeout_seconds, seed_index + 1U, seeds.size());
+                timeout_seconds, seed_index + 1U, seed_count);
             return false;
         }
         Eigen::VectorXd candidate;
         if (solveWholeBodyIKOnce(
                 seeds[seed_index], left_goal, right_goal, candidate,
-                leg_weights, body_pitch_limit_rad, deadline)) {
-            if (isFullQValid(candidate)) {
+                leg_weights, body_pitch_limit_rad, deadline,
+                enable_collision_avoidance)) {
+            if (!enable_collision_avoidance || isFullQValid(candidate)) {
                 q_res = std::move(candidate);
                 if (seed_index > 0U) {
                     RCLCPP_INFO(
                         rclcpp::get_logger("MiracleMAlgo"),
                         "solveWholeBodyIK: collision-free solution found with retry seed %zu/%zu",
-                        seed_index + 1U, seeds.size());
+                        seed_index + 1U, seed_count);
                 }
+                std::cout << "SolveWholeBodyIK Finish" << std::endl;
                 return true;
             }
             RCLCPP_WARN(
                 rclcpp::get_logger("MiracleMAlgo"),
                 "solveWholeBodyIK: seed %zu/%zu converged but final configuration is in collision",
-                seed_index + 1U, seeds.size());
+                seed_index + 1U, seed_count);
         }
     }
 
     RCLCPP_ERROR(
         rclcpp::get_logger("MiracleMAlgo"),
         "solveWholeBodyIK: all %zu initial seeds failed to produce a collision-free solution",
-        seeds.size());
+        seed_count);
     return false;
 }
 
@@ -1078,7 +1087,8 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
     Eigen::VectorXd& q_res,
     const std::array<double, 4>& leg_weights,
     double body_pitch_limit_rad,
-    std::chrono::steady_clock::time_point deadline)
+    std::chrono::steady_clock::time_point deadline,
+    bool enable_collision_avoidance)
 {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     if (q_init.size() != model_.nq || !q_init.allFinite()) {
@@ -1169,25 +1179,62 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
     // is evaluated numerically in velocity coordinates so free-flyer and other
     // non-Euclidean Pinocchio configurations are integrated correctly.
     constexpr double kCollisionSafetyDistance = 0.05;
+    constexpr double kCollisionActivationDistance = 0.10;
     constexpr double kCollisionGradientStep = 1e-4;
     constexpr double kCollisionGradientGain = 0.35;
-    const auto collision_cost = [&](const Eigen::VectorXd& q) {
+    using CollisionPairIndices = std::vector<std::size_t>;
+    const auto collision_cost = [&](const Eigen::VectorXd& q,
+                                    const CollisionPairIndices* pair_filter,
+                                    CollisionPairIndices* near_pairs) {
         pinocchio::updateGeometryPlacements(model_, *data_, geom_model_, *geom_data_, q);
-        pinocchio::computeDistances(geom_model_, *geom_data_);
-        double cost = 0.0;
-        for (const auto& result : geom_data_->distanceResults) {
-            if (!std::isfinite(result.min_distance) ||
-                result.min_distance >= kCollisionSafetyDistance) {
-                continue;
+        if (pair_filter == nullptr) {
+            pinocchio::computeDistances(geom_model_, *geom_data_);
+        } else {
+            for (const std::size_t pair_index : *pair_filter) {
+                if (pair_index < geom_model_.collisionPairs.size()) {
+                    pinocchio::computeDistance(
+                        geom_model_, *geom_data_, pair_index);
+                }
             }
-            const double penetration = kCollisionSafetyDistance - result.min_distance;
-            cost += 0.5 * penetration * penetration;
+        }
+        if (near_pairs != nullptr) {
+            near_pairs->clear();
+        }
+        double cost = 0.0;
+        const auto accumulate_pair = [&](std::size_t pair_index) {
+            const auto& result = geom_data_->distanceResults[pair_index];
+            if (!std::isfinite(result.min_distance) ||
+                result.min_distance >= kCollisionActivationDistance) {
+                return;
+            }
+            if (near_pairs != nullptr) {
+                near_pairs->push_back(pair_index);
+            }
+            if (result.min_distance < kCollisionSafetyDistance) {
+                const double penetration =
+                    kCollisionSafetyDistance - result.min_distance;
+                cost += 0.5 * penetration * penetration;
+            }
+        };
+        if (pair_filter == nullptr) {
+            for (std::size_t pair_index = 0;
+                 pair_index < geom_data_->distanceResults.size(); ++pair_index) {
+                accumulate_pair(pair_index);
+            }
+        } else {
+            for (const std::size_t pair_index : *pair_filter) {
+                if (pair_index < geom_data_->distanceResults.size()) {
+                    accumulate_pair(pair_index);
+                }
+            }
         }
         return cost;
     };
-    const auto collision_gradient = [&](const Eigen::VectorXd& q) {
+    const auto collision_gradient = [&](const Eigen::VectorXd& q,
+                                        const CollisionPairIndices& pair_filter,
+                                        double current_cost) {
         Eigen::VectorXd gradient = Eigen::VectorXd::Zero(active_v.size());
-        if (collision_cost(q) <= 0.0) {
+        if (current_cost <= 0.0 || pair_filter.empty()) {
             return gradient;
         }
         for (std::size_t index = 0; index < active_v.size(); ++index) {
@@ -1196,7 +1243,8 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             const Eigen::VectorXd q_plus = pinocchio::integrate(model_, q, delta);
             const Eigen::VectorXd q_minus = pinocchio::integrate(model_, q, -delta);
             gradient(static_cast<Eigen::Index>(index)) =
-                (collision_cost(q_plus) - collision_cost(q_minus)) /
+                (collision_cost(q_plus, &pair_filter, nullptr) -
+                 collision_cost(q_minus, &pair_filter, nullptr)) /
                 (2.0 * kCollisionGradientStep);
         }
         return gradient;
@@ -1258,14 +1306,18 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             break;
         }
         last_error_norm = error.norm();
-        if (error.norm() < kErrorTolerance && collision_cost(q_res) <= 0.0) {
+        CollisionPairIndices near_collision_pairs;
+        const double current_collision_cost = enable_collision_avoidance ?
+            collision_cost(q_res, nullptr, &near_collision_pairs) : 0.0;
+        if (error.norm() < kErrorTolerance &&
+            (!enable_collision_avoidance || current_collision_cost <= 0.0)) {
             converged = body_pitch_ok(q_res, &last_pitch_rad);
             if (!converged) {
                 failure_reason = "converged Cartesian pose exceeds body pitch limit";
             }
             break;
         }
-        if (error.norm() < kErrorTolerance) {
+        if (enable_collision_avoidance && error.norm() < kErrorTolerance) {
             failure_reason = "Cartesian pose converged but collision barrier is active";
         }
         if (!reduced_jacobian.allFinite()) {
@@ -1314,7 +1366,9 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
         Eigen::MatrixXd task_pseudoinverse =
             h_inverse.asDiagonal() * reduced_jacobian.transpose() *
             linear_solver.solve(Eigen::MatrixXd::Identity(task_rows, task_rows));
-        const Eigen::VectorXd collision_grad = collision_gradient(q_res);
+        const Eigen::VectorXd collision_grad = enable_collision_avoidance ?
+            collision_gradient(q_res, near_collision_pairs, current_collision_cost) :
+            Eigen::VectorXd::Zero(active_v.size());
         if (!task_pseudoinverse.allFinite() || !collision_grad.allFinite()) {
             failure_reason = "collision gradient computation produced NaN or Inf";
             break;
@@ -1343,7 +1397,6 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
         bool invalid_size_candidate = false;
         bool nonfinite_candidate = false;
         double scale = kStep;
-        const double current_collision_cost = collision_cost(q_res);
         for (int trial = 0; trial < 8; ++trial) {
             Eigen::VectorXd candidate = pinocchio::integrate(
                 model_, q_res, delta_full * scale);
@@ -1363,7 +1416,9 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
                     model_.upperPositionLimit(index));
             }
             if (body_pitch_ok(candidate, &last_pitch_rad)) {
-                if (collision_cost(candidate) > current_collision_cost + 1e-10) {
+                if (enable_collision_avoidance &&
+                    collision_cost(candidate, &near_collision_pairs, nullptr) >
+                        current_collision_cost + 1e-10) {
                     collision_rejected = true;
                     scale *= 0.5;
                     continue;

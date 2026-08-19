@@ -480,14 +480,12 @@ bool WholeBodyModule::plan_trajectory(
                     right_start, right_root_goal, alpha)) : std::nullopt;
             Eigen::VectorXd q_next;
             if (!miracle_algo_->solveWholeBodyIK(
-                q_current, left_step, right_step, q_next)) {
+                q_current, left_step, right_step, q_next,
+                std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
+                30.0 * 0.017453292519943295, 10.0, 3U, false)) {
                 error_message = "whole-body weighted IK failed at Cartesian line waypoint " +
                     std::to_string(sample_index) + "/" +
                     std::to_string(scalars.size() - 1U);
-                return false;
-            }
-            if (goal->enable_collision_check && !miracle_algo_->isFullQValid(q_next)) {
-                error_message = "whole-body Cartesian line waypoint violates collision constraints";
                 return false;
             }
             full_waypoints.emplace_back(q_next.data(), q_next.data() + q_next.size());
@@ -496,6 +494,19 @@ bool WholeBodyModule::plan_trajectory(
         if (full_waypoints.size() < 2U) {
             error_message = "whole-body Cartesian line planner returned fewer than two waypoints";
             return false;
+        }
+        if (goal->enable_collision_check) {
+            for (std::size_t waypoint_index = 0;
+                 waypoint_index < full_waypoints.size(); ++waypoint_index) {
+                if (!miracle_algo_->isFullQValid(
+                        miracle_algo_->toEigenConfig(full_waypoints[waypoint_index]))) {
+                    error_message =
+                        "whole-body Cartesian line trajectory violates collision constraints at waypoint " +
+                        std::to_string(waypoint_index) + "/" +
+                        std::to_string(full_waypoints.size() - 1U);
+                    return false;
+                }
+            }
         }
     } else {
         // The target is solved once with both arms present.  This is important:
