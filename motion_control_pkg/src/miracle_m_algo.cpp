@@ -561,8 +561,45 @@ bool MiracleMAlgo::planWholeBodyJointSpace(
         start[index] = start_q[active_indices[index]];
         target[index] = goal_q[active_indices[index]];
     }
-    if (!isStateValid(start.get(), active_indices, fixed_full_q) ||
-        !isStateValid(target.get(), active_indices, fixed_full_q)) {
+    const bool start_valid = isStateValid(start.get(), active_indices, fixed_full_q);
+    const bool target_valid = isStateValid(target.get(), active_indices, fixed_full_q);
+    if (!start_valid || !target_valid) {
+        const auto report_invalid_state = [&](const char* label,
+                                               const ompl::base::State* state) {
+            Eigen::VectorXd full_q = fixed_full_q;
+            const auto* values = state->as<
+                ompl::base::RealVectorStateSpace::StateType>();
+            for (std::size_t index = 0; index < active_indices.size(); ++index) {
+                full_q[active_indices[index]] = values->values[index];
+            }
+            pinocchio::updateGeometryPlacements(
+                model_, *data_, geom_model_, *geom_data_, full_q);
+            if (pinocchio::computeCollisions(geom_model_, *geom_data_, false)) {
+                for (std::size_t pair_index = 0;
+                     pair_index < geom_model_.collisionPairs.size(); ++pair_index) {
+                    if (geom_data_->collisionResults[pair_index].isCollision()) {
+                        const auto& pair = geom_model_.collisionPairs[pair_index];
+                        RCLCPP_ERROR(
+                            rclcpp::get_logger("MiracleMAlgo"),
+                            "planWholeBodyJointSpace: %s collision: %s <--> %s",
+                            label,
+                            geom_model_.geometryObjects[pair.first].name.c_str(),
+                            geom_model_.geometryObjects[pair.second].name.c_str());
+                    }
+                }
+            } else {
+                RCLCPP_ERROR(
+                    rclcpp::get_logger("MiracleMAlgo"),
+                    "planWholeBodyJointSpace: %s rejected by joint/body constraints",
+                    label);
+            }
+        };
+        if (!start_valid) {
+            report_invalid_state("start", start.get());
+        }
+        if (!target_valid) {
+            report_invalid_state("goal", target.get());
+        }
         RCLCPP_ERROR(
             rclcpp::get_logger("MiracleMAlgo"),
             "planWholeBodyJointSpace: start or goal state is invalid");
@@ -1251,8 +1288,12 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
     };
 
     q_res = q_init;
-    constexpr int kIterationLimit = 1000;
-    constexpr double kErrorTolerance = 1e-5;
+    constexpr int kIterationLimit = 2000;
+    // A single norm mixes metres and radians and makes the redundant
+    // whole-body solve reject practically usable sub-millimetre solutions.
+    // Check translational and rotational residuals in their native units.
+    constexpr double kPositionTolerance = 1e-4;
+    constexpr double kOrientationTolerance = 1e-4;
     constexpr double kDamping = 1e-4;
     constexpr double kStep = 0.5;
     bool converged = false;
@@ -1281,7 +1322,10 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             const pinocchio::SE3 desired(goal->rotation(), goal->translation());
             const pinocchio::SE3 error_pose = data_->oMf[frame_id].actInv(desired);
             task_errors.push_back(pinocchio::log6(error_pose).toVector());
-            Eigen::MatrixXd jacobian(6, model_.nv);
+            // Pinocchio only writes columns belonging to the frame's chain;
+            // the remaining columns must be zero before the dual-arm task
+            // stack selects active arm and leg coordinates.
+            Eigen::MatrixXd jacobian = Eigen::MatrixXd::Zero(6, model_.nv);
             pinocchio::getFrameJacobian(
                 model_, *data_, frame_id, pinocchio::LOCAL, jacobian);
             task_jacobians.push_back(std::move(jacobian));
@@ -1306,10 +1350,19 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             break;
         }
         last_error_norm = error.norm();
+        const auto task_error_converged = [&]() {
+            for (const auto& task_error : task_errors) {
+                if (task_error.head<3>().norm() > kPositionTolerance ||
+                    task_error.tail<3>().norm() > kOrientationTolerance) {
+                    return false;
+                }
+            }
+            return true;
+        };
         CollisionPairIndices near_collision_pairs;
         const double current_collision_cost = enable_collision_avoidance ?
             collision_cost(q_res, nullptr, &near_collision_pairs) : 0.0;
-        if (error.norm() < kErrorTolerance &&
+        if (task_error_converged() &&
             (!enable_collision_avoidance || current_collision_cost <= 0.0)) {
             converged = body_pitch_ok(q_res, &last_pitch_rad);
             if (!converged) {
@@ -1317,7 +1370,7 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             }
             break;
         }
-        if (enable_collision_avoidance && error.norm() < kErrorTolerance) {
+        if (enable_collision_avoidance && task_error_converged()) {
             failure_reason = "Cartesian pose converged but collision barrier is active";
         }
         if (!reduced_jacobian.allFinite()) {

@@ -512,9 +512,73 @@ bool WholeBodyModule::plan_trajectory(
         // The target is solved once with both arms present.  This is important:
         // two independent IK calls could produce different leg configurations.
         Eigen::VectorXd target_eigen;
-        if (!miracle_algo_->solveWholeBodyIK(
-                miracle_algo_->toEigenConfig(start_q), left_goal, right_goal,
-                target_eigen)) {
+        if (use_left && use_right) {
+            // A large simultaneous pose change can leave the local WLS solver
+            // outside the convergence basin.  Move both Cartesian goals through
+            // the same alpha values and feed each result into the next solve.
+            // Collision validity is checked below on the resulting target/path;
+            // keeping the IK solve free of the soft collision barrier avoids
+            // rejecting every step when the current model is already near a
+            // configured collision pair.
+            const double translation_distance = std::max(
+                (left_root_goal.translation() - left_start.translation()).norm(),
+                (right_root_goal.translation() - right_start.translation()).norm());
+            const double left_angle = Eigen::Quaterniond(left_start.rotation()).angularDistance(
+                Eigen::Quaterniond(left_root_goal.rotation()));
+            const double right_angle = Eigen::Quaterniond(right_start.rotation()).angularDistance(
+                Eigen::Quaterniond(right_root_goal.rotation()));
+            const double rotation_distance = std::max(left_angle, right_angle);
+            const std::size_t translation_steps = static_cast<std::size_t>(std::ceil(
+                translation_distance / 0.08));
+            const std::size_t rotation_steps = static_cast<std::size_t>(std::ceil(
+                rotation_distance / 0.35));
+            const std::size_t steps = std::clamp<std::size_t>(
+                std::max<std::size_t>({1U, translation_steps, rotation_steps}), 1U, 20U);
+
+            Eigen::VectorXd q_current = miracle_algo_->toEigenConfig(start_q);
+            for (std::size_t step = 1U; step <= steps; ++step) {
+                const double alpha = static_cast<double>(step) /
+                    static_cast<double>(steps);
+                const auto left_step = std::optional<Eigen::Isometry3d>(
+                    interpolatePose(left_start, left_root_goal, alpha));
+                const auto right_step = std::optional<Eigen::Isometry3d>(
+                    interpolatePose(right_start, right_root_goal, alpha));
+                Eigen::VectorXd q_next;
+                if (!miracle_algo_->solveWholeBodyIK(
+                        q_current, left_step, right_step, q_next,
+                        std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
+                        30.0 * 0.017453292519943295, 2.0, 1U, false)) {
+                    error_message =
+                        "failed to solve dual-arm whole-body IK at Cartesian "
+                        "substep " + std::to_string(step) + "/" +
+                        std::to_string(steps);
+                    return false;
+                }
+                q_current = std::move(q_next);
+            }
+            target_eigen = std::move(q_current);
+            if (goal->enable_collision_check &&
+                !miracle_algo_->isFullQValid(target_eigen)) {
+                // The unconstrained staged solve can select an elbow branch
+                // that reaches the Cartesian target through the torso.  Re-solve
+                // only the final dual pose with the collision barrier and
+                // multiple arm/leg seeds, while retaining one shared leg state.
+                Eigen::VectorXd collision_free_target;
+                if (!miracle_algo_->solveWholeBodyIK(
+                        target_eigen, left_goal, right_goal,
+                        collision_free_target,
+                        std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
+                        30.0 * 0.017453292519943295, 5.0, 15U, true)) {
+                    error_message =
+                        "failed to find a collision-free dual-arm whole-body "
+                        "IK solution for the target pose";
+                    return false;
+                }
+                target_eigen = std::move(collision_free_target);
+            }
+        } else if (!miracle_algo_->solveWholeBodyIK(
+                       miracle_algo_->toEigenConfig(start_q), left_goal, right_goal,
+                       target_eigen)) {
             error_message = "failed to solve whole-body IK for target pose";
             return false;
         }

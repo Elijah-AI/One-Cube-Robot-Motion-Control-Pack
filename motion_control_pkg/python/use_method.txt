@@ -87,7 +87,7 @@ ros2 action send_goal --feedback \
       -0.9, 1.9, -0.9, 0.0
     ],
     enable_collision_check: false,
-    speed: 0.2,
+    speed: 1.0,
     timeout_ms: 3000}" \
   --feedback
 
@@ -101,15 +101,15 @@ ros2 action send_goal --feedback \
       header: {frame_id: base_link},
       pose: {
         position: {
-          x: 0.95,
-          y: 0.0,
+          x: 1.15,
+          y: 0.2,
           z: 0.96
         },
         orientation: {
-          x: 0.7071068,
-          y: -0.7071068,
-          z: 0.0,
-          w: 0.0
+          x: -0.5,
+          y: 0.5,
+          z: -0.5,
+          w: 0.5
         }
       }
     },
@@ -191,20 +191,20 @@ ros2 action send_goal --feedback \
   com_interfaces/action/MovePose \
   "{header: {frame_id: base_link},
     task_id: 'MANUAL_DUAL_POSE_01',
-    arm_id: 2,
+    arm_id: 7,
     left_target_pose: {
       header: {frame_id: base_link},
       pose: {
         position: {
-          x: 0.98041,
-          y: 0.51958,
-          z: 1.24463
+          x: 0.95,
+          y: 0.2,
+          z: 0.96
         },
         orientation: {
-          x: -0.486658,
-          y: 0.471915,
-          z: -0.446717,
-          w: 0.583871
+          x: 0.7071068,
+          y: -0.7071068,
+          z: 0.0,
+          w: 0.0
         }
       }
     },
@@ -213,15 +213,15 @@ ros2 action send_goal --feedback \
       header: {frame_id: base_link},
       pose: {
         position: {
-          x: 0.96041,
-          y: -0.53958,
-          z: 1.49463
+          x: 0.95,
+          y: -0.2,
+          z: 0.96
         },
         orientation: {
-          x: -0.486658,
-          y: 0.471915,
-          z: -0.446717,
-          w: 0.583871
+          x: -0.7071068,
+          y: -0.7071068,
+          z: 0.0,
+          w: 0.0
         }
       }
     },
