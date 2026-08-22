@@ -83,6 +83,7 @@ const std::vector<std::pair<std::string, std::string>> collision_pairs = {
     {"Link1_L", "gripper_base_r_link"},
   
     {"Link2_L", "head_pitch_link"},
+    {"Link2_L", "body_link"},  //前伸时 Link2 天然靠近 body
     {"Link2_L", "gripper_base_r_link"},
 
     {"Link3_L", "head_pitch_link"},
@@ -158,6 +159,7 @@ const std::vector<std::pair<std::string, std::string>> collision_pairs = {
     {"gripper_base_l_link", "base_link"},
 
     {"Link2_R", "head_pitch_link"},
+    {"Link2_R", "body_link"},  // 前伸时 Link2 天然靠近 body
 
     {"Link3_R", "head_pitch_link"},
     {"Link3_R", "body_link"},
@@ -350,10 +352,10 @@ public:
         const std::optional<Eigen::Isometry3d>& right_goal,
         Eigen::VectorXd& q_res,
         const std::array<double, 4>& leg_weights =
-            std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
+            std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
         double body_pitch_limit_rad = 30.0 * 0.017453292519943295,
         double timeout_seconds = 10.0,
-        std::size_t max_seed_attempts = 0U,
+        std::size_t max_seed_attempts = 10U,
         bool enable_collision_avoidance = true);
     bool extractSingleArmJoints(bool is_left,
                                 const std::vector<double>& full_q,

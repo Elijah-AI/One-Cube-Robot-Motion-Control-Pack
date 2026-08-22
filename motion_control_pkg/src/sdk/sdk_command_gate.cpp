@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
 #include <thread>
 
 namespace motion_control_pkg::sdk
@@ -29,6 +32,31 @@ bool toolMatchesFeedback(
 {
   return arraysNear(expected.kinematics, actual.tool_kinematics) &&
          arraysNear(expected.dynamics, actual.tool_dynamics);
+}
+
+const char * channelName(ArmChannel channel) noexcept
+{
+  return channel == ArmChannel::kLeft ? "left_arm" : "right_arm";
+}
+
+void printJoints(
+  ArmChannel channel, std::size_t batch_id,
+  const std::array<double, kArmDof> & joints)
+{
+  constexpr double kDegreesToRadians = 0.017453292519943295;
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(6);
+  stream << "[SdkCommandGate] batch=" << batch_id
+         << " channel=" << channelName(channel)
+         << " joints_rad=[";
+  for (std::size_t index = 0; index < joints.size(); ++index) {
+    if (index != 0U) {
+      stream << ", ";
+    }
+    stream << (joints[index] * kDegreesToRadians);
+  }
+  stream << "]";
+  std::cout << stream.str() << std::endl;
 }
 
 }  // namespace
@@ -431,6 +459,13 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
   }
   last_joint_command_commit_time_ = batch_end_time;
   has_last_joint_command_commit_time_ = true;
+  ++joint_command_batch_id_;
+  if (left_joints) {
+    printJoints(ArmChannel::kLeft, joint_command_batch_id_, *left_joints);
+  }
+  if (right_joints) {
+    printJoints(ArmChannel::kRight, joint_command_batch_id_, *right_joints);
+  }
   return SdkCommandResult::ok();
 }
 

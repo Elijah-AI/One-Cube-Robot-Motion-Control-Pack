@@ -481,7 +481,7 @@ bool WholeBodyModule::plan_trajectory(
             Eigen::VectorXd q_next;
             if (!miracle_algo_->solveWholeBodyIK(
                 q_current, left_step, right_step, q_next,
-                std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
+                std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
                 30.0 * 0.017453292519943295, 10.0, 3U, false)) {
                 error_message = "whole-body weighted IK failed at Cartesian line waypoint " +
                     std::to_string(sample_index) + "/" +
@@ -546,8 +546,8 @@ bool WholeBodyModule::plan_trajectory(
                 Eigen::VectorXd q_next;
                 if (!miracle_algo_->solveWholeBodyIK(
                         q_current, left_step, right_step, q_next,
-                        std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
-                        30.0 * 0.017453292519943295, 2.0, 1U, false)) {
+                        std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
+                        30.0 * 0.017453292519943295, 10.0, 5U, false)) {
                     error_message =
                         "failed to solve dual-arm whole-body IK at Cartesian "
                         "substep " + std::to_string(step) + "/" +
@@ -567,7 +567,7 @@ bool WholeBodyModule::plan_trajectory(
                 if (!miracle_algo_->solveWholeBodyIK(
                         target_eigen, left_goal, right_goal,
                         collision_free_target,
-                        std::array<double, 4>{50.0, 50.0, 50.0, 2.0},
+                        std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
                         30.0 * 0.017453292519943295, 5.0, 15U, true)) {
                     error_message =
                         "failed to find a collision-free dual-arm whole-body "
