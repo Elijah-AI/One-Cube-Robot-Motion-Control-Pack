@@ -349,6 +349,20 @@ bool WholeBodyModule::normalize_target(
     output.header.frame_id = planning_frame_;
     output.pose = motion_control_pkg::kinematics::isometryToPose(
         planning_to_source * source_to_target);
+    RCLCPP_INFO(
+        rclcpp::get_logger("whole_body_module"),
+        "normalize_target: before frame=[%s] pos=[%.6f,%.6f,%.6f] quat=[%.6f,%.6f,%.6f,%.6f]; "
+        "after frame=[%s] pos=[%.6f,%.6f,%.6f] quat=[%.6f,%.6f,%.6f,%.6f]",
+        normalized.pose.header.frame_id.c_str(),
+        normalized.pose.pose.position.x, normalized.pose.pose.position.y,
+        normalized.pose.pose.position.z,
+        normalized.pose.pose.orientation.x, normalized.pose.pose.orientation.y,
+        normalized.pose.pose.orientation.z, normalized.pose.pose.orientation.w,
+        output.header.frame_id.c_str(),
+        output.pose.position.x, output.pose.position.y, output.pose.position.z,
+        output.pose.orientation.x, output.pose.orientation.y,
+        output.pose.orientation.z, output.pose.orientation.w);
+    
     const auto output_validation =
         motion_control_pkg::kinematics::validateAndNormalizePoseStamped(output);
     if (!output_validation.success) {
@@ -364,7 +378,9 @@ bool WholeBodyModule::plan_trajectory(
     std::vector<std::vector<double>>& left_path,
     std::vector<std::vector<double>>& right_path,
     std::vector<std::vector<double>>& leg_path,
-    std::string& error_message) const
+    std::string& error_message,
+    std::optional<Eigen::Isometry3d>& left_target_tcp,
+    std::optional<Eigen::Isometry3d>& right_target_tcp) const
 {
     left_path.clear();
     right_path.clear();
@@ -399,6 +415,16 @@ bool WholeBodyModule::plan_trajectory(
         } else {
             addBoundOffset(right_target.pose, goal->bound_size);
         }
+    }
+
+    // 记录规划系下的目标 TCP 位姿，供执行结束后计算最终误差。
+    if (use_left) {
+        left_target_tcp = motion_control_pkg::kinematics::poseToIsometry(
+            left_target.pose);
+    }
+    if (use_right) {
+        right_target_tcp = motion_control_pkg::kinematics::poseToIsometry(
+            right_target.pose);
     }
 
     const auto target_to_root = [&](const geometry_msgs::msg::PoseStamped& target,
@@ -759,8 +785,11 @@ void WholeBodyModule::execution_loop(
     std::vector<std::vector<double>> right_path;
     std::vector<std::vector<double>> leg_path;
     std::string planning_error;
+    std::optional<Eigen::Isometry3d> left_target_tcp;
+    std::optional<Eigen::Isometry3d> right_target_tcp;
     if (!plan_trajectory(
-        goal, start_q, left_path, right_path, leg_path, planning_error)) {
+        goal, start_q, left_path, right_path, leg_path, planning_error,
+        left_target_tcp, right_target_tcp)) {
         result->error_message = planning_error;
         finish_time();
         terminal.abort(result);
@@ -873,7 +902,43 @@ void WholeBodyModule::execution_loop(
     } else {
         result->success = true;
         result->error_message.clear();
-        result->final_distance_error = 0.0;
+        // 参照 dual_arm_module 计算 TCP 最终位置误差：FK 求当前 TCP，与目标 TCP 比较。
+        const auto compute_tcp_error =
+            [&](const std::optional<Eigen::Isometry3d>& target_tcp,
+                const char* end_frame,
+                const Eigen::Isometry3d& model_end_to_tool_tcp) -> double {
+            if (!target_tcp) {
+                return 0.0;
+            }
+            Eigen::Matrix4d planning_to_model_end;
+            if (!miracle_algo_->getForwardKinematics(
+                planning_frame_, end_frame, planning_to_model_end) ||
+                !planning_to_model_end.allFinite())
+            {
+                RCLCPP_WARN(rclcpp::get_logger("whole_body_module"),
+                    "FK to %s failed or non-finite; TCP error set to NaN",
+                    end_frame);
+                return std::numeric_limits<double>::quiet_NaN();
+            }
+            const geometry_msgs::msg::Pose actual_tcp_pose =
+                motion_control_pkg::kinematics::composeToolTcpPose(
+                planning_to_model_end, model_end_to_tool_tcp);
+            const Eigen::Isometry3d actual_tcp =
+                motion_control_pkg::kinematics::poseToIsometry(actual_tcp_pose);
+            return (actual_tcp.translation() -
+                target_tcp->translation()).norm();
+        };
+        result->left_final_distance_error_m =
+            need_left ?
+            compute_tcp_error(left_target_tcp, "gripper_base_l_link",
+                left_model_end_to_tool_tcp_) : 0.0;
+        result->right_final_distance_error_m =
+            need_right ?
+            compute_tcp_error(right_target_tcp, "gripper_base_r_link",
+                right_model_end_to_tool_tcp_) : 0.0;
+        result->final_distance_error = std::max(
+            result->left_final_distance_error_m,
+            result->right_final_distance_error_m);
         publish_feedback(100.0F, "whole-body MovePose complete");
         terminal.succeed(result);
     }

@@ -371,6 +371,18 @@ DualArmModule::DualArmModule(
     motor_status_msg_ = com_interfaces::msg::MotorStatus();
     init_motor_status();
 
+    // 吸盘 GPIO 提前到构造时初始化，避免首次 ControlSuck 动作才申请 /dev/gpiochip4。
+    // 失败仅记录错误不抛出：动作执行路径仍会按 suck_gpio_initialized_ 标志重试。 高电平表示关闭吸盘。
+    if (neardi47_gpio_init(true, true) < 0) {
+        const int error_number = errno;
+        RCLCPP_ERROR(
+            rclcpp::get_logger("dual_arm_module"),
+            "Failed to initialize /dev/gpiochip4 during construction: %s",
+            std::strerror(error_number));
+    } else {
+        suck_gpio_initialized_ = true;
+    }
+
     // joint_command_timer_ = create_wall_timer(250ms,
     // std::bind(&DualArmModule::joint_command_cb, this));
 }
@@ -3012,7 +3024,7 @@ void DualArmModule::execution_loop_control_suck(
     std::lock_guard<std::mutex> gpio_lock(suck_gpio_mutex_);
 
     if (!suck_gpio_initialized_) {
-        if (neardi47_gpio_init(left_suck_active_, right_suck_active_) < 0) {
+        if (neardi47_gpio_init(true, true) < 0) {
             const int error_number = errno;
             abort_gpio(
                 std::string("Failed to initialize /dev/gpiochip4: ") +

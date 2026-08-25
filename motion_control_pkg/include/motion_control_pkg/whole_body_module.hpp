@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -52,7 +53,9 @@ private:
         std::vector<std::vector<double>>& left_path,
         std::vector<std::vector<double>>& right_path,
         std::vector<std::vector<double>>& leg_path,
-        std::string& error_message) const;
+        std::string& error_message,
+        std::optional<Eigen::Isometry3d>& left_target_tcp,
+        std::optional<Eigen::Isometry3d>& right_target_tcp) const;
 
     rclcpp::Node::WeakPtr node_;
     std::shared_ptr<MiracleMAlgo> miracle_algo_;
