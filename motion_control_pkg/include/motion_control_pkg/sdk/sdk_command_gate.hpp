@@ -91,6 +91,7 @@ private:
   mutable std::mutex mode_transition_mutex_;
   std::chrono::steady_clock::time_point last_joint_command_commit_time_{};
   bool has_last_joint_command_commit_time_{false};
+  std::size_t joint_command_batch_id_{0};
 };
 
 }  // namespace motion_control_pkg::sdk

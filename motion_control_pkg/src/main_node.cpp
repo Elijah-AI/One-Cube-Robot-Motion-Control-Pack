@@ -11,6 +11,7 @@
 #include "miracle_head_module.hpp"
 #include "miracle_lower_body_module.hpp"
 #include "miracle_m_algo.hpp"
+#include "whole_body_module.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
 #include "motion_control_pkg/execution/gripper_command_validation.hpp"
 #include "motion_control_pkg/execution/suck_command_validation.hpp"
@@ -160,6 +161,11 @@ public:
             left_arm_tool_.c_str(), right_arm_tool_.c_str(),
             sdk_config_path.c_str());
 
+        whole_body_module_ = std::make_shared<WholeBodyModule>(
+            shared_from_this(), miracleAlgo_ptr_, dual_arm_module_,
+            lower_body_module_, planning_frame, left_tool_transform.transform,
+            right_tool_transform.transform);
+
         // 2. 创建全局唯一的 Action Server
         move_pose_action_server_ = rclcpp_action::create_server<MovePose>(
             this,
@@ -208,6 +214,7 @@ private:
     active_arm_configuration_{
         motion_control_pkg::sdk::ActiveArmConfiguration::kDualArm};
     std::shared_ptr<DualArmModule> dual_arm_module_;
+    std::shared_ptr<WholeBodyModule> whole_body_module_;
     std::string left_arm_tool_{"suck"};
     std::string right_arm_tool_{"gripper"};
     rclcpp_action::Server<MovePose>::SharedPtr move_pose_action_server_;
@@ -233,7 +240,8 @@ private:
             return rclcpp_action::GoalResponse::REJECT;
         }
 
-        if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT) {
+        if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT ||
+            goal->arm_id == WHOLE_BODY_LEFT || goal->arm_id == WHOLE_BODY_RIGHT) {
             const auto pose_validation =
                 motion_control_pkg::kinematics::validateAndNormalizePoseStamped(
                 goal->target_pose);
@@ -293,7 +301,7 @@ private:
             // }
         }
 
-        if (goal->arm_id == ARM_BOTH) {
+        if (goal->arm_id == ARM_BOTH || goal->arm_id == WHOLE_BODY_BOTH) {
             if (goal->synchronization_mode !=
                 MovePose::Goal::SYNC_START_AND_FINISH ||
                 goal->timeout_ms <= 0)
@@ -351,7 +359,26 @@ private:
         }
 
         // 【路由检查】：根据指令中的参数，检查对应模块是否繁忙
-        if (goal->arm_id == ARM_LEFT) {
+        if (goal->arm_id == WHOLE_BODY_LEFT ||
+            goal->arm_id == WHOLE_BODY_RIGHT ||
+            goal->arm_id == WHOLE_BODY_BOTH) {
+            if (goal->timeout_ms <= 0 || !whole_body_module_->is_idle()) {
+                RCLCPP_WARN(this->get_logger(), "Whole-body module is busy or timeout is invalid");
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+            const bool needs_left = goal->arm_id == WHOLE_BODY_LEFT ||
+                goal->arm_id == WHOLE_BODY_BOTH;
+            const bool needs_right = goal->arm_id == WHOLE_BODY_RIGHT ||
+                goal->arm_id == WHOLE_BODY_BOTH;
+            if ((needs_left && !dual_arm_module_->is_idle(ID_LEFT_ARM)) ||
+                (needs_right && !dual_arm_module_->is_idle(ID_RIGHT_ARM)) ||
+                !lower_body_module_->is_idle(ID_LEG))
+            {
+                RCLCPP_WARN(this->get_logger(), "Whole-body resources are busy");
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+        }
+        else if (goal->arm_id == ARM_LEFT) {
             if (!dual_arm_module_->is_idle(ID_LEFT_ARM)) {
                 RCLCPP_WARN(this->get_logger(), "Left arm is busy!");
                 return rclcpp_action::GoalResponse::REJECT;
@@ -397,8 +424,14 @@ private:
     {
         const auto goal = goal_handle->get_goal();
 
+        // 全身模式由协调模块统一规划，再把轨迹分发给手臂和腿部。
+        if (goal->arm_id == WHOLE_BODY_LEFT ||
+            goal->arm_id == WHOLE_BODY_RIGHT ||
+            goal->arm_id == WHOLE_BODY_BOTH) {
+            whole_body_module_->start_execution_move_pose(goal_handle);
+        }
         // 【任务分发】：将 goal_handle 丢给对应的部件模块去执行
-        if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT) {
+        else if (goal->arm_id == ARM_LEFT || goal->arm_id == ARM_RIGHT) {
             if (goal_handle->is_canceling()) {
                 auto result = std::make_shared<MovePose::Result>();
                 result->success = ACTION_FAIL;

@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #include "miracle_lower_body_module.hpp"
+#include <algorithm>
 
 // using json = Json;
 using namespace miracle;
@@ -499,6 +500,91 @@ namespace miracle {
         execution_thread_move_pose_ = std::thread(&MiracleLowerBodyModule::execution_loop_move_pose, this, goal_handle);
     }
 
+    bool MiracleLowerBodyModule::execute_preplanned_trajectory(
+        const std::vector<std::vector<double>>& positions,
+        const std::chrono::steady_clock::time_point& start_time,
+        const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+        std::string& error_message)
+    {
+        if (positions.empty()) {
+            error_message = "preplanned leg trajectory is empty";
+            return false;
+        }
+        for (const auto& point : positions) {
+            if (point.size() != LEG_JOINTNUM ||
+                !std::all_of(point.begin(), point.end(), [](double value) {
+                    return std::isfinite(value);
+                }))
+            {
+                error_message = "preplanned leg trajectory must contain four finite joints";
+                return false;
+            }
+        }
+        if (cancel && cancel->requested()) {
+            error_message = "preplanned leg trajectory canceled before execution";
+            return false;
+        }
+
+        for (const auto& point : positions) {
+            if (!checkJointsAngleOk(point)) {
+                error_message = "preplanned leg trajectory violates joint limits";
+                return false;
+            }
+        }
+        if (!m_bus_manager || !m_bus_manager->enableMotors(m_jointID)) {
+            error_message = "leg motor enable safety check failed";
+            return false;
+        }
+
+        m_traj_run = true;
+        std::this_thread::sleep_until(start_time);
+        for (std::size_t index = 0; index < positions.size(); ++index) {
+            if (cancel && cancel->requested()) {
+                error_message = "preplanned leg trajectory canceled";
+                m_traj_run = false;
+                return false;
+            }
+            m_traj_buffer_pos = positions[index];
+            RCLCPP_INFO(
+                rclcpp::get_logger("leg_module"),
+                "%s preplanned command %zu/%zu: joint1=%.9f, joint2=%.9f, "
+                "joint3=%.9f, body_joint=%.9f",
+                m_module_name, index + 1U, positions.size(),
+                m_traj_buffer_pos[0], m_traj_buffer_pos[1],
+                m_traj_buffer_pos[2], m_traj_buffer_pos[3]);
+            if (!setMulJointPos(m_traj_buffer_pos, m_jointID)) {
+                error_message = "leg motor command rejected";
+                m_traj_run = false;
+                return false;
+            }
+            if (index + 1U < positions.size()) {
+                std::this_thread::sleep_until(
+                    start_time + std::chrono::milliseconds(4) *
+                    static_cast<long long>(index + 1U));
+            }
+        }
+        m_traj_run = false;
+        error_message.clear();
+        return true;
+    }
+
+    bool MiracleLowerBodyModule::reserve_preplanned_trajectory_resource(
+        std::string& error_message)
+    {
+        bool expected = false;
+        if (!is_executing_leg_.compare_exchange_strong(expected, true)) {
+            error_message = "leg is already occupied by another task";
+            return false;
+        }
+        error_message.clear();
+        return true;
+    }
+
+    void MiracleLowerBodyModule::release_preplanned_trajectory_resource() noexcept
+    {
+        is_executing_leg_.store(false);
+    }
+
 
     void MiracleLowerBodyModule::execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
@@ -744,606 +830,5 @@ namespace miracle {
 
     }
 
-
-
-    // CallbackResult MiracleLowerBodyModule::_setPose(const Json::Value &params) {
-    //     RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s CALLING %s", m_module_name, __func__);
-    //     CallbackResult result;
-    //     if (!isRunMode(result)) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s isRunMode fail %s", m_module_name, result.message.c_str());
-    //         return result;
-    //     }
-    //     if (checkPowerState(result)) {
-    //         return result;
-    //     }
-
-
-    //     double motion_rate = 0.0;
-
-    //     // target info
-    //     // bool is_tcp_pose = false;
-    //     std::vector<double> target_pose;
-    //     std::string chain_startl, chain_endl;
-    //     std::vector<std::vector<double>> way_point_poses = {};
-    //     bool nearest = false;
-
-    //     if (!params.isMember("parameters") || !params["parameters"].isObject()) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param error: missing parameters", m_module_name, __func__);
-    //         result.status_code = 20546;
-    //         result.message = "腿关节参数解析错误";
-    //         return result;
-    //     }
-
-    //     const Json::Value &parameters = params["parameters"];
-
-    //     if (parameters.isMember("nearest") && parameters["nearest"].isBool()) {
-    //         nearest = parameters["nearest"].asBool();
-    //     } else {
-    //         RCLCPP_WARN(rclcpp::get_logger("lower_body_module"),"%s %s no nearest param", m_module_name, __func__);
-    //     }
-
-    //     if (parameters.isMember("chain_start") && parameters["chain_start"].isString()) {
-    //         chain_startl = parameters["chain_start"].asString();
-    //     } else {
-    //         chain_startl = m_chain_start;
-    //         RCLCPP_WARN(rclcpp::get_logger("lower_body_module"),"%s %s no chain_start param", m_module_name, __func__);
-    //     }
-
-    //     if (parameters.isMember("chain_end") && parameters["chain_end"].isString()) {
-    //         chain_endl = parameters["chain_end"].asString();
-    //     } else {
-    //         chain_endl = m_chain_end;
-    //         RCLCPP_WARN(rclcpp::get_logger("lower_body_module"),"%s %s no chain_end param", m_module_name, __func__);
-    //     }
-
-    //     if (!parameters.isMember("motion_rate") || !parameters["motion_rate"].isNumeric()) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param error: missing motion_rate", m_module_name, __func__);
-    //         result.status_code = 20546;
-    //         result.message = "腿关节参数解析错误";
-    //         return result;
-    //     }
-    //     motion_rate = parameters["motion_rate"].asDouble();
-    //     if (motion_rate > 1.0 || motion_rate < 0.0) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s motion_rate set error, need to set between (0.0, 1.0)", m_module_name, __func__);
-    //         result.status_code = 20544;
-    //         result.message = "腿关节速度超出合法范围";
-    //         return result;
-    //     }
-
-    //     if (!parameters.isMember("pose") || !parameters["pose"].isArray()) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param error: missing pose", m_module_name, __func__);
-    //         result.status_code = 20546;
-    //         result.message = "腿关节参数解析错误";
-    //         return result;
-    //     }
-    //     const Json::Value &recv_pose = parameters["pose"];
-    //     int pose_size = static_cast<int>(recv_pose.size());
-    //     if (pose_size != 7) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param pose size error %d", m_module_name, __func__, pose_size);
-    //         result.status_code = 20545;
-    //         result.message = "设置的位姿参数数量不匹配";
-    //         return result;
-    //     }
-
-    //     target_pose.resize(pose_size);
-    //     for (Json::ArrayIndex i = 0; i < recv_pose.size(); ++i) {
-    //         target_pose[i] = recv_pose[i].asDouble();
-    //     }
-
-    //     if (parameters.isMember("way_point_poses")) {
-    //         const Json::Value &recv_way_point_poses = parameters["way_point_poses"];
-    //         if (!recv_way_point_poses.isNull() && recv_way_point_poses.isArray()) {
-    //             int way_point_poses_cnt = static_cast<int>(recv_way_point_poses.size());
-    //             way_point_poses.resize(way_point_poses_cnt);
-    //             for (Json::ArrayIndex index = 0; index < recv_way_point_poses.size(); ++index) {
-    //                 int point_data_len = static_cast<int>(recv_way_point_poses[index].size());
-    //                 if (point_data_len != pose_size) {
-    //                     RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s param way_point_poses index%d len error:%d", m_module_name, static_cast<int>(index), point_data_len);
-    //                     result.status_code = 20545;
-    //                     result.message = "设置的位姿参数数量不匹配" + std::to_string(static_cast<int>(index));
-    //                     return result;
-    //                 }
-    //                 way_point_poses[index].resize(point_data_len);
-    //                 for (int j = 0; j < point_data_len; ++j) {
-    //                     way_point_poses[index][j] = recv_way_point_poses[index][j].asDouble();
-    //                 }
-    //             }
-    //         }
-    //     }
-
-
-    //     // schedule parameter
-    //     double plan_dt = 1.0 / TRAJ_FREQ;
-    //     double max_velocity = 1.0 * motion_rate;
-    //     double max_acc = 1.5 * motion_rate;
-    //     double max_jerk = 5 * motion_rate;
-
-    //     // current info
-    //     std::vector<double> joint_cur_pos(LEG_JOINTNUM);
-    //     std::vector<double> joint_cur_vel(LEG_JOINTNUM);
-    //     std::vector<double> joint_cur_acc(LEG_JOINTNUM);
-
-    //     // handle last traj vel and acc
-    //     pthread_mutex_lock(&m_traj_mutex);
-    //     if (m_traj_run) {
-    //         // this is used to stop follow run
-    //         // m_traj_cur_stop = true;
-
-    //         // if (m_traj_vel.size() > m_traj_point_index) {
-    //         //     for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //         //         joint_cur_pos[i] = m_traj_buffer_pos[i];
-    //         //         joint_cur_vel[i] = m_traj_vel[m_traj_point_index][i];
-    //         //         joint_cur_acc[i] = m_traj_acc[m_traj_point_index][i];
-    //         //     }
-    //         //     RCLCPP_WARN(rclcpp::get_logger("lower_body_module"),"%s %s %d cur_vel:[%f,%f,%f,%f] cur_acc:[%f,%f,%f,%f]", m_module_name, __func__, m_traj_point_index, joint_cur_vel[0],
-    //         //           joint_cur_vel[1], joint_cur_vel[2], joint_cur_vel[3], joint_cur_acc[0],joint_cur_acc[1], joint_cur_acc[2], joint_cur_acc[3]);
-    //         // } else {
-    //         //     // last traj must be zero vel an acc
-    //         //     for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //         //         joint_cur_pos[i] = m_traj_buffer_pos[i];
-    //         //         joint_cur_vel[i] = 0.0;
-    //         //         joint_cur_acc[i] = 0.0;
-    //         //     }
-    //         // }
-    //         for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //             joint_cur_pos[i] = m_joints_cur_pos[i];
-    //             joint_cur_vel[i] = m_joints_cur_speed[i];
-    //             joint_cur_acc[i] = 0.0;                    //有没有
-    //         }
-    //         max_acc *= 1.5;
-    //         max_jerk *= 1.5;
-    //     } else {
-    //         for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //             joint_cur_pos[i] = m_joints_cur_pos[i];
-    //             joint_cur_vel[i] = 0.0;
-    //             joint_cur_acc[i] = 0.0;
-    //         }
-    //     }
-    //     pthread_mutex_unlock(&m_traj_mutex);
-
-    //     try {
-    //         RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s %s %f pose [%f,%f,%f,%f,%f,%f]", m_module_name, __func__, motion_rate, target_pose[0], target_pose[1], target_pose[2], target_pose[3],
-    //               target_pose[4], target_pose[5]);
-
-    //         std::vector<std::vector<double>> traj_pos_new;
-    //         std::vector<std::vector<double>> traj_vel_new;
-    //         std::vector<std::vector<double>> traj_acc_new;
-
-    //         int all_point_ok;
-    //         if (0 == way_point_poses.size()) {
-    //             all_point_ok = m_galgo->computeMovePTrajectory<LEG_JOINTNUM>(chain_startl, chain_endl, plan_dt, max_velocity, max_acc, max_jerk, joint_cur_pos, joint_cur_vel,
-    //                                                            joint_cur_acc, target_pose, traj_pos_new, traj_vel_new, traj_acc_new, nearest);
-    //         } else {
-    //             RCLCPP_WARN(rclcpp::get_logger("lower_body_module"),"%s %s way_point param is not support in move_pose", m_module_name, __func__);
-    //             result.status_code = 1;
-    //             result.message = "now not support way_point";
-    //             return result;
-    //         }
-    //         if (0 != all_point_ok) {
-    //             RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s Error %d for movep", m_module_name, __func__, all_point_ok);
-    //             result.status_code = 20543;
-    //             result.message = "位姿设置失败" + std::to_string(all_point_ok);
-    //             return result;
-    //         }
-
-    //         // int pos_cnt = traj_pos_new.size();
-    //         // for (int i = 0; i < pos_cnt; i++) {
-    //         //     RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"------------------------------------[%f,%f,%f,%f,%f,%f,%f]", float(traj_pos_new[i][0]), float(traj_pos_new[i][1]),
-    //         //           float(traj_pos_new[i][2]), float(traj_pos_new[i][3]), float(traj_pos_new[i][4]), float(traj_pos_new[i][5]), float(traj_pos_new[i][6]));
-    //         // }
-
-    //         pthread_mutex_lock(&m_traj_mutex);
-    //         // Generate the trajectory within the control loop
-    //         m_traj_pos = traj_pos_new;
-    //         m_traj_vel = traj_vel_new;
-    //         m_traj_acc = traj_acc_new;
-    //         if (!m_traj_run) {
-
-    //             m_traj_run = true;
-    //             // excute thread
-    //             pthread_t Leg_tid;
-    //             pthread_attr_t attr;
-    //             struct sched_param param;
-    //             param.sched_priority = 40;
-
-    //             pthread_attr_init(&attr);
-    //             pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    //             pthread_attr_setschedpolicy(&attr, SCHED_RR);
-
-    //             pthread_attr_setschedparam(&attr, &param);
-
-    //             if (0 != pthread_create(&Leg_tid, &attr, lowerbodyFollowTrajectoryThreadHandle, this)) {
-    //                 m_traj_run = false;
-    //                 pthread_mutex_unlock(&m_traj_mutex);
-    //                 result.status_code = 1;
-    //                 result.message = "Error create thread";
-    //                 return result;
-    //             }
-    //         } else {
-    //             // notify follow thread to stop
-    //             m_traj_point_index = 0; // add this for bug when stop a new trajectory
-    //             m_traj_run_new = true;
-    //         }
-    //         pthread_mutex_unlock(&m_traj_mutex);
-
-    //         result.status_code = 0;
-    //         result.message = "执行成功";
-    //         return result;
-    //     } catch (const std::exception &e) {
-    //         pthread_mutex_unlock(&m_traj_mutex);
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s excute err:%s", m_module_name, __func__, e.what());
-    //         result.status_code = 20546;
-    //         result.message = "相关关节参数解析错误" + std::string(e.what());
-    //         return result;
-    //     }
-    // }
-    
-
-
-    // CallbackResult MiracleLowerBodyModule::__handleMoveJTrajectory(const std::vector<double> joint_target_pos, double motion_rate) {
-
-    //     CallbackResult result;
-
-    //     // schedule parameter
-    //     double plan_dt = 1.0 / TRAJ_FREQ;
-    //     double max_velocity = 1.0 * motion_rate;
-    //     double max_acc = 1.5 * motion_rate;
-    //     double max_jerk = 5 * motion_rate;
-
-    //     // current info
-    //     std::vector<double> joint_cur_pos(LEG_JOINTNUM);
-    //     std::vector<double> joint_cur_vel(LEG_JOINTNUM);
-    //     std::vector<double> joint_cur_acc(LEG_JOINTNUM);
-
-    //     // handle last traj vel and acc
-    //     pthread_mutex_lock(&m_traj_mutex);
-    //     if (m_traj_run) {
-    //         // this is used to stop follow run
-    //         // m_traj_cur_stop = true;
-
-    //         // if (m_traj_vel.size() > m_traj_point_index) {
-    //         //     for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //         //         joint_cur_pos[i] = m_traj_buffer_pos[i];
-    //         //         joint_cur_vel[i] = m_traj_vel[m_traj_point_index][i];
-    //         //         joint_cur_acc[i] = m_traj_acc[m_traj_point_index][i];
-    //         //     }
-    //         //     RCLCPP_WARN(rclcpp::get_logger("lower_body_module"),"%s %s %d cur_vel:[%f,%f,%f,%f] cur_acc:[%f,%f,%f,%f]", m_module_name, __func__, m_traj_point_index, joint_cur_vel[0], joint_cur_vel[1],
-    //         //           joint_cur_vel[2], joint_cur_vel[3], joint_cur_acc[0], joint_cur_acc[1], joint_cur_acc[2], joint_cur_acc[3]);
-    //         // } else {
-    //         //     // last traj must be zero vel an acc
-    //         //     for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //         //         joint_cur_pos[i] = m_traj_buffer_pos[i];
-    //         //         joint_cur_vel[i] = 0.0;
-    //         //         joint_cur_acc[i] = 0.0;
-    //         //     }
-    //         // }
-    //         for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //             joint_cur_pos[i] = m_joints_cur_pos[i];
-    //             joint_cur_vel[i] = m_joints_cur_speed[i];
-    //             joint_cur_acc[i] = 0.0;                    //有没有
-    //         }
-    //         max_acc *= 1.5;
-    //         max_jerk *= 1.5;
-    //     } else {
-    //         bool pos_same = true;
-    //         for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //             if (abs(joint_target_pos[i] - m_joints_cur_pos[i]) > JOINT_THRESHOLD) {
-    //                 pos_same = false;
-    //                 break;
-    //             }
-    //         }
-    //         if (pos_same) {
-    //             pthread_mutex_unlock(&m_traj_mutex);
-    //             RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s %s %f from [%f,%f,%f,%f] to [%f,%f,%f,%f] almost same", m_module_name, __func__, motion_rate, m_joints_cur_pos[0],
-    //                   m_joints_cur_pos[1], m_joints_cur_pos[2], m_joints_cur_pos[3], joint_target_pos[0], joint_target_pos[1], joint_target_pos[2],
-    //                   joint_target_pos[3]);
-    //             result.status_code = 0;
-    //             result.message = "执行成功";
-    //             return result;
-    //         }
-    //         for (int i = 0; i < LEG_JOINTNUM; i++) {
-    //             joint_cur_pos[i] = m_joints_cur_pos[i];
-    //             joint_cur_vel[i] = 0.0;
-    //             joint_cur_acc[i] = 0.0;
-    //         }
-    //     }
-    //     pthread_mutex_unlock(&m_traj_mutex);
-
-    //     try {
-
-    //         RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s %s %f from [%f,%f,%f,%f] to [%f,%f,%f,%f]", m_module_name, __func__, motion_rate, m_joints_cur_pos[0], m_joints_cur_pos[1],
-    //               m_joints_cur_pos[2], m_joints_cur_pos[3], joint_target_pos[0], joint_target_pos[1], joint_target_pos[2], joint_target_pos[3]);
-
-    //         std::vector<std::vector<double>> traj_pos_new;
-    //         std::vector<std::vector<double>> traj_vel_new;
-    //         std::vector<std::vector<double>> traj_acc_new;
-
-    //         int all_point_ok = m_galgo->computeMoveJTrajectory<LEG_JOINTNUM>(plan_dt, max_velocity, max_acc, max_jerk, joint_cur_pos, joint_cur_vel,
-    //                                                         joint_cur_acc, joint_target_pos, traj_pos_new, traj_vel_new, traj_acc_new,m_module_name);
-
-    //         if (0 != all_point_ok) {
-    //             RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s Error %d for movej", m_module_name, __func__, all_point_ok);
-    //             result.status_code = 20502;
-    //             result.message = "腿关节设置失败" + std::to_string(all_point_ok);
-    //             return result;
-    //         }
-
-    //         pthread_mutex_lock(&m_traj_mutex);
-    //         m_traj_pos = traj_pos_new;
-    //         m_traj_vel = traj_vel_new;
-    //         m_traj_acc = traj_acc_new;
-    //         if (!m_traj_run) {
-
-    //             m_traj_run = true;
-    //             // excute thread
-    //             pthread_t lowerBody_tid;
-    //             pthread_attr_t attr;
-    //             struct sched_param param;
-    //             param.sched_priority = 40;
-
-    //             pthread_attr_init(&attr);
-    //             pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    //             pthread_attr_setschedpolicy(&attr, SCHED_RR);
-    //             pthread_attr_setschedparam(&attr, &param);
-    //             if (0 != pthread_create(&lowerBody_tid, &attr, lowerbodyFollowTrajectoryThreadHandle, this)) {
-    //                 m_traj_run = false;
-    //                 pthread_mutex_unlock(&m_traj_mutex);
-    //                 result.status_code = 1;
-    //                 result.message = "Error create thread";
-    //                 return result;
-    //             }
-    //         } else {
-    //             // notify follow thread to stop
-    //             m_traj_point_index = 0; // add this for bug when stop a new trajectory
-    //             m_traj_run_new = true;
-    //         }
-    //         pthread_mutex_unlock(&m_traj_mutex);
-
-    //         result.status_code = 0;
-    //         result.message = "执行成功";
-    //         return result;
-    //     } catch (const std::exception &e) {
-    //         pthread_mutex_unlock(&m_traj_mutex);
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s format %s err:%s", m_module_name, __func__, e.what());
-    //         result.status_code = 20505;
-    //         result.message = "腿关节参数解析错误" + std::string(e.what());
-    //         return result;
-    //     }
-    // }
-
-
-    // CallbackResult MiracleLowerBodyModule::__setJointAngles(const Json::Value &params) {
-    //     RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s CALLING %s", m_module_name, __func__);
-    //     CallbackResult result;
-
-    //     if (!isRunMode(result)) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s isRunMode fail %s", m_module_name, result.message.c_str());
-    //         return result;
-    //     }
-    //     if (checkPowerState(result)) {
-    //         return result;
-    //     }
-
-    //     std::vector<double> joint_target_pos(LEG_JOINTNUM);
-    //     double motion_rate = 0.1;
-    //     if (!params.isMember("parameters") || !params["parameters"].isObject()) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param error: missing parameters", m_module_name, __func__);
-    //         result.status_code = 20505;
-    //         result.message = "腿关节参数解析错误";
-    //         return result;
-    //     }
-    //     const Json::Value &parameters = params["parameters"];
-
-    //     if (!parameters.isMember("speed") || !parameters["speed"].isNumeric()) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param error: missing speed", m_module_name, __func__);
-    //         result.status_code = 20505;
-    //         result.message = "腿关节参数解析错误";
-    //         return result;
-    //     }
-    //     motion_rate = parameters["speed"].asDouble();
-    //     if (motion_rate > 1.0 || motion_rate < 0.0) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s motion_rate set error, need to set between (0.0, 1.0)", m_module_name, __func__);
-    //         result.status_code = 20503;
-    //         result.message = "腿关节速度超出合法范围";
-    //         return result;
-    //     }
-
-    //     if (!parameters.isMember("joint_angles") || !parameters["joint_angles"].isArray()) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param error: missing joint_angles", m_module_name, __func__);
-    //         result.status_code = 20505;
-    //         result.message = "腿关节参数解析错误";
-    //         return result;
-    //     }
-    //     const Json::Value &joint_angles = parameters["joint_angles"];
-    //     if (static_cast<unsigned int>(joint_angles.size()) < LEG_JOINTNUM) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s param error: joint_angles size mismatch", m_module_name, __func__);
-    //         result.status_code = 20505;
-    //         result.message = "腿关节参数解析错误";
-    //         return result;
-    //     }
-
-    //     for (unsigned int i = 0; i < LEG_JOINTNUM; ++i) {
-    //         joint_target_pos[i] = joint_angles[static_cast<Json::ArrayIndex>(i)].asDouble();
-    //         if ((joint_target_pos[i] > m_joints_max_pos[i] + LEG_JOINT_MAX_OVER_RAD) || (joint_target_pos[i] < m_joints_min_pos[i] - LEG_JOINT_MAX_OVER_RAD)) {
-    //             RCLCPP_WARN(rclcpp::get_logger("leg_module"),"%s %s joint%d %f over limit", m_module_name, __func__, i, joint_target_pos[i]);
-    //             result.status_code = 20504;
-    //             result.message = "腿关节" + std::to_string(i) + "角度" + std::to_string(double(joint_target_pos[i])) + "超出物理限制";
-    //             return result;
-    //         }
-    //     }
-
-    //     // int status = _checkLegSafety(joint_target_pos);
-    //     // if (status != 0) {
-    //     //     RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s format leg safety err: %d", m_module_name, status);
-    //     //     result.status_code = 1;
-    //     //     result.message = "Error: check leg safety error" + std::to_string(status);
-    //     //     return result;
-    //     // }
-
-    //     return __handleMoveJTrajectory(joint_target_pos, motion_rate);
-    // }
-
-    // CallbackResult MiracleLowerBodyModule::_getJointAngles(const Json::Value &params) {
-    //     RCLCPP_DEBUG(rclcpp::get_logger("lower_body_module"),"%s CALLING %s", m_module_name, __func__);
-    //     CallbackResult result;
-    //     if (!isRunMode(result)) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s isRunMode fail %s", m_module_name, result.message.c_str());
-    //         return result;
-    //     }
-
-    //     Json::Value data;
-    //     Json::Value angles(Json::arrayValue);
-    //     for (int i = 0; i < LEG_JOINTNUM; i++) {
-            
-    //         // if (m_joints_cur_pos[i] > m_joints_max_pos[i]) {
-    //         //     if ((m_joints_cur_pos[i] - m_joints_max_pos[i]) > LEG_JOINT_MAX_OVER_RAD) {
-    //         //         angles.push_back(m_joints_cur_pos[i]);
-    //         //     } else {
-    //         //         angles.push_back(m_joints_max_pos[i]);
-    //         //     }
-    //         // } else if (m_joints_cur_pos[i] < m_joints_min_pos[i]) {
-    //         //     if ((m_joints_min_pos[i] - m_joints_cur_pos[i]) > LEG_JOINT_MAX_OVER_RAD) {
-    //         //         angles.push_back(m_joints_cur_pos[i]);
-    //         //     } else {
-    //         //         angles.push_back(m_joints_min_pos[i]);
-    //         //     }
-    //         // } else {
-    //         //     angles.push_back(m_joints_cur_pos[i]);
-    //         // }
-    //         angles.append(m_joints_cur_pos[i]);
-    //     }
-    //     data["joint_angles"] = angles;
-    //     result.status_code = 0;
-    //     result.data = data;
-    //     result.message = "leg joint angle retrieved successfully.";
-    //     return result;
-    // }
-
-    // CallbackResult MiracleLowerBodyModule::_getFollowTrajectoryState(const Json::Value &params) {
-    //     RCLCPP_DEBUG(rclcpp::get_logger("lower_body_module"),"%s CALLING %s", m_module_name, __func__);
-    //     CallbackResult result;
-    //     if (!isRunMode(result)) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s isRunMode fail %s", m_module_name, result.message.c_str());
-    //         return result;
-    //     }
-    //     try {
-    //         Json::Value data;
-    //         // if (m_6dof_collision) {
-    //         //     data["follow_trajectory_status"] = 0;
-    //         //     data["stop_reason"] = 1; // collision stop
-    //         // } else {
-    //             data["follow_trajectory_status"] = isMoving();
-    //             data["stop_reason"] = 0;
-    //         // }
-    //         result.data = data;
-    //     } catch (const std::exception &e) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"Error generating lowerBody follow trajectory response: %s", e.what());
-    //         result.status_code = 20603;
-    //         result.message = "轨迹状态获取失败" + std::string(e.what());
-    //         return result;
-    //     }
-
-    //     result.status_code = 0;
-    //     result.message = "执行成功";
-    //     return result;
-    // }
-    
-
-    // CallbackResult MiracleLowerBodyModule::__setFollowTrajectory(const Json::Value &params) {
-    //     RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s CALLING %s", m_module_name, __func__);
-    //     CallbackResult result;
-
-    //     // if (!isRunMode(result)) {
-    //     //     RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s isRunMode fail %s", m_module_name, result.message.c_str());
-    //     //     return result;
-    //     // }
-    //     // if (checkPowerState(result)) {
-    //     //     return result;
-    //     // }
-
-    //     // double traj_freq;
-    //     // json traj_pos;
-    //     // try {
-    //     //     traj_freq = params.at("parameters").at("freq");
-    //     //     traj_pos = params.at("parameters").at("follow_list");
-    //     //     int total_pos_cnt = traj_pos.size();
-    //     //     for (int i = 0; i < total_pos_cnt; i++) {
-    //     //         for (int j = 0; j < LEG_JOINTNUM; j++) {
-    //     //             if ((traj_pos[i][j] > m_joints_max_pos[j] + LEG_JOINT_MAX_OVER_RAD) || (traj_pos[i][j] < m_joints_min_pos[j] - LEG_JOINT_MAX_OVER_RAD)) {
-    //     //                 RCLCPP_WARN(rclcpp::get_logger("lower_body_module"),"%s %s %d point 0 over limit", m_module_name, __func__, i);
-    //     //                 result.status_code = 1;
-    //     //                 result.message = "Error: point" + std::to_string(i) + "joint" + std::to_string(j) + "over limit";
-    //     //                 return result;
-    //     //             }
-    //     //         }
-    //     //     }
-    //     // } catch (const std::exception &e) {
-    //     //     RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s format %s err:%s", m_module_name, e.what());
-    //     //     result.status_code = 1;
-    //     //     result.message = "Error: " + std::string(e.what());
-    //     //     return result;
-    //     // }
-
-    //     // pthread_mutex_lock(&m_traj_mutex);
-    //     // m_traj_freq = traj_freq;
-    //     // m_traj_pos = traj_pos;
-
-    //     // if (!m_traj_run) {
-    //     //     m_traj_run = true;
-    //     //     // excute thread
-    //     //     pthread_t lowerBody_tid;
-    //     //     pthread_attr_t attr;
-    //     //     pthread_attr_init(&attr);
-    //     //     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    //     //     if (0 != pthread_create(&lowerBody_tid, &attr, lowerbodyFollowTrajectoryThreadHandle, this)) {
-    //     //         m_traj_run = false;
-    //     //         pthread_mutex_unlock(&m_traj_mutex);
-    //     //         result.status_code = 1;
-    //     //         result.message = "Error create thread";
-    //     //         return result;
-    //     //     }
-    //     // } else {
-    //     //     // notify follow thread to stop
-    //     //     m_traj_point_index = 0; // add this for bug when stop a new trajectory
-    //     //     m_traj_run_new = true;
-    //     // }
-    //     // pthread_mutex_unlock(&m_traj_mutex);
-
-    //     // result.status_code = 0;
-    //     // result.message = "follow trajectory start successfully.";
-
-    //     result.status_code = 1;
-    //     result.message = "Leg moudle follow trajectory do not realize.";
-    //     return result;
-    // }
-
-    // CallbackResult MiracleLowerBodyModule::_stopFollowTrajectory(const Json::Value &params) {
-    //     RCLCPP_INFO(rclcpp::get_logger("lower_body_module"),"%s CALLING %s", m_module_name, __func__);
-    //     CallbackResult result;
-    //     result.status_code = 0;
-
-    //     if (!isRunMode(result)) {
-    //         RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s isRunMode fail %s", m_module_name, result.message.c_str());
-    //         return result;
-    //     }
-    //     result.message = "lower body stop follow trajectory successfully.";
-
-    //     pthread_mutex_lock(&m_traj_mutex);
-    //     if (m_traj_run) {             //原为!m_traj_run
-    //         m_traj_run_stop = true;
-    //     }
-    //     pthread_mutex_unlock(&m_traj_mutex);
-    //     int retry_times = 0;
-    //     while (m_traj_run) {          //原为!m_traj_run
-    //         retry_times++;
-    //         if (retry_times > 30) {
-    //             result.status_code = 1;
-    //             result.message = "lower body stop follow trajectory overtime.";
-    //             break;
-    //         }
-    //         usleep(20000);
-    //     }
-    //     return result;
-    // }
 
 } // namespace miracle

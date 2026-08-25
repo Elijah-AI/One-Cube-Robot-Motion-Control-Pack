@@ -168,6 +168,7 @@ set(SOURCES
     src/miracle_head_module.cpp
     src/miracle_lower_body_module.cpp
     src/miracle_m_algo.cpp
+    src/whole_body_module.cpp
     src/common/gripper/Modbus_Jodell.cpp
     # src/common/ctrl/PVT_ctrl.cpp
     # src/common/mpc/mpc.cpp

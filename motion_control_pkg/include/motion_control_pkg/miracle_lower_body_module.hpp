@@ -43,6 +43,7 @@
 #include "miracle_module.hpp"
 #include "jsoncpp/json/json.h"
 #include "main_node.hpp"
+#include "motion_control_pkg/execution/execution_control.hpp"
 // #include "miracle_chassis_module.hpp"
 
 
@@ -169,6 +170,19 @@ namespace miracle {
         void start_execution_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
 
         void start_execution_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
+
+        // 执行全身模块预先生成的弧度制腿部关节轨迹。
+        // 调用者必须先通过 reserve_preplanned_trajectory_resource() 预约资源，
+        // 并在执行结束后通过 release_preplanned_trajectory_resource() 释放资源。
+        bool execute_preplanned_trajectory(
+            const std::vector<std::vector<double>>& positions,
+            const std::chrono::steady_clock::time_point& start_time,
+            const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+            std::string& error_message);
+
+        // Reserve the leg execution flag before whole-body planning starts.
+        bool reserve_preplanned_trajectory_resource(std::string& error_message);
+        void release_preplanned_trajectory_resource() noexcept;
 
     private:
            //一个action対应一个接口

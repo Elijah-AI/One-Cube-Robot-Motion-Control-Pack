@@ -36,7 +36,7 @@ ros2 action send_goal --feedback   /Control/control_suck   com_interfaces/action
     header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
     task_id: "manual_left_suck_on",
     suck_id: 0,
-    active: [true, false],
+    active: [false, false],
     timeout_ms: 5000
   }'
 
@@ -84,10 +84,10 @@ ros2 action send_goal --feedback \
       'leg_joint1','leg_joint2','leg_joint3','body_joint'
     ],
     position: [
-      -1.0, 2.1, -1.0, 0.0
+      -1.0, 2.0, -1.0, 0.0
     ],
     enable_collision_check: false,
-    speed: 0.3,
+    speed: 0.2,
     timeout_ms: 3000}" \
   --feedback
 
@@ -96,25 +96,26 @@ ros2 action send_goal --feedback \
   com_interfaces/action/MovePose \
   "{header: {frame_id: base_link},
     task_id: 'MANUAL_LEFT_POSE_01',
-    arm_id: 0,
+    arm_id: 5,
     target_pose: {
-      header: {frame_id: head_pitch_link},
+      header: {frame_id: base_link},
       pose: {
         position: {
-          x: 0.809191,
-          y: -0.238137,
-          z: -0.202854
+          x: 0.99,
+          y: 0.2,
+          z: 0.96
         },
         orientation: {
-          x: -0.657273,
-          y: 0.239505,
-          z: -0.714153,
-          w: -0.0247918
+          x: 0.7071068,
+          y: -0.7071068,
+          z: 0.0,
+          w: 0.0
         }
       }
     },
-    bound_size: [0.0, 0.0, 0.1],
-    enable_collision_check: false,
+    bound_size: [0.0, 0.0, 0.0],
+    enable_collision_check: true,
+    enable_move_line: true,
     use_force_control: false,
     speed: 0.2,
     timeout_ms: 45000}" \
@@ -125,13 +126,13 @@ ros2 action send_goal --feedback \
   com_interfaces/action/MoveJoints \
   "{header: {frame_id: base_link},
     task_id: 'MANUAL_LEFT_JOINT_01',
-    arm_id: 0,
+    arm_id: 1,
     joint_name: [
-      'Joint1_L','Joint2_L','Joint3_L','Joint4_L',
-      'Joint5_L','Joint6_L','Joint7_L'
+      'Joint1_R','Joint2_R','Joint3_R','Joint4_R',
+      'Joint5_R','Joint6_R','Joint7_R'
     ],
     position: [
-      1.7, -1.2, -1.7, -1.6,
+      -1.7, -1.2, 1.7, -1.6,
       0.0, 0.0, 0.0
     ],
     enable_collision_check: false,
@@ -190,20 +191,20 @@ ros2 action send_goal --feedback \
   com_interfaces/action/MovePose \
   "{header: {frame_id: base_link},
     task_id: 'MANUAL_DUAL_POSE_01',
-    arm_id: 2,
+    arm_id: 7,
     left_target_pose: {
       header: {frame_id: base_link},
       pose: {
         position: {
-          x: 0.98041,
-          y: 0.51958,
-          z: 1.24463
+          x: 0.95,
+          y: 0.2,
+          z: 1.06
         },
         orientation: {
-          x: -0.486658,
-          y: 0.471915,
-          z: -0.446717,
-          w: 0.583871
+          x: 0.7071068,
+          y: -0.7071068,
+          z: 0.0,
+          w: 0.0
         }
       }
     },
@@ -212,23 +213,23 @@ ros2 action send_goal --feedback \
       header: {frame_id: base_link},
       pose: {
         position: {
-          x: 0.96041,
-          y: -0.53958,
-          z: 1.49463
+          x: 0.95,
+          y: -0.2,
+          z: 1.06
         },
         orientation: {
-          x: -0.486658,
-          y: 0.471915,
-          z: -0.446717,
-          w: 0.583871
+          x: -0.7071068,
+          y: -0.7071068,
+          z: 0.0,
+          w: 0.0
         }
       }
     },
     right_bound_size: [0.0, 0.0, 0.0],
     synchronization_mode: 0,
-    enable_collision_check: false,
+    enable_collision_check: true,
     use_force_control: false,
-    enable_move_line: true,
-    speed: 0.3,
+    enable_move_line: false,
+    speed: 0.2,
     timeout_ms: 45000}" \
   --feedback

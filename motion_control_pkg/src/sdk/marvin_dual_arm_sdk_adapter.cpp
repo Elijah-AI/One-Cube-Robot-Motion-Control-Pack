@@ -1,9 +1,7 @@
 #include "motion_control_pkg/sdk/marvin_dual_arm_sdk_adapter.hpp"
 
-#include <iomanip>
 #include <iostream>
 #include <mutex>
-#include <sstream>
 
 #if defined(__aarch64__)
 // 厂商头文件只允许出现在 Adapter 实现中，公共控制接口不暴露 DCSS。
@@ -170,7 +168,6 @@ namespace
 
 constexpr int kPositionModeState = 1;
 constexpr int kTorqueModeState = 3;
-constexpr double kDegreesToRadians = 0.017453292519943295;
 
 struct FakeAdapterRuntime
 {
@@ -180,7 +177,6 @@ struct FakeAdapterRuntime
   std::array<bool, kArmCount> pending_joint_valid{{false, false}};
   bool connected{false};
   bool batch_open{false};
-  std::size_t batch_id{0};
 };
 
 FakeAdapterRuntime & runtime()
@@ -199,25 +195,6 @@ const char * channelName(ArmChannel channel) noexcept
   return channel == ArmChannel::kLeft ? "left_arm" : "right_arm";
 }
 
-void printJoints(
-  ArmChannel channel, std::size_t batch_id,
-  const std::array<double, kArmDof> & joints)
-{
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(6);
-  stream << "[FakeDualArmSdkAdapter] batch=" << batch_id
-         << " channel=" << channelName(channel)
-         << " joints_rad=[";
-  for (std::size_t index = 0; index < joints.size(); ++index) {
-    if (index != 0U) {
-      stream << ", ";
-    }
-    stream << (joints[index] * kDegreesToRadians);
-  }
-  stream << "]";
-  std::cout << stream.str() << std::endl;
-}
-
 }  // namespace
 
 bool MarvinDualArmSdkAdapter::checkCompatibility()
@@ -232,7 +209,6 @@ bool MarvinDualArmSdkAdapter::connect(const std::array<unsigned char, 4> & ip)
   fake.connected = true;
   fake.batch_open = false;
   fake.pending_joint_valid.fill(false);
-  fake.batch_id = 0;
   for (auto & arm : fake.state.arms) {
     arm.current_state = kPositionModeState;
     arm.error_code = 0;
@@ -289,7 +265,6 @@ bool MarvinDualArmSdkAdapter::beginCommandBatch()
   }
   fake.batch_open = true;
   fake.pending_joint_valid.fill(false);
-  ++fake.batch_id;
   return true;
 }
 
@@ -420,11 +395,7 @@ bool MarvinDualArmSdkAdapter::commitCommandBatch()
     arm.joint_position = fake.pending_joints[index];
     arm.joint_velocity.fill(0.0);
     arm.joint_effort.fill(0.0);
-    arm.low_speed = true; 
-    printJoints(
-      index == channelIndex(ArmChannel::kLeft) ? ArmChannel::kLeft :
-      ArmChannel::kRight,
-      fake.batch_id, fake.pending_joints[index]);
+    arm.low_speed = true;
   }
 
   fake.batch_open = false;

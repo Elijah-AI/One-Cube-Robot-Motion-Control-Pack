@@ -2332,6 +2332,10 @@
     name="test_box">
   </link>
 
+  <link
+    name="head_camera_optical">
+  </link>
+
   <joint
     name="test_box_joint"
     type="fixed">
@@ -2343,6 +2347,16 @@
       link="base_link" />
     <child
       link="test_box" />
+  </joint>
+
+  <joint
+    name="head_camera_optical_joint"
+    type="fixed">
+    <origin xyz="0.107622 0.128728 -0.018447" rpy="2.691355 -1.554933 0.136932" />
+    <parent
+      link="head_pitch_link" />
+    <child
+      link="head_camera_optical" />
   </joint>
 
 </robot>

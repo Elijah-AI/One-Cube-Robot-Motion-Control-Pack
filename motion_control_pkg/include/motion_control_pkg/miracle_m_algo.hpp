@@ -32,12 +32,15 @@
 #ifndef MIRACLE_MOTION_ALGO_HPP_
 #define MIRACLE_MOTION_ALGO_HPP_
 
+#include <chrono>
 #include <string>
 #include <vector>
 #include <memory>
 #include <cmath>
+#include <array>
 #include <Eigen/Dense>
 #include <mutex>
+#include <optional>
 
 #include <pinocchio/multibody/model.hpp>
 #include <pinocchio/multibody/data.hpp>
@@ -80,6 +83,7 @@ const std::vector<std::pair<std::string, std::string>> collision_pairs = {
     {"Link1_L", "gripper_base_r_link"},
   
     {"Link2_L", "head_pitch_link"},
+    {"Link2_L", "body_link"},  //前伸时 Link2 天然靠近 body
     {"Link2_L", "gripper_base_r_link"},
 
     {"Link3_L", "head_pitch_link"},
@@ -155,6 +159,7 @@ const std::vector<std::pair<std::string, std::string>> collision_pairs = {
     {"gripper_base_l_link", "base_link"},
 
     {"Link2_R", "head_pitch_link"},
+    {"Link2_R", "body_link"},  // 前伸时 Link2 天然靠近 body
 
     {"Link3_R", "head_pitch_link"},
     {"Link3_R", "body_link"},
@@ -286,6 +291,14 @@ public:
                                const std::vector<double>& goal_q,
                                std::vector<std::vector<double>>& path);
 
+    // 全身关节空间避障规划。goal_q 为完整模型配置，活动关节按
+    // 左臂(7)、右臂(7)、腿部(4) 的顺序由 use_left/use_right 选择。
+    bool planWholeBodyJointSpace(const std::vector<double>& start_q,
+                                 const std::vector<double>& goal_q,
+                                 bool use_left,
+                                 bool use_right,
+                                 std::vector<std::vector<double>>& path);
+
     // Plan to Cartesian goals for both arms
     bool planDualArmCartesianGoal(const std::vector<double>& start_q,
                                   const Eigen::Isometry3d& left_goal,
@@ -329,9 +342,33 @@ public:
                                  const Eigen::Isometry3d& left_goal,
                                  const Eigen::Isometry3d& right_goal,
                                  std::vector<double>& goal_q);
+    // 全身位置逆解：只激活请求的手臂和腿部关节，腿部通过加权最小二乘
+    // 尽量保持在 q_init 附近。leg_weights 顺序为
+    // leg_joint1、leg_joint2、leg_joint3、body_joint；left_goal/right_goal
+    // 至少提供一个。
+    bool solveWholeBodyIK(
+        const Eigen::VectorXd& q_init,
+        const std::optional<Eigen::Isometry3d>& left_goal,
+        const std::optional<Eigen::Isometry3d>& right_goal,
+        Eigen::VectorXd& q_res,
+        const std::array<double, 4>& leg_weights =
+            std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
+        double body_pitch_limit_rad = 30.0 * 0.017453292519943295,
+        double timeout_seconds = 10.0,
+        std::size_t max_seed_attempts = 10U,
+        bool enable_collision_avoidance = true);
     bool extractSingleArmJoints(bool is_left,
                                 const std::vector<double>& full_q,
                                 std::vector<double>& arm_q) const;
+    bool extractLegJoints(const std::vector<double>& full_q,
+                          std::vector<double>& leg_q) const;
+    // 将时间参数化后的活动关节向量写回完整配置。活动关节顺序与
+    // planWholeBodyJointSpace 相同，reference_full_q 中的其他关节保持不变。
+    bool mergeWholeBodyJoints(const std::vector<double>& reference_full_q,
+                              bool use_left,
+                              bool use_right,
+                              const std::vector<double>& active_joints,
+                              std::vector<double>& full_q) const;
     bool getFullJointState(std::vector<double>& full_q) const;
 
     // Pinocchio IK 使用模型根坐标系目标。若中央 planning_frame 不是根帧，
@@ -358,6 +395,10 @@ public:
     bool getForwardKinematics(const std::string& source_frame,
                               const std::string& target_frame,
                               Eigen::Matrix4d& T_source_target);
+    bool getFramePoseAtConfiguration(const std::string& source_frame,
+                                     const std::string& target_frame,
+                                     const std::vector<double>& full_q,
+                                     Eigen::Isometry3d& source_to_target);
 
     // Accept full-body q only，全身关节角度格式转换
     Eigen::VectorXd toEigenConfig(const std::vector<double>& full_q) const;
@@ -688,6 +729,16 @@ public:
 
 
 private:
+    bool solveWholeBodyIKOnce(
+        const Eigen::VectorXd& q_init,
+        const std::optional<Eigen::Isometry3d>& left_goal,
+        const std::optional<Eigen::Isometry3d>& right_goal,
+        Eigen::VectorXd& q_res,
+        const std::array<double, 4>& leg_weights,
+        double body_pitch_limit_rad,
+        std::chrono::steady_clock::time_point deadline,
+        bool enable_collision_avoidance);
+
     // Helper to create OMPL setup dynamically based on active joints
     std::shared_ptr<ompl::geometric::SimpleSetup> createPlannerSetup(const std::vector<size_t>& active_indices, 
                                                                      const Eigen::VectorXd& fixed_full_q);

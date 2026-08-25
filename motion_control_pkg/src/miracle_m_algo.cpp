@@ -32,7 +32,11 @@
 */
 
 #include "miracle_m_algo.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <limits>
+#include <random>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/frames.hpp>
@@ -40,8 +44,11 @@
 #include <pinocchio/algorithm/geometry.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
 #include <pinocchio/collision/collision.hpp>
+#include <pinocchio/collision/distance.hpp>
 #include <coal/collision.h>
 #include <coal/shape/geometric_shapes.h>
+// 二次规划(QP)求解器：全身逆解采用 qpOASES 进行速度级数值优化
+#include <qpOASES.hpp>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
 #include <ompl/geometric/planners/rrt/RRTConnect.h>
 #include "sensor_msgs/msg/joint_state.hpp"
@@ -59,6 +66,142 @@
 #include <toppra/solver/seidel.hpp>
 // 或者如果有开启的话：#ifdef BUILD_WITH_qpOASES
 #include <toppra/solver/qpOASES-wrapper.hpp>
+
+namespace
+{
+
+    constexpr double kRadiansToDegrees =
+        180.0 / 3.141592653589793238462643383279502884;
+    constexpr double kDegreesToRadians = 1.0 / kRadiansToDegrees;
+    constexpr double kCcsJoint6ActivationDeg = 20.0;
+    constexpr double kCcsJoint67OffsetDeg = 110.5;
+    constexpr double kCcsJoint67Slope = 1.025;
+    constexpr double kCcsComparisonToleranceDeg = 1.0e-9;
+    constexpr double kCcsNullspaceGain = 0.05;
+    constexpr int kIkLineSearchAttempts = 12;
+    constexpr std::array<double, 5> kSingleArmFallbackJoint6SeedsDeg{
+        0.0, 30.0, -30.0, 50.0, -50.0};
+    constexpr std::array<std::array<double, 2>, 5>
+        kDualArmFallbackJoint6SeedsDeg{{
+            {0.0, 0.0},
+            {30.0, 30.0},
+            {-30.0, -30.0},
+            {30.0, -30.0},
+            {-30.0, 30.0},
+        }};
+
+    bool hasSevenArmJointIndices(
+        const Eigen::VectorXd& q,
+        const std::vector<size_t>& q_indices)
+    {
+        return q_indices.size() == 7U &&
+            std::all_of(q_indices.begin(), q_indices.end(), [&q](size_t index) {
+                return index < static_cast<size_t>(q.size());
+            });
+    }
+
+    double simplifiedCcsJoint7LimitDeg(double joint6_deg)
+    {
+        return kCcsJoint67OffsetDeg -
+            kCcsJoint67Slope * std::abs(joint6_deg);
+    }
+
+    bool passesSimplifiedCcsJoint67Constraint(
+        const Eigen::VectorXd& q,
+        const std::vector<size_t>& q_indices)
+    {
+        if (!hasSevenArmJointIndices(q, q_indices)) {
+            return false;
+        }
+        const double joint6_deg =
+            q[static_cast<Eigen::Index>(q_indices[5])] * kRadiansToDegrees;
+        const double joint7_deg =
+            q[static_cast<Eigen::Index>(q_indices[6])] * kRadiansToDegrees;
+        if (!std::isfinite(joint6_deg) || !std::isfinite(joint7_deg)) {
+            return false;
+        }
+        if (std::abs(joint6_deg) <= kCcsJoint6ActivationDeg) {
+            return true;
+        }
+        const double joint7_limit_deg = simplifiedCcsJoint7LimitDeg(joint6_deg);
+        return joint7_limit_deg >= 0.0 &&
+            std::abs(joint7_deg) <=
+            joint7_limit_deg + kCcsComparisonToleranceDeg;
+    }
+
+    bool projectToSimplifiedCcsJoint67Constraint(
+    Eigen::VectorXd& q,
+    const std::vector<size_t>& q_indices)
+    {
+        if (!hasSevenArmJointIndices(q, q_indices)) {
+            return false;
+        }
+        const Eigen::Index joint6_index =
+            static_cast<Eigen::Index>(q_indices[5]);
+        const Eigen::Index joint7_index =
+            static_cast<Eigen::Index>(q_indices[6]);
+        const double joint6_deg = q[joint6_index] * kRadiansToDegrees;
+        double joint7_deg = q[joint7_index] * kRadiansToDegrees;
+        if (!std::isfinite(joint6_deg) || !std::isfinite(joint7_deg)) {
+            return false;
+        }
+        if (std::abs(joint6_deg) <= kCcsJoint6ActivationDeg) {
+            return true;
+        }
+        const double joint7_limit_deg = simplifiedCcsJoint7LimitDeg(joint6_deg);
+        if (joint7_limit_deg < 0.0) {
+            return false;
+        }
+        joint7_deg = std::clamp(
+            joint7_deg, -joint7_limit_deg, joint7_limit_deg);
+        q[joint7_index] = joint7_deg * kDegreesToRadians;
+        return true;
+    }
+
+    bool setSimplifiedCcsJoint67Seed(
+        Eigen::VectorXd& q,
+        const std::vector<size_t>& q_indices,
+        double joint6_deg)
+    {
+        if (!hasSevenArmJointIndices(q, q_indices) ||
+            !std::isfinite(joint6_deg))
+        {
+            return false;
+        }
+        q[static_cast<Eigen::Index>(q_indices[5])] =
+            joint6_deg * kDegreesToRadians;
+        q[static_cast<Eigen::Index>(q_indices[6])] = 0.0;
+        return passesSimplifiedCcsJoint67Constraint(q, q_indices);
+    }
+
+    void addCcsJoint67CenteringVelocity(
+        const Eigen::VectorXd& q,
+        const std::vector<size_t>& q_indices,
+        const std::vector<int>& v_indices,
+        Eigen::VectorXd& centering_velocity)
+    {
+        if (!hasSevenArmJointIndices(q, q_indices) ||
+            v_indices.size() != 7U ||
+            centering_velocity.size() <= 0)
+        {
+            return;
+        }
+        const int joint6_v_index = v_indices[5];
+        const int joint7_v_index = v_indices[6];
+        if (joint6_v_index < 0 || joint7_v_index < 0 ||
+            joint6_v_index >= centering_velocity.size() ||
+            joint7_v_index >= centering_velocity.size())
+        {
+            return;
+        }
+        centering_velocity[joint6_v_index] =
+            -kCcsNullspaceGain *
+            q[static_cast<Eigen::Index>(q_indices[5])];
+        centering_velocity[joint7_v_index] =
+            -kCcsNullspaceGain *
+            q[static_cast<Eigen::Index>(q_indices[6])];
+    }
+}  // namespace
 
 
 MiracleMAlgo::MiracleMAlgo(const std::string& urdf_path, const std::string& mesh_dir)
@@ -335,19 +478,37 @@ bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
         }
     }
 
+    // The mobile base must not pitch beyond the configured 30 degree safety
+    // limit.  Keep this check in the common full-state validator so that
+    // sampled OMPL and time-parameterized states use the same constraint.
+    if (model_.existFrame("body_link")) {
+        pinocchio::forwardKinematics(model_, *data_, full_q);
+        pinocchio::updateFramePlacements(model_, *data_);
+        const Eigen::Matrix3d& rotation =
+            data_->oMf[model_.getFrameId("body_link")].rotation();
+        const double pitch = std::atan2(
+            -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
+        if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
+            return false;
+        }
+    }
+
     pinocchio::updateGeometryPlacements(model_, *data_, geom_model_, *geom_data_, full_q);
     if (pinocchio::computeCollisions(geom_model_, *geom_data_, false)) {
-        std::cout << "[isFullQValid] Collision detected. Pairs:" << std::endl;
+        std::ostringstream coll_pairs;
         for (size_t k = 0; k < geom_model_.collisionPairs.size(); ++k) {
             if (geom_data_->collisionResults[k].isCollision()) {
                 const auto& pair = geom_model_.collisionPairs[k];
-                std::cout << "  "
-                          << geom_model_.geometryObjects[pair.first].name
-                          << " <--> "
-                          << geom_model_.geometryObjects[pair.second].name
-                          << std::endl;
+                coll_pairs << "  "
+                           << geom_model_.geometryObjects[pair.first].name
+                           << " <--> "
+                           << geom_model_.geometryObjects[pair.second].name
+                           << std::endl;
             }
         }
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "[isFullQValid] Collision detected. Pairs:\n%s",
+                     coll_pairs.str().c_str());
         return false;
     }
 
@@ -431,6 +592,18 @@ bool MiracleMAlgo::isStateValid(const ompl::base::State* state,
             return false;
         }
     }
+
+    if (model_.existFrame("body_link")) {
+        pinocchio::forwardKinematics(model_, *data_, q);
+        pinocchio::updateFramePlacements(model_, *data_);
+        const Eigen::Matrix3d& rotation =
+            data_->oMf[model_.getFrameId("body_link")].rotation();
+        const double pitch = std::atan2(
+            -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
+        if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
+            return false;
+        }
+    }
     
     return !collision;
 }
@@ -490,6 +663,125 @@ bool MiracleMAlgo::planDualArmJointSpace(const std::vector<double>& start_q,
         return true;
     }
     return false;
+}
+
+bool MiracleMAlgo::planWholeBodyJointSpace(
+    const std::vector<double>& start_q,
+    const std::vector<double>& goal_q,
+    bool use_left,
+    bool use_right,
+    std::vector<std::vector<double>>& path)
+{
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    path.clear();
+    if (start_q.size() != static_cast<std::size_t>(model_.nq) ||
+        goal_q.size() != static_cast<std::size_t>(model_.nq) ||
+        (!use_left && !use_right) || leg_q_indices_.empty()) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planWholeBodyJointSpace: invalid configuration size or active joints");
+        return false;
+    }
+
+    std::vector<size_t> active_indices;
+    if (use_left) {
+        active_indices.insert(
+            active_indices.end(), left_arm_q_indices_.begin(), left_arm_q_indices_.end());
+    }
+    if (use_right) {
+        active_indices.insert(
+            active_indices.end(), right_arm_q_indices_.begin(), right_arm_q_indices_.end());
+    }
+    active_indices.insert(
+        active_indices.end(), leg_q_indices_.begin(), leg_q_indices_.end());
+
+    const Eigen::VectorXd fixed_full_q = toEigenConfig(start_q);
+    auto setup = createPlannerSetup(active_indices, fixed_full_q);
+    ompl::base::ScopedState<> start(setup->getStateSpace());
+    ompl::base::ScopedState<> target(setup->getStateSpace());
+    for (std::size_t index = 0; index < active_indices.size(); ++index) {
+        start[index] = start_q[active_indices[index]];
+        target[index] = goal_q[active_indices[index]];
+    }
+    const bool start_valid = isStateValid(start.get(), active_indices, fixed_full_q);
+    const bool target_valid = isStateValid(target.get(), active_indices, fixed_full_q);
+    if (!start_valid || !target_valid) {
+        const auto report_invalid_state = [&](const char* label,
+                                               const ompl::base::State* state) {
+            Eigen::VectorXd full_q = fixed_full_q;
+            const auto* values = state->as<
+                ompl::base::RealVectorStateSpace::StateType>();
+            for (std::size_t index = 0; index < active_indices.size(); ++index) {
+                full_q[active_indices[index]] = values->values[index];
+            }
+            pinocchio::updateGeometryPlacements(
+                model_, *data_, geom_model_, *geom_data_, full_q);
+            if (pinocchio::computeCollisions(geom_model_, *geom_data_, false)) {
+                for (std::size_t pair_index = 0;
+                     pair_index < geom_model_.collisionPairs.size(); ++pair_index) {
+                    if (geom_data_->collisionResults[pair_index].isCollision()) {
+                        const auto& pair = geom_model_.collisionPairs[pair_index];
+                        RCLCPP_ERROR(
+                            rclcpp::get_logger("MiracleMAlgo"),
+                            "planWholeBodyJointSpace: %s collision: %s <--> %s",
+                            label,
+                            geom_model_.geometryObjects[pair.first].name.c_str(),
+                            geom_model_.geometryObjects[pair.second].name.c_str());
+                    }
+                }
+            } else {
+                RCLCPP_ERROR(
+                    rclcpp::get_logger("MiracleMAlgo"),
+                    "planWholeBodyJointSpace: %s rejected by joint/body constraints",
+                    label);
+            }
+        };
+        if (!start_valid) {
+            report_invalid_state("start", start.get());
+        }
+        if (!target_valid) {
+            report_invalid_state("goal", target.get());
+        }
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planWholeBodyJointSpace: start or goal state is invalid");
+        return false;
+    }
+    bool same_state = true;
+    for (std::size_t index = 0; index < active_indices.size(); ++index) {
+        if (std::abs(start[index] - target[index]) > 1e-10) {
+            same_state = false;
+            break;
+        }
+    }
+    if (same_state) {
+        path = {start_q, goal_q};
+        return true;
+    }
+    setup->setStartAndGoalStates(start, target);
+    if (!setup->solve(5.0)) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planWholeBodyJointSpace: OMPL failed to find a path");
+        return false;
+    }
+
+    setup->simplifySolution();
+    ompl::geometric::PathGeometric& solution = setup->getSolutionPath();
+    if (solution.getStateCount() > 2U) {
+        solution.interpolate(solution.getStateCount() * 10U);
+    }
+    path.reserve(solution.getStateCount());
+    for (std::size_t state_index = 0; state_index < solution.getStateCount(); ++state_index) {
+        const auto* state = solution.getState(state_index)->as<
+            ompl::base::RealVectorStateSpace::StateType>();
+        std::vector<double> full_q = start_q;
+        for (std::size_t joint_index = 0; joint_index < active_indices.size(); ++joint_index) {
+            full_q[active_indices[joint_index]] = state->values[joint_index];
+        }
+        path.push_back(std::move(full_q));
+    }
+    return path.size() >= 2U;
 }
 
 // --- Single Arm Implementations ---
@@ -603,6 +895,28 @@ bool MiracleMAlgo::getForwardKinematics(const std::string& source_frame,
     return true;
 }
 
+bool MiracleMAlgo::getFramePoseAtConfiguration(
+    const std::string& source_frame,
+    const std::string& target_frame,
+    const std::vector<double>& full_q,
+    Eigen::Isometry3d& source_to_target)
+{
+    if (full_q.size() != static_cast<size_t>(model_.nq) ||
+        !model_.existFrame(source_frame) || !model_.existFrame(target_frame)) {
+        return false;
+    }
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    const Eigen::VectorXd q = toEigenConfig(full_q);
+    pinocchio::forwardKinematics(model_, *data_, q);
+    pinocchio::updateFramePlacements(model_, *data_);
+    const auto source_id = model_.getFrameId(source_frame);
+    const auto target_id = model_.getFrameId(target_frame);
+    source_to_target = Eigen::Isometry3d::Identity();
+    source_to_target.matrix() =
+        data_->oMf[source_id].actInv(data_->oMf[target_id]).toHomogeneousMatrix();
+    return source_to_target.matrix().allFinite();
+}
+
 
 
 // --- Inverse Kinematics ---
@@ -611,8 +925,8 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
                               Eigen::VectorXd& q_res,
                               int mode) {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
-    double eps = 1e-5;
-    const int IT_MAX = 2000;
+    double eps = 5e-5;
+    const int IT_MAX = 1000;
     const double DT = 0.5;
     const double damp = 1e-4;
 
@@ -623,14 +937,17 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
     //     << "\n[SolveIK] oMdes rotation:\n" << oMdes.rotation());
 
     pinocchio::FrameIndex ee_id = 0;
+    const std::vector<size_t>* active_q = nullptr;
     const std::vector<int>* active_v = nullptr;
     const char* mode_name = "";
     if (mode == 0) {
         ee_id = left_ee_frame_id_;
+        active_q = &left_arm_q_indices_;
         active_v = &left_arm_v_indices_;
         mode_name = "Left arm";
     } else if (mode == 1) {
         ee_id = right_ee_frame_id_;
+        active_q = &right_arm_q_indices_;
         active_v = &right_arm_v_indices_;
         mode_name = "Right arm";
     } else if (mode == 3) {
@@ -659,9 +976,19 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
     mark_active(*active_v);
 
     q_res = q_init;
+    if (active_q != nullptr &&
+        !passesSimplifiedCcsJoint67Constraint(q_res, *active_q))
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveIK: %s initial state violates simplified CCS J6/J7 constraint",
+            mode_name);
+        return false;
+    }
     Eigen::MatrixXd J_tmp(6, model_.nv);
 
     bool success = false;
+    size_t next_fallback_seed = 0U;
 
     // std::cout << "ee id: " << ee_id << std::endl;
 
@@ -700,14 +1027,17 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
         //打印误差
         // RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "[SolveIK] err norm: %f", err.norm());
 
-        if (err.norm() < eps) {
+        if (err.norm() < eps &&
+            (active_q == nullptr ||
+            passesSimplifiedCcsJoint67Constraint(q_res, *active_q)))
+        {
             success = true;
             RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "solveIK: %s IK converged in %d iterations. Error norm: %f", mode_name, i, err.norm());
             break;
         }
 
         J_tmp.setZero();
-         pinocchio::getFrameJacobian(model_, *data_, ee_id, pinocchio::LOCAL, J_tmp);
+        pinocchio::getFrameJacobian(model_, *data_, ee_id, pinocchio::LOCAL, J_tmp);
         // pinocchio::computeFrameJacobian(model_, *data_, q_res, ee_id, pinocchio::LOCAL, J_tmp);
 
         // Mask out non-active joints该掩码用于过滤掉非活动关节，只考虑活动关节的Jacobian
@@ -719,20 +1049,105 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
 
         Eigen::MatrixXd JJt = J_tmp * J_tmp.transpose();
         JJt.diagonal().array() += damp;
-        
-        Eigen::VectorXd v = J_tmp.transpose() * JJt.ldlt().solve(err);
-        q_res = pinocchio::integrate(model_, q_res, v * DT);
-        
-        // Ensure q_res stays within limits(假设只有1自由度简单关节。如果有浮动基，不能这样遍历!)
-        for (int j = 0; j < model_.nq; ++j) {
-            if (q_res[j] < model_.lowerPositionLimit[j]) {
-                q_res[j] = model_.lowerPositionLimit[j];
-                // RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),"%s Joint %d is below lower limit", __func__, j);
+
+        const auto jj_solver = JJt.ldlt();
+        Eigen::VectorXd v = J_tmp.transpose() * jj_solver.solve(err);
+        if (active_q != nullptr) {
+            // Keep the Cartesian task primary while using arm redundancy to
+            // bias J6/J7 toward the center of the simplified CCS envelope.
+            const Eigen::MatrixXd damped_pseudo_inverse =
+                J_tmp.transpose() * jj_solver.solve(
+                Eigen::MatrixXd::Identity(6, 6));
+            const Eigen::MatrixXd nullspace_projector =
+                Eigen::MatrixXd::Identity(model_.nv, model_.nv) -
+                damped_pseudo_inverse * J_tmp;
+            Eigen::VectorXd centering_velocity =
+                Eigen::VectorXd::Zero(model_.nv);
+            addCcsJoint67CenteringVelocity(
+                q_res, *active_q, *active_v, centering_velocity);
+            v += nullspace_projector * centering_velocity;
+
+            const double current_error_norm = err.norm();
+            bool step_accepted = false;
+            // Project every trial into the hard CCS envelope and only accept
+            // it after recomputing FK and confirming that pose error falls.
+            for (int attempt = 0;
+                attempt < kIkLineSearchAttempts; ++attempt)
+            {
+                const double step_scale = std::ldexp(1.0, -attempt);
+                Eigen::VectorXd candidate = pinocchio::integrate(
+                    model_, q_res, v * (DT * step_scale));
+                for (int j = 0; j < model_.nq; ++j) {
+                    candidate[j] = std::clamp(
+                        candidate[j], model_.lowerPositionLimit[j],
+                        model_.upperPositionLimit[j]);
+                }
+                if (!projectToSimplifiedCcsJoint67Constraint(
+                    candidate, *active_q) ||
+                    !passesSimplifiedCcsJoint67Constraint(
+                    candidate, *active_q))
+                {
+                    continue;
+                }
+
+                pinocchio::forwardKinematics(model_, *data_, candidate);
+                pinocchio::updateFramePlacements(model_, *data_);
+                const pinocchio::SE3 candidate_iMd =
+                    data_->oMf[ee_id].actInv(oMdes);
+                const double candidate_error_norm =
+                    pinocchio::log6(candidate_iMd).toVector().norm();
+                if (std::isfinite(candidate_error_norm) &&
+                    candidate_error_norm < current_error_norm)
+                {
+                    q_res = std::move(candidate);
+                    step_accepted = true;
+                    break;
+                }
             }
-            if (q_res[j] > model_.upperPositionLimit[j]){
-                q_res[j] = model_.upperPositionLimit[j];
-                // RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),"%s Joint %d is above upper limit", __func__, j);
-            } 
+            if (!step_accepted) {
+                bool reseeded = false;
+                while (next_fallback_seed <
+                    kSingleArmFallbackJoint6SeedsDeg.size() && !reseeded)
+                {
+                    q_res = q_init;
+                    const double seed_joint6_deg =
+                        kSingleArmFallbackJoint6SeedsDeg[next_fallback_seed++];
+                    reseeded = setSimplifiedCcsJoint67Seed(
+                        q_res, *active_q, seed_joint6_deg);
+                    for (int j = 0; reseeded && j < model_.nq; ++j) {
+                        q_res[j] = std::clamp(
+                            q_res[j], model_.lowerPositionLimit[j],
+                            model_.upperPositionLimit[j]);
+                    }
+                    reseeded = reseeded &&
+                        projectToSimplifiedCcsJoint67Constraint(
+                        q_res, *active_q) &&
+                        passesSimplifiedCcsJoint67Constraint(
+                        q_res, *active_q);
+                    if (reseeded) {
+                        RCLCPP_WARN(
+                            rclcpp::get_logger("MiracleMAlgo"),
+                            "solveIK: %s retrying with J6 seed %.1f deg and J7 seed 0 deg",
+                            mode_name, seed_joint6_deg);
+                    }
+                }
+                if (reseeded) {
+                    continue;
+                }
+                RCLCPP_ERROR(
+                    rclcpp::get_logger("MiracleMAlgo"),
+                    "solveIK: %s could not find a CCS-valid descending step at iteration %d",
+                    mode_name, i);
+                return false;
+            }
+        } else {
+            q_res = pinocchio::integrate(model_, q_res, v * DT);
+            // 头部和下肢维持原有独立关节限位处理。
+            for (int j = 0; j < model_.nq; ++j) {
+                q_res[j] = std::clamp(
+                    q_res[j], model_.lowerPositionLimit[j],
+                    model_.upperPositionLimit[j]);
+            }
         }
     }
     
@@ -747,8 +1162,8 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
                                   const Eigen::Isometry3d& right_goal,
                                   Eigen::VectorXd& q_res) {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
-    const double eps = 1e-5;
-    const int IT_MAX = 2000;
+    const double eps = 5e-5;
+    const int IT_MAX = 1000;
     const double DT = 0.5;
     const double damp = 1e-4;
 
@@ -767,21 +1182,38 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
     mark_active(right_arm_v_indices_);
 
     q_res = q_init;
+    if (!passesSimplifiedCcsJoint67Constraint(
+        q_res, left_arm_q_indices_) ||
+        !passesSimplifiedCcsJoint67Constraint(
+        q_res, right_arm_q_indices_))
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "solveDualIK: initial state violates simplified CCS J6/J7 constraint");
+        return false;
+    }
     Eigen::MatrixXd J_left(6, model_.nv);
     Eigen::MatrixXd J_right(6, model_.nv);
 
     bool success = false;
+    size_t next_fallback_seed = 0U;
     Eigen::VectorXd err_left(6);
     Eigen::VectorXd err_right(6);
     for (int i=0; i<IT_MAX; i++) {
-        pinocchio::forwardKinematics(model_, *data_, q_res);
+        // pinocchio::forwardKinematics(model_, *data_, q_res);
+        pinocchio::computeJointJacobians(model_, *data_, q_res);
         pinocchio::updateFramePlacements(model_, *data_);
 
         const pinocchio::SE3 iMd_left = data_->oMf[left_ee_frame_id_].actInv(oMdes_left);
         const pinocchio::SE3 iMd_right = data_->oMf[right_ee_frame_id_].actInv(oMdes_right);
         err_left = pinocchio::log6(iMd_left).toVector();
         err_right = pinocchio::log6(iMd_right).toVector();
-        if (err_left.norm() < eps && err_right.norm() < eps) {
+        if (err_left.norm() < eps && err_right.norm() < eps &&
+            passesSimplifiedCcsJoint67Constraint(
+            q_res, left_arm_q_indices_) &&
+            passesSimplifiedCcsJoint67Constraint(
+            q_res, right_arm_q_indices_))
+        {
             success = true;
             RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "solveDualIK: converged in %d iterations. Left err: %f, Right err: %f", i, err_left.norm(), err_right.norm());
             break;
@@ -789,8 +1221,10 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
 
         J_left.setZero();
         J_right.setZero();
-        pinocchio::computeFrameJacobian(model_, *data_, q_res, left_ee_frame_id_, pinocchio::LOCAL, J_left);
-        pinocchio::computeFrameJacobian(model_, *data_, q_res, right_ee_frame_id_, pinocchio::LOCAL, J_right);
+        pinocchio::getFrameJacobian(model_, *data_, left_ee_frame_id_, pinocchio::LOCAL, J_left);
+        pinocchio::getFrameJacobian(model_, *data_, right_ee_frame_id_, pinocchio::LOCAL, J_right);
+        // pinocchio::computeFrameJacobian(model_, *data_, q_res, left_ee_frame_id_, pinocchio::LOCAL, J_left);
+        // pinocchio::computeFrameJacobian(model_, *data_, q_res, right_ee_frame_id_, pinocchio::LOCAL, J_right);
 
         Eigen::MatrixXd J(12, model_.nv);
         J << J_left, J_right;
@@ -807,12 +1241,111 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
         Eigen::MatrixXd JJt = J * J.transpose();
         JJt.diagonal().array() += damp;
 
-        Eigen::VectorXd v = J.transpose() * JJt.ldlt().solve(err);
-        q_res = pinocchio::integrate(model_, q_res, v * DT);
+        const auto jj_solver = JJt.ldlt();
+        Eigen::VectorXd v = J.transpose() * jj_solver.solve(err);
+        // Each arm contributes one redundant direction; center both wrist
+        // pairs without changing the primary dual Cartesian task.
+        const Eigen::MatrixXd damped_pseudo_inverse =
+            J.transpose() * jj_solver.solve(
+            Eigen::MatrixXd::Identity(12, 12));
+        const Eigen::MatrixXd nullspace_projector =
+            Eigen::MatrixXd::Identity(model_.nv, model_.nv) -
+            damped_pseudo_inverse * J;
+        Eigen::VectorXd centering_velocity =
+            Eigen::VectorXd::Zero(model_.nv);
+        addCcsJoint67CenteringVelocity(
+            q_res, left_arm_q_indices_, left_arm_v_indices_,
+            centering_velocity);
+        addCcsJoint67CenteringVelocity(
+            q_res, right_arm_q_indices_, right_arm_v_indices_,
+            centering_velocity);
+        v += nullspace_projector * centering_velocity;
 
-        for (int j = 0; j < model_.nq; ++j) {
-            if (q_res[j] < model_.lowerPositionLimit[j]) q_res[j] = model_.lowerPositionLimit[j];
-            if (q_res[j] > model_.upperPositionLimit[j]) q_res[j] = model_.upperPositionLimit[j];
+        const double current_error_norm = err.norm();
+        bool step_accepted = false;
+        // A dual-arm trial is accepted only if both CCS envelopes hold and
+        // the combined left/right Cartesian error decreases.
+        for (int attempt = 0;
+            attempt < kIkLineSearchAttempts; ++attempt)
+        {
+            const double step_scale = std::ldexp(1.0, -attempt);
+            Eigen::VectorXd candidate = pinocchio::integrate(
+                model_, q_res, v * (DT * step_scale));
+            for (int j = 0; j < model_.nq; ++j) {
+                candidate[j] = std::clamp(
+                    candidate[j], model_.lowerPositionLimit[j],
+                    model_.upperPositionLimit[j]);
+            }
+            if (!projectToSimplifiedCcsJoint67Constraint(
+                candidate, left_arm_q_indices_) ||
+                !projectToSimplifiedCcsJoint67Constraint(
+                candidate, right_arm_q_indices_) ||
+                !passesSimplifiedCcsJoint67Constraint(
+                candidate, left_arm_q_indices_) ||
+                !passesSimplifiedCcsJoint67Constraint(
+                candidate, right_arm_q_indices_))
+            {
+                continue;
+            }
+
+            pinocchio::forwardKinematics(model_, *data_, candidate);
+            pinocchio::updateFramePlacements(model_, *data_);
+            const Eigen::VectorXd candidate_err_left = pinocchio::log6(
+                data_->oMf[left_ee_frame_id_].actInv(oMdes_left)).toVector();
+            const Eigen::VectorXd candidate_err_right = pinocchio::log6(
+                data_->oMf[right_ee_frame_id_].actInv(oMdes_right)).toVector();
+            const double candidate_error_norm = std::sqrt(
+                candidate_err_left.squaredNorm() +
+                candidate_err_right.squaredNorm());
+            if (std::isfinite(candidate_error_norm) &&
+                candidate_error_norm < current_error_norm)
+            {
+                q_res = std::move(candidate);
+                step_accepted = true;
+                break;
+            }
+        }
+        if (!step_accepted) {
+            bool reseeded = false;
+            while (next_fallback_seed <
+                kDualArmFallbackJoint6SeedsDeg.size() && !reseeded)
+            {
+                q_res = q_init;
+                const auto& seed =
+                    kDualArmFallbackJoint6SeedsDeg[next_fallback_seed++];
+                reseeded = setSimplifiedCcsJoint67Seed(
+                    q_res, left_arm_q_indices_, seed[0]) &&
+                    setSimplifiedCcsJoint67Seed(
+                    q_res, right_arm_q_indices_, seed[1]);
+                for (int j = 0; reseeded && j < model_.nq; ++j) {
+                    q_res[j] = std::clamp(
+                        q_res[j], model_.lowerPositionLimit[j],
+                        model_.upperPositionLimit[j]);
+                }
+                reseeded = reseeded &&
+                    projectToSimplifiedCcsJoint67Constraint(
+                    q_res, left_arm_q_indices_) &&
+                    projectToSimplifiedCcsJoint67Constraint(
+                    q_res, right_arm_q_indices_) &&
+                    passesSimplifiedCcsJoint67Constraint(
+                    q_res, left_arm_q_indices_) &&
+                    passesSimplifiedCcsJoint67Constraint(
+                    q_res, right_arm_q_indices_);
+                if (reseeded) {
+                    RCLCPP_WARN(
+                        rclcpp::get_logger("MiracleMAlgo"),
+                        "solveDualIK: retrying with left/right J6 seeds %.1f/%.1f deg and J7 seeds 0 deg",
+                        seed[0], seed[1]);
+                }
+            }
+            if (reseeded) {
+                continue;
+            }
+            RCLCPP_ERROR(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "solveDualIK: could not find a CCS-valid descending step at iteration %d",
+                i);
+            return false;
         }
     }
 
@@ -824,6 +1357,667 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
     //std::cout << "[SolveIK] Right arm IK result: " << q_res(right_arm_q_indices_).transpose() << std::endl;
     return success;
 }
+
+// =============================================================================
+// 全身运动学逆解：基于速度级二次规划(QP)的方法
+// -----------------------------------------------------------------------------
+// 数学模型(每步迭代求解一次 QP)：
+//   min  0.5 * dq' H dq + dq' g
+//   s.t. lb <= dq <= ub               (a) 关节位置限位约束 -> 位移边界
+//        lbA <= A dq <= ubA           (b) 自碰撞避免约束(最近点距离雅可比)
+// 其中：
+//   H = 2 (J'J + diag(W)) ,  g = -2 J' e      (任务跟踪 + 姿态正则)
+//   J 为活动关节(被请求手臂 + 腿部)到末端速度的雅可比，e 为 log6 位姿误差
+//   W 为姿态正则权重：手臂小(自由运动)、腿部大(保持在 q_init 附近)
+// 单臂模式仅激活对应手臂 + 腿部；双臂模式激活双臂 + 腿部。
+// 采用 qpOASES 求解；并以回溯线搜索保证关节限位/自碰撞不被违反(线性化安全网)。
+// =============================================================================
+bool MiracleMAlgo::solveWholeBodyIKOnce(
+    const Eigen::VectorXd& q_init,
+    const std::optional<Eigen::Isometry3d>& left_goal,
+    const std::optional<Eigen::Isometry3d>& right_goal,
+    Eigen::VectorXd& q_res,
+    const std::array<double, 4>& leg_weights,
+    double body_pitch_limit_rad,
+    std::chrono::steady_clock::time_point deadline,
+    bool enable_collision_avoidance)
+{
+    // pinocchio 工作区(Data/GeometryData)非线程安全，且与 FK/碰撞回调共享，
+    // 必须通过可重入锁串行访问。
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+
+    // --- 输入校验 ---
+    if (q_init.size() != model_.nq) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "solveWholeBodyIKOnce: q_init size=%d, expected=%d",
+                     static_cast<int>(q_init.size()), model_.nq);
+        return false;
+    }
+    if (!left_goal && !right_goal) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "solveWholeBodyIKOnce: 至少需提供一个手臂目标位姿");
+        return false;
+    }
+    if (left_goal && !left_goal->matrix().allFinite()) return false;
+    if (right_goal && !right_goal->matrix().allFinite()) return false;
+
+    // --- 构造活动关节速度索引表 ---
+    // 活动关节 = 被请求的末端手臂(每臂 7) + 腿部/躯干(4)。
+    // 腿部参与以保证手臂可达性并通过加权最小二乘保持在 q_init 附近；头部不参与。
+    std::vector<int> active_v;
+    active_v.reserve(left_arm_v_indices_.size() + right_arm_v_indices_.size() +
+                     leg_v_indices_.size());
+    auto push_unique = [&](const std::vector<int>& idxs) {
+        for (int idx : idxs) {
+            if (std::find(active_v.begin(), active_v.end(), idx) == active_v.end())
+                active_v.push_back(idx);
+        }
+    };
+    if (left_goal)  push_unique(left_arm_v_indices_);
+    if (right_goal) push_unique(right_arm_v_indices_);
+    push_unique(leg_v_indices_);
+    const int n_active = static_cast<int>(active_v.size());
+    if (n_active <= 0) return false;
+
+    // 末端目标列表(单臂或双臂)
+    struct EEGoal { pinocchio::FrameIndex frame_id; pinocchio::SE3 oMdes; };
+    std::vector<EEGoal> goals;
+    if (left_goal)
+        goals.push_back({left_ee_frame_id_,
+                         pinocchio::SE3(left_goal->rotation(), left_goal->translation())});
+    if (right_goal)
+        goals.push_back({right_ee_frame_id_,
+                         pinocchio::SE3(right_goal->rotation(), right_goal->translation())});
+    const int n_ee = static_cast<int>(goals.size());
+    const int n_task = 6 * n_ee;  // 任务空间维度
+
+    // --- 活动速度索引 -> 关节(q)索引及位置限位的映射 ---
+    std::vector<int> active_q(n_active);
+    Eigen::VectorXd lower_pos(n_active), upper_pos(n_active);
+    for (int j = 0; j < n_active; ++j) {
+        const int v_idx = active_v[j];
+        int q_idx = v_idx;  // 单自由度关节 idx_q == idx_v，作为回退
+        for (pinocchio::JointIndex jid = 1; jid < model_.joints.size(); ++jid) {
+            if (model_.joints[jid].idx_v() == v_idx) {
+                q_idx = model_.joints[jid].idx_q();
+                break;
+            }
+        }
+        active_q[j] = q_idx;
+        lower_pos[j] = model_.lowerPositionLimit[q_idx];
+        upper_pos[j] = model_.upperPositionLimit[q_idx];
+    }
+
+    // --- 姿态正则权重(对角) ---
+    // 手臂小权重(自由运动)、腿部按 leg_weights(大权重,保持原位)。
+    const double arm_reg = 5.0e-2;  // 用户指定: 0.05 (5:1 leg:arm 比值)
+    Eigen::VectorXd W = Eigen::VectorXd::Zero(n_active);
+    for (int j = 0; j < n_active; ++j) {
+        bool is_leg = false;
+        for (size_t k = 0; k < leg_v_indices_.size(); ++k) {
+            if (leg_v_indices_[k] == active_v[j]) {
+                W[j] = std::max(1.0e-6, leg_weights[k]);
+                is_leg = true;
+                break;
+            }
+        }
+        if (!is_leg) W[j] = arm_reg;
+    }
+
+    // body_joint(躯干俯仰)索引(leg_v_indices_ 末项按构造顺序为 body_joint)
+    int body_q_idx = -1;
+    if (!leg_v_indices_.empty()) {
+        const int body_v_idx = leg_v_indices_.back();
+        for (int j = 0; j < n_active; ++j) {
+            if (active_v[j] == body_v_idx) { body_q_idx = active_q[j]; break; }
+        }
+    }
+
+    // --- 迭代参数 ---
+    const double eps = 1.4e-4;     // 收敛阈值(6D误差范数: 均匀分布时 ~0.1mm + ~0.008°)
+    const int IT_MAX = 600;          // 最大迭代次数
+    // 自适应步长: 接近目标时误差小、二阶非线性占比大，大步长会过冲形成极限环
+    // (表现为 err 在 mm 级震荡不收敛)，按误差分级收紧步长。
+    auto step_limit = [](double err_norm) {
+        if (err_norm < 0.01) return 0.01;
+        if (err_norm < 0.05) return 0.05;
+        return 0.30;
+    };
+    const double safety_margin = 0.01;  // 关节限位安全余量(rad)
+    const double d_safe = 0.04;      // 自碰撞安全距离阈值(m)
+    const double coll_gain = 1.0;   // 自碰撞约束增益(=1:线性化下不越过安全距离)
+
+    // 反对称矩阵：skew(r) * w == r x w
+    auto skew = [](const Eigen::Vector3d& r) {
+        Eigen::Matrix3d s;
+        s << 0.0, -r.z(), r.y(),
+             r.z(), 0.0, -r.x(),
+             -r.y(), r.x(), 0.0;
+        return s;
+    };
+
+    q_res = q_init;
+    Eigen::VectorXd q = q_init;
+    bool success = false;
+
+    Eigen::MatrixXd J_full(n_task, n_active);    // 任务雅可比(活动列)
+    Eigen::MatrixXd J_ee(6, model_.nv);           // 末端帧全雅可比(LOCAL)
+    Eigen::MatrixXd J_joint(6, model_.nv);       // 关节全雅可比(WORLD,用于最近点)
+    Eigen::VectorXd err(n_task);
+
+    for (int iter = 0; iter < IT_MAX; ++iter) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            RCLCPP_WARN(rclcpp::get_logger("MiracleMAlgo"),
+                        "solveWholeBodyIKOnce: 迭代超时(iter=%d)", iter);
+            break;
+        }
+
+        // 1) 运动学与雅可比(computeJointJacobians 内部已执行 FK)
+        pinocchio::computeJointJacobians(model_, *data_, q);
+        pinocchio::updateFramePlacements(model_, *data_);
+
+        // 2) 任务误差与雅可比(LOCAL 帧，与 log6 误差一致)
+        for (int e = 0; e < n_ee; ++e) {
+            const pinocchio::SE3 iMd = data_->oMf[goals[e].frame_id].actInv(goals[e].oMdes);
+            err.segment<6>(6 * e) = pinocchio::log6(iMd).toVector();
+            J_ee.setZero();
+            pinocchio::getFrameJacobian(model_, *data_, goals[e].frame_id,
+                                        pinocchio::LOCAL, J_ee);
+            // 抽取活动速度列，组成活动雅可比
+            for (int j = 0; j < n_active; ++j)
+                J_full.block(6 * e, j, 6, 1) = J_ee.col(active_v[j]);
+        }
+
+        // if (iter == 0) {
+        //     std::ostringstream qdiag;
+        //     for (size_t k = 0; k < leg_v_indices_.size(); ++k) {
+        //         const int v = leg_v_indices_[k];
+        //         int qi = v;
+        //         for (pinocchio::JointIndex jid = 1; jid < model_.joints.size(); ++jid)
+        //             if (model_.joints[jid].idx_v() == v) { qi = model_.joints[jid].idx_q(); break; }
+        //         qdiag << " L" << k << "=" << q[qi];
+        //     }
+        //     for (size_t k = 0; k < left_arm_v_indices_.size() && (bool)left_goal; ++k) {
+        //         const int v = left_arm_v_indices_[k];
+        //         int qi = v;
+        //         for (pinocchio::JointIndex jid = 1; jid < model_.joints.size(); ++jid)
+        //             if (model_.joints[jid].idx_v() == v) { qi = model_.joints[jid].idx_q(); break; }
+        //         qdiag << " A" << k << "=" << q[qi];
+        //     }
+        //     // 直接打印 q.head(min(18,nq)) 原始值，验证映射
+        //     std::ostringstream qraw;
+        //     const int raw_n = std::min(18, (int)q.size());
+        //     for (int i = 0; i < raw_n; ++i) qraw << " q[" << i << "]=" << q[i];
+        //     qraw << " sum=" << q.sum();
+        //     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+        //                 "solveWholeBodyIKOnce: iter=0 err_norm=%.6f (eps=%.3f), mapped_q: %s",
+        //                 err.norm(), eps, qdiag.str().c_str());
+        //     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+        //                 "solveWholeBodyIKOnce: iter=0 raw_q: %s; nq=%d nv=%d",
+        //                 qraw.str().c_str(), (int)model_.nq, (int)model_.nv);
+        //     // 打印 base_link 在 universe 系的 placement，验证 FK 原点
+        //     if (model_.existFrame("base_link")) {
+        //         const pinocchio::SE3& b = data_->oMf[model_.getFrameId("base_link")];
+        //         RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+        //                     "  base_link in universe: p=[%.5f,%.5f,%.5f]; q=[%.5f,%.5f,%.5f,%.5f]",
+        //                     b.translation().x(), b.translation().y(), b.translation().z(),
+        //                     Eigen::Quaterniond(b.rotation()).x(),
+        //                     Eigen::Quaterniond(b.rotation()).y(),
+        //                     Eigen::Quaterniond(b.rotation()).z(),
+        //                     Eigen::Quaterniond(b.rotation()).w());
+        //     }
+        //     // 打印前 5 个 frame 名（看 model frames 顺序）
+        //     {
+        //         std::ostringstream os;
+        //         const int nf = std::min(8, (int)model_.frames.size());
+        //         for (int f = 0; f < nf; ++f)
+        //             os << " f" << f << "=" << model_.frames[f].name
+        //                << "(pj=" << model_.frames[f].parentJoint << ")";
+        //         RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+        //                     "  frames[0..%d]: %s", nf-1, os.str().c_str());
+        //     }
+        //     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+        //                 "solveWholeBodyIKOnce: iter=0 seed_err=%.6f eps=%.3f; n_ee=%d n_active=%d",
+        //                 err.norm(), eps, n_ee, n_active);
+        //     for (int e = 0; e < n_ee; ++e) {
+        //         const Eigen::Vector3d p_actual = data_->oMf[goals[e].frame_id].translation();
+        //         const Eigen::Vector3d p_target = goals[e].oMdes.translation();
+        //         const Eigen::Quaterniond q_actual(data_->oMf[goals[e].frame_id].rotation());
+        //         const Eigen::Quaterniond q_target(goals[e].oMdes.rotation());
+        //         RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+        //                     "  EE%d: actual_p=[%.5f,%.5f,%.5f] target_p=[%.5f,%.5f,%.5f]; actual_q=[%.5f,%.5f,%.5f,%.5f] target_q=[%.5f,%.5f,%.5f,%.5f]",
+        //                     e, p_actual.x(), p_actual.y(), p_actual.z(),
+        //                     p_target.x(), p_target.y(), p_target.z(),
+        //                     q_actual.x(), q_actual.y(), q_actual.z(), q_actual.w(),
+        //                     q_target.x(), q_target.y(), q_target.z(), q_target.w());
+        //     }
+        // }
+
+        if (iter % 100 == 0 && iter > 0) {
+            RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+                        "solveWholeBodyIKOnce: iter=%d err_norm=%.6f",
+                        iter, err.norm());
+        }
+
+        if (err.norm() < eps) { success = true; break; }
+
+        // 3) 更新几何体位姿并计算自碰撞距离(若启用)
+        //    仅对距离 < d_safe 的碰撞对构造不等式约束，保证 QP 规模精简。
+        std::vector<Eigen::RowVectorXd> A_rows;  // 每行 1 x n_active
+        std::vector<double> lbA_rows, ubA_rows;
+        if (enable_collision_avoidance) {
+            pinocchio::updateGeometryPlacements(model_, *data_, geom_model_,
+                                                *geom_data_, q);
+            pinocchio::computeDistances(geom_model_, *geom_data_);
+            const auto& pairs = geom_model_.collisionPairs;
+            for (size_t k = 0; k < pairs.size(); ++k) {
+                const auto& dr = geom_data_->distanceResults[k];
+                if (!std::isfinite(dr.min_distance)) continue;
+                const double d = dr.min_distance;
+                if (d >= d_safe) continue;  // 距离足够远，无需约束
+
+                const Eigen::Vector3d& p1 = dr.nearest_points[0];  // 属于 obj0
+                const Eigen::Vector3d& p2 = dr.nearest_points[1];  // 属于 obj1
+                // coal 约定：normal 由 o1 指向 o2，即 (p2 - p1)/d
+                Eigen::Vector3d nrm = dr.normal;
+                if (!nrm.allFinite() || nrm.norm() < 1.0e-9) {
+                    nrm = p2 - p1;
+                    if (nrm.norm() < 1.0e-9) continue;
+                }
+                nrm.normalize();
+                if (!nrm.allFinite()) continue;
+
+                const auto& cp = pairs[k];
+                const auto& go0 = geom_model_.geometryObjects[cp.first];
+                const auto& go1 = geom_model_.geometryObjects[cp.second];
+                const pinocchio::JointIndex j0 = go0.parentJoint;
+                const pinocchio::JointIndex j1 = go1.parentJoint;
+
+                // 最近点线速度雅可比(世界系)：
+                //   v_p = v_origin + w x (p - origin) = (Jv - skew(r) Jw) dq
+                // (pinocchio Jacobian 行序：topRows(3)=LINEAR, bottomRows(3)=ANGULAR)
+                Eigen::MatrixXd Jp0 = Eigen::MatrixXd::Zero(3, model_.nv);
+                Eigen::MatrixXd Jp1 = Eigen::MatrixXd::Zero(3, model_.nv);
+                if (j0 > 0 && j0 < model_.joints.size()) {
+                    J_joint.setZero();
+                    pinocchio::getJointJacobian(model_, *data_, j0,
+                                                pinocchio::WORLD, J_joint);
+                    const Eigen::Vector3d o0 = data_->oMi[j0].translation();
+                    const Eigen::Vector3d r0 = p1 - o0;
+                    Jp0 = J_joint.topRows(3) - skew(r0) * J_joint.bottomRows(3);
+                }
+                if (j1 > 0 && j1 < model_.joints.size()) {
+                    J_joint.setZero();
+                    pinocchio::getJointJacobian(model_, *data_, j1,
+                                                pinocchio::WORLD, J_joint);
+                    const Eigen::Vector3d o1 = data_->oMi[j1].translation();
+                    const Eigen::Vector3d r1 = p2 - o1;
+                    Jp1 = J_joint.topRows(3) - skew(r1) * J_joint.bottomRows(3);
+                }
+                // 距离变化率 d_dot = n . (v_p2 - v_p1) = n'(Jp1 - Jp0) dq
+                const Eigen::RowVectorXd A_full = nrm.transpose() * (Jp1 - Jp0);
+                Eigen::RowVectorXd A_act(1, n_active);
+                for (int j = 0; j < n_active; ++j) A_act[j] = A_full[active_v[j]];
+                if (!A_act.allFinite()) continue;
+
+                A_rows.push_back(A_act);
+                lbA_rows.push_back(-coll_gain * (d - d_safe));  // 强制不越过安全距离
+                ubA_rows.push_back(std::numeric_limits<double>::infinity());
+            }
+        }
+
+        // 3.5) 机械臂 6/7 轴组合干涉约束(CCS)：|j6|>20° 时 |j7| <= 110.5 - 1.025*|j6| (度)。
+        //      与自碰撞约束相同的一阶线性化：裕量 slack = L(|j6|) - |j7| 不足时，
+        //      限制 dq 不得进一步逼近干涉边界；|j6|<=20° 时约束未激活(与判定函数一致)。
+        {
+            const double ccs_margin_rad = 0.5 * kDegreesToRadians;  // 裕量约 0.5°
+            const auto arm_ccs_rows = [&](const std::vector<int>& arm_v_indices) {
+                if (arm_v_indices.size() != 7U) return;
+                int col6 = -1, col7 = -1;
+                for (int j = 0; j < n_active; ++j) {
+                    if (active_v[j] == arm_v_indices[5]) col6 = j;
+                    else if (active_v[j] == arm_v_indices[6]) col7 = j;
+                }
+                if (col6 < 0 || col7 < 0) return;
+                const double j6_rad = q[active_q[col6]];
+                const double j7_rad = q[active_q[col7]];
+                if (!std::isfinite(j6_rad) || !std::isfinite(j7_rad)) return;
+                if (std::abs(j6_rad * kRadiansToDegrees) <= kCcsJoint6ActivationDeg)
+                    return;  // 约束未激活
+                // L_rad = offset_rad - slope*|j6_rad|；slack = L_rad - |j7_rad|
+                const double offset_rad = kCcsJoint67OffsetDeg * kDegreesToRadians;
+                const double slack =
+                    offset_rad - kCcsJoint67Slope * std::abs(j6_rad) -
+                    std::abs(j7_rad);
+                Eigen::RowVectorXd row = Eigen::RowVectorXd::Zero(n_active);
+                row[col6] = -kCcsJoint67Slope * (j6_rad >= 0.0 ? 1.0 : -1.0);
+                row[col7] = -(j7_rad >= 0.0 ? 1.0 : -1.0);
+                if (!row.allFinite()) return;
+                A_rows.push_back(row);
+                lbA_rows.push_back(-coll_gain * (slack - ccs_margin_rad));
+                ubA_rows.push_back(std::numeric_limits<double>::infinity());
+            };
+            if (left_goal)  arm_ccs_rows(left_arm_v_indices_);
+            if (right_goal) arm_ccs_rows(right_arm_v_indices_);
+        }
+
+        // 4) 组装 QP 目标：min 0.5 dq'H dq + dq'g
+        //    H = 2 (J'J + diag(W) + 1e-9) ;  g = -2 J' e
+        Eigen::MatrixXd H = 2.0 * (J_full.transpose() * J_full);
+        H.diagonal().array() += 2.0 * W.array();
+        H.diagonal().array() += 2.0e-9;  // 数值稳定，保证正定
+        Eigen::VectorXd g = -2.0 * (J_full.transpose() * err);
+
+        // 5) 盒约束(关节位置限位 -> 对 dq 的位移边界)
+        const double step_now = step_limit(err.norm());
+        Eigen::VectorXd lb = Eigen::VectorXd::Zero(n_active);
+        Eigen::VectorXd ub = Eigen::VectorXd::Zero(n_active);
+        for (int j = 0; j < n_active; ++j) {
+            const double qj = q[active_q[j]];
+            double lo = lower_pos[j] + safety_margin - qj;
+            double up = upper_pos[j] - safety_margin - qj;
+            lo = std::max(lo, -step_now);
+            up = std::min(up,  step_now);
+            if (lo > up) { const double mid = 0.5 * (lo + up); lo = mid; up = mid; }
+            lb[j] = lo; ub[j] = up;
+        }
+        // body_joint 俯仰限位：将躯干关节角度限制在 [-body_pitch_limit, +body_pitch_limit]
+        if (body_q_idx >= 0) {
+            for (int j = 0; j < n_active; ++j) {
+                if (active_q[j] != body_q_idx) continue;
+                const double qj = q[body_q_idx];
+                double lo = std::max(-body_pitch_limit_rad, lower_pos[j]) - qj;
+                double up = std::min( body_pitch_limit_rad, upper_pos[j]) - qj;
+                lo = std::max(lo, lb[j]);
+                up = std::min(up, ub[j]);
+                if (lo > up) { const double mid = 0.5 * (lo + up); lo = mid; up = mid; }
+                lb[j] = lo; ub[j] = up;
+                break;
+            }
+        }
+
+        // 6) 求解 QP(qpOASES)。激活的碰撞对数随位形动态变化，逐次重建 QP。
+        Eigen::VectorXd dq = Eigen::VectorXd::Zero(n_active);
+        bool qp_ok = false;
+        const int nC = static_cast<int>(A_rows.size());
+
+        // 行主序拷贝矩阵
+        std::vector<qpOASES::real_t> H_arr(static_cast<size_t>(n_active * n_active));
+        std::vector<qpOASES::real_t> g_arr(static_cast<size_t>(n_active));
+        std::vector<qpOASES::real_t> lb_arr(static_cast<size_t>(n_active));
+        std::vector<qpOASES::real_t> ub_arr(static_cast<size_t>(n_active));
+        for (int j = 0; j < n_active; ++j) {
+            g_arr[j] = g[j];
+            lb_arr[j] = lb[j];
+            ub_arr[j] = ub[j];
+            for (int i = 0; i < n_active; ++i)
+                H_arr[static_cast<size_t>(i * n_active + j)] = H(i, j);
+        }
+        std::vector<qpOASES::real_t> A_arr, lbA_arr, ubA_arr;
+        if (nC > 0) {
+            A_arr.resize(static_cast<size_t>(nC * n_active));
+            lbA_arr.resize(static_cast<size_t>(nC));
+            ubA_arr.resize(static_cast<size_t>(nC));
+            for (int r = 0; r < nC; ++r) {
+                lbA_arr[r] = lbA_rows[r];
+                ubA_arr[r] = ubA_rows[r];
+                for (int j = 0; j < n_active; ++j)
+                    A_arr[static_cast<size_t>(r * n_active + j)] = A_rows[r][j];
+            }
+        }
+
+        try {
+            qpOASES::Options options;
+            options.setToFast();               // 实时性优先的预设
+            options.printLevel = qpOASES::PL_NONE;
+
+            qpOASES::QProblem qp(n_active, nC, qpOASES::HST_POSDEF, qpOASES::BT_TRUE);
+            qp.setOptions(options);
+            qpOASES::int_t nWSR = 50;
+            qpOASES::real_t cputime = 0.02;    // 单步最大 CPU 时间(s)
+            const qpOASES::returnValue res = qp.init(
+                H_arr.data(), g_arr.data(),
+                (nC > 0 ? A_arr.data() : nullptr),
+                lb_arr.data(), ub_arr.data(),
+                (nC > 0 ? lbA_arr.data() : nullptr),
+                (nC > 0 ? ubA_arr.data() : nullptr),
+                nWSR, &cputime);
+
+            if (res == qpOASES::SUCCESSFUL_RETURN ||
+                res == qpOASES::RET_MAX_NWSR_REACHED) {
+                std::vector<qpOASES::real_t> xbuf(static_cast<size_t>(n_active));
+                if (qp.getPrimalSolution(xbuf.data()) == qpOASES::SUCCESSFUL_RETURN) {
+                    for (int j = 0; j < n_active; ++j) dq[j] = xbuf[j];
+                    qp_ok = true;
+                }
+            }
+        } catch (...) {
+            qp_ok = false;
+        }
+
+        if (!qp_ok) {
+            // QP 不可行(约束冲突/奇异位形)：以阻尼最小二乘回退，保证鲁棒性
+            Eigen::MatrixXd JJt = J_full * J_full.transpose();
+            JJt.diagonal().array() += 1.0e-4;
+            const Eigen::VectorXd v = J_full.transpose() * JJt.ldlt().solve(err);
+            for (int j = 0; j < n_active; ++j)
+                dq[j] = std::clamp(v[j], lb[j], ub[j]);
+        }
+
+        // 7) 回溯线搜索：保证不违反关节限位/自碰撞(线性化近似的安全网)
+        //    若 8 级步长缩小(α=1,0.5,...,1/128)均不通过自碰撞判定(暂时性的中间自碰撞)，
+        //    仍接受 α = 1/256 的极小步前进，以避免腿部大角度旋转时被"临时自碰撞"卡死。
+        //    解的有效性在收敛后以 isFullQValid 再严格校验(仅在成功分支)。
+        double alpha = 1.0;
+        Eigen::VectorXd q_next;
+        bool accepted = false;
+        for (int bt = 0; bt < 8; ++bt, alpha *= 0.5) {
+            Eigen::VectorXd dq_full = Eigen::VectorXd::Zero(model_.nv);
+            for (int j = 0; j < n_active; ++j) dq_full[active_v[j]] = alpha * dq[j];
+            q_next = pinocchio::integrate(model_, q, dq_full);
+            // 关节限位裁剪
+            for (int j = 0; j < model_.nq; ++j) {
+                if (q_next[j] < model_.lowerPositionLimit[j])
+                    q_next[j] = model_.lowerPositionLimit[j];
+                if (q_next[j] > model_.upperPositionLimit[j])
+                    q_next[j] = model_.upperPositionLimit[j];
+            }
+            bool valid = true;
+            if (enable_collision_avoidance) {
+                pinocchio::updateGeometryPlacements(model_, *data_, geom_model_,
+                                                     *geom_data_, q_next);
+                if (pinocchio::computeCollisions(geom_model_, *geom_data_, false))
+                    valid = false;
+            }
+            // 6/7 轴组合干涉约束硬校验：防止步进落入干涉区(含 |j6| 穿越 20° 的情形)
+            if (valid && left_goal &&
+                !passesSimplifiedCcsJoint67Constraint(q_next, left_arm_q_indices_))
+                valid = false;
+            if (valid && right_goal &&
+                !passesSimplifiedCcsJoint67Constraint(q_next, right_arm_q_indices_))
+                valid = false;
+            if (valid) { accepted = true; break; }
+        }
+        if (!accepted) {
+            // 所有 8 级步长均碰撞，仍向前走一小步(1/256 倍率)，以渡过暂时性的自碰撞。
+            Eigen::VectorXd dq_full = Eigen::VectorXd::Zero(model_.nv);
+            const double alpha_min = alpha;  // 此时 alpha = (0.5)^8 = 1/256
+            for (int j = 0; j < n_active; ++j) dq_full[active_v[j]] = alpha_min * dq[j];
+            q_next = pinocchio::integrate(model_, q, dq_full);
+            for (int j = 0; j < model_.nq; ++j) {
+                q_next[j] = std::clamp(q_next[j],
+                                       model_.lowerPositionLimit[j],
+                                       model_.upperPositionLimit[j]);
+            }
+        }
+        q = q_next;
+
+        // 8) 躯干俯仰安全检查：若 FK 俯仰超限，将 body_joint 回退(保守)
+        if (body_q_idx >= 0 && model_.existFrame("body_link")) {
+            pinocchio::forwardKinematics(model_, *data_, q);
+            pinocchio::updateFramePlacements(model_, *data_);
+            const Eigen::Matrix3d& R =
+                data_->oMf[model_.getFrameId("body_link")].rotation();
+            const double pitch = std::atan2(-R(2, 0),
+                                            std::hypot(R(0, 0), R(1, 0)));
+            if (std::abs(pitch) > body_pitch_limit_rad) {
+                q[body_q_idx] = std::clamp(q[body_q_idx],
+                                           -body_pitch_limit_rad,
+                                            body_pitch_limit_rad);
+            }
+        }
+    }
+
+    q_res = q;
+
+    // 终点有效性检查：收敛后若仍处自碰撞，视为失败(已含可重入锁)
+    if (success && enable_collision_avoidance) {
+        if (!isFullQValid(q)) {
+            RCLCPP_ERROR_STREAM(rclcpp::get_logger("MiracleMAlgo"),
+                         "solveWholeBodyIK:  逆解成功，但碰撞检测失败，q_res="
+                         << q_res.transpose());
+            success = false;
+        }
+        
+    }
+    // 终点 6/7 轴组合干涉约束校验(独立于自碰撞开关，始终生效)
+    if (success) {
+        if (left_goal &&
+            !passesSimplifiedCcsJoint67Constraint(q, left_arm_q_indices_)) {
+                RCLCPP_ERROR_STREAM(rclcpp::get_logger("MiracleMAlgo"),
+                             "solveWholeBodyIK:  逆解成功，但 左臂6/7 轴组合干涉约束校验失败，q_res="
+                             << q_res.transpose());
+                success = false;
+            }
+        if (success && right_goal &&
+            !passesSimplifiedCcsJoint67Constraint(q, right_arm_q_indices_)) {
+                RCLCPP_ERROR_STREAM(rclcpp::get_logger("MiracleMAlgo"),
+                             "solveWholeBodyIK:  逆解成功，但 右臂6/7 轴组合干涉约束校验失败，q_res="
+                             << q_res.transpose());
+                success = false;
+            }
+    }
+    return success;
+}
+
+// =============================================================================
+// 全身逆解对外接口：多种子 + 超时控制 + 错误处理
+// -----------------------------------------------------------------------------
+// 输入：q_init 初始关节状态；left_goal/right_goal 目标位姿(至少其一)；
+//       leg_weights 腿部姿态权重；body_pitch_limit_rad 躯干俯仰限位；
+//       timeout_seconds 超时；max_seed_attempts 额外随机种子次数；
+//       enable_collision_avoidance 是否启用自碰撞避免约束。
+// 输出：q_res 求得的关节角度；返回 true=有效解，false=无解/奇异/超时。
+// =============================================================================
+bool MiracleMAlgo::solveWholeBodyIK(
+    const Eigen::VectorXd& q_init,
+    const std::optional<Eigen::Isometry3d>& left_goal,
+    const std::optional<Eigen::Isometry3d>& right_goal,
+    Eigen::VectorXd& q_res,
+    const std::array<double, 4>& leg_weights,
+    double body_pitch_limit_rad,
+    double timeout_seconds,
+    std::size_t max_seed_attempts,
+    bool enable_collision_avoidance)
+{
+    // --- 输入校验 ---
+    if (q_init.size() != model_.nq) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "solveWholeBodyIK: q_init size=%d, expected=%d",
+                     static_cast<int>(q_init.size()), model_.nq);
+        return false;
+    }
+    if (!left_goal && !right_goal) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                     "solveWholeBodyIK: 至少需提供一个手臂目标位姿");
+        return false;
+    }
+    if (left_goal && !left_goal->matrix().allFinite()) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "solveWholeBodyIK: left_goal 非有限");
+        return false;
+    }
+    if (right_goal && !right_goal->matrix().allFinite()) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "solveWholeBodyIK: right_goal 非有限");
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(static_cast<long long>(timeout_seconds * 1000.0));
+
+    // 种子 0：初始关节状态
+    if (solveWholeBodyIKOnce(q_init, left_goal, right_goal, q_res,
+                             leg_weights, body_pitch_limit_rad,
+                             deadline, enable_collision_avoidance)) {
+        return true;
+    }
+
+    // 无额外种子请求：直接返回失败(奇异位形/无解)
+    if (max_seed_attempts == 0U) return false;
+
+    // 额外随机种子：手臂 + 腿部 联合扰动。
+    // 注意：腿部关节大角度联动是达到远距离目标的必要条件（例如零位 y≈1.1 的身体
+    // 需要旋到 y≈0.1 附近），因此必须在种子中采样腿部初值，以避免初始姿态把
+    // 优化困在"腿几乎不动、臂无法到达"的局部极小。
+    std::mt19937 rng(12345u);  // 固定种子，保证可复现
+    std::uniform_real_distribution<double> arm_dist(-3.14159, 3.14159);  // ±π: 覆盖不同肘部分支
+    // 腿部扰动范围：按 leg 限位的 ±30% 均匀采样（足够覆盖多种折叠/展开姿态）
+    std::uniform_real_distribution<double> leg_dist(0.0, 1.0);
+
+    // 收集被请求手臂的 q 索引
+    std::vector<int> arm_q;
+    auto collect_arm_q = [&](const std::vector<int>& v_idxs) {
+        for (int v : v_idxs) {
+            int q_idx = v;
+            for (pinocchio::JointIndex jid = 1; jid < model_.joints.size(); ++jid) {
+                if (model_.joints[jid].idx_v() == v) { q_idx = model_.joints[jid].idx_q(); break; }
+            }
+            arm_q.push_back(q_idx);
+        }
+    };
+    if (left_goal)  collect_arm_q(left_arm_v_indices_);
+    if (right_goal) collect_arm_q(right_arm_v_indices_);
+
+    // 收集腿部的 q 索引（与 leg_weights 顺序一致）
+    std::vector<int> leg_q;
+    leg_q.reserve(leg_v_indices_.size());
+    for (int v : leg_v_indices_) {
+        int q_idx = v;
+        for (pinocchio::JointIndex jid = 1; jid < model_.joints.size(); ++jid) {
+            if (model_.joints[jid].idx_v() == v) { q_idx = model_.joints[jid].idx_q(); break; }
+        }
+        leg_q.push_back(q_idx);
+    }
+
+    for (std::size_t s = 0U; s < max_seed_attempts; ++s) {
+        if (std::chrono::steady_clock::now() > deadline) break;
+        Eigen::VectorXd seed = q_init;
+        for (int q_idx : arm_q) {
+            const double lo = model_.lowerPositionLimit[q_idx];
+            const double up = model_.upperPositionLimit[q_idx];
+            seed[q_idx] = std::clamp(q_init[q_idx] + arm_dist(rng), lo, up);
+        }
+        // 腿部在限位的 [30%, 100%] 区间内随机（偏向上限=展开方向），不越界
+        for (size_t k = 0; k < leg_q.size(); ++k) {
+            const int q_idx = leg_q[k];
+            const double lo = model_.lowerPositionLimit[q_idx];
+            const double up = model_.upperPositionLimit[q_idx];
+            const double range = up - lo;
+            const double sample = lo + range * (0.30 + 0.70 * leg_dist(rng));
+            seed[q_idx] = sample;  // 已在 [lo, up] 内，无需 clamp
+        }
+        if (solveWholeBodyIKOnce(seed, left_goal, right_goal, q_res,
+                                leg_weights, body_pitch_limit_rad,
+                                deadline, enable_collision_avoidance)) {
+            return true;
+        }
+    }
+
+    RCLCPP_WARN(rclcpp::get_logger("MiracleMAlgo"),
+                "solveWholeBodyIK: 所有种子均未收敛(无解/奇异/超时)");
+    return false;
+}
+
+
 
 bool MiracleMAlgo::planDualArmCartesianGoal(const std::vector<double>& start_q,
                                                const Eigen::Isometry3d& left_goal,
@@ -936,6 +2130,63 @@ bool MiracleMAlgo::extractSingleArmJoints(
     for (size_t index = 0; index < indices.size(); ++index) {
         arm_q[index] = full_q[indices[index]];
     }
+    return true;
+}
+
+bool MiracleMAlgo::extractLegJoints(
+    const std::vector<double>& full_q,
+    std::vector<double>& leg_q) const
+{
+    leg_q.clear();
+    if (full_q.size() != static_cast<size_t>(model_.nq)) {
+        return false;
+    }
+    leg_q.reserve(leg_q_indices_.size());
+    for (const std::size_t index : leg_q_indices_) {
+        if (index >= full_q.size()) {
+            leg_q.clear();
+            return false;
+        }
+        leg_q.push_back(full_q[index]);
+    }
+    return true;
+}
+
+bool MiracleMAlgo::mergeWholeBodyJoints(
+    const std::vector<double>& reference_full_q,
+    bool use_left,
+    bool use_right,
+    const std::vector<double>& active_joints,
+    std::vector<double>& full_q) const
+{
+    full_q.clear();
+    if (reference_full_q.size() != static_cast<std::size_t>(model_.nq) ||
+        (!use_left && !use_right)) {
+        return false;
+    }
+    const std::size_t expected_size =
+        (use_left ? left_arm_q_indices_.size() : 0U) +
+        (use_right ? right_arm_q_indices_.size() : 0U) +
+        leg_q_indices_.size();
+    if (active_joints.size() != expected_size) {
+        return false;
+    }
+
+    full_q = reference_full_q;
+    std::size_t offset = 0U;
+    const auto assign = [&](const std::vector<std::size_t>& indices) {
+        for (std::size_t index = 0; index < indices.size(); ++index) {
+            full_q[indices[index]] = active_joints[offset + index];
+        }
+        offset += indices.size();
+    };
+    if (use_left) {
+        assign(left_arm_q_indices_);
+    }
+    if (use_right) {
+        assign(right_arm_q_indices_);
+    }
+    assign(leg_q_indices_);
     return true;
 }
 
