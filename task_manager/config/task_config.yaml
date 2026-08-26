@@ -1,44 +1,138 @@
 node_id: 1
+
 modbus_slave:
   listen_ip: "0.0.0.0"
   listen_port: 12000
+
 tasks:
+  # 四工位左臂抓取放置；无视觉。Move_L 通过 move_pose.enable_move_line=true 执行。
+  # parallel_actions 为局部并行组：组内 Goal 同时下发，全部结束后才执行下一步。
   move_box:
     trigger_reg: 40001
     status_reg: 50001
-    action_sequencenum: 2
+    action_sequencenum: 1
     action_sequence1:
+      # 任务初始化：先将腿部/腰部恢复到抓取侧，确保 body_joint=-1.57。
       - action_type: move_joints
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "0"                # 0=左臂, 1=右臂, 2=双臂
-          joint_name: ["Joint1_L", "Joint2_L", "Joint3_L", "Joint4_L", "Joint5_L", "Joint6_L", "Joint7_L"]
-          position: [0.8, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]  # 真机验收目标 (rad)
-          enable_collision_check: false
-          speed: 0.2
-          timeout_ms: 10000
-    action_sequence2:
+        params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, -1.57], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+
+      # 初始进入左臂预抓点。
       - action_type: move_joints
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "1"                # 0=左臂, 1=右臂, 2=双臂
-          joint_name: ["Joint1_R", "Joint2_R", "Joint3_R", "Joint4_R", "Joint5_R", "Joint6_R", "Joint7_R"]
-          position: [0.8, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]  # 真机验收目标 (rad)
-          enable_collision_check: false
-          speed: 0.2
-          timeout_ms: 10000
-  
-  # 吸盘控制示例任务
+        params: {arm_id: "0", joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L], position: [0.7020176523023209, -0.6844777404679229, -1.022266368651821, -1.3441378822115608, 0.24833399591927485, 0.2807132244399194, -1.1694727310640054], enable_collision_check: false, speed: 0.75, timeout_ms: 45000}
+
+      # pos1：打开夹爪 -> MoveJ 到 pose-1 上方（TCP z+0.25 m）-> 直线下降 -> 闭合 -> 直线上升。
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [150, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_joints
+        params: {arm_id: "0", joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L], position: [-0.6152539579931725, -1.1007371445596008, 0.7608336693369734, -1.4087041378322283, -1.0116794961342095, 0.4440935194775384, -1.1234440081794461], enable_collision_check: false, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.24037404288976516, 0.4755137882659751, 0.808494293126992, 0.9990186631583513, -0.042752706986493194, 0.01157059869761566, -0.00019481377434049643], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [255, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.24037404288976516, 0.4755137882659751, 1.058494293126992, 0.9990186631583513, -0.042752706986493194, 0.01157059869761566, -0.00019481377434049643], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+
+      # 腰部转到放置侧（body_joint=0），其余腿部关节保持指定值。
+      - action_type: move_joints
+        params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, 0.0], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+
+      # pos1：放置点上方 -> 直线下降 -> 松开 -> 直线上升。
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.916321303307551, 0.18239333783317502, 1.1153827316832007, 0.7214245944452963, -0.6920155330756278, -0.02547966405283629, 0.003441399606127331], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: false, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.916321303307551, 0.18239333783317502, 0.8653827316832007, 0.7214245944452963, -0.6920155330756278, -0.02547966405283629, 0.003441399606127331], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [150, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.916321303307551, 0.18239333783317502, 1.1153827316832007, 0.7214245944452963, -0.6920155330756278, -0.02547966405283629, 0.003441399606127331], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      # pos1 放置结束：腰部回抓取侧与左臂直达 pos2 上方 25 cm 同时执行。
+      - parallel_actions:
+          - action_type: move_joints
+            params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, -1.57], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+          - action_type: move_joints
+            params: {arm_id: "0", joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L], position: [-0.6581656644398853, -0.9821196278750766, 0.8785636992870565, -1.416713925371484, -0.9818461245971803, 0.4035954532342257, -1.1616811610364062], enable_collision_check: false, speed: 0.75, timeout_ms: 45000}
+
+      # pos2 抓取：已位于上方 25 cm，调整夹爪后直线下降/上升。
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [80, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.160617726396434, 0.470225782833549, 0.8115678793208774, 0.9999128985235431, 0.008591240749213623, 0.0017388116355465547, 0.009867242914395362], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [255, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.160617726396434, 0.470225782833549, 1.0615678793208774, 0.9999128985235431, 0.008591240749213623, 0.0017388116355465547, 0.009867242914395362], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_joints
+        params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, 0.0], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+
+      # pos2 放置。
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.9075348673162746, 0.22939776454953342, 1.0056691558629203, 0.7128730070947872, -0.7009943414876425, 0.02045072324619301, 0.0008814060640452468], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: false, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.9075348673162746, 0.22939776454953342, 0.8456691558629203, 0.7128730070947872, -0.7009943414876425, 0.02045072324619301, 0.0008814060640452468], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [150, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.9075348673162746, 0.22939776454953342, 1.0056691558629203, 0.7128730070947872, -0.7009943414876425, 0.02045072324619301, 0.0008814060640452468], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      # pos2 放置结束：腰部回抓取侧与左臂直达 pos3 上方 25 cm 同时执行。
+      - parallel_actions:
+          - action_type: move_joints
+            params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, -1.57], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+          - action_type: move_joints
+            params: {arm_id: "0", joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L], position: [-0.6500309563302186, -0.8560053600014339, 0.9675551844563104, -1.3402976053736366, -0.8815470240604085, 0.2455596405352058, -1.221514430901587], enable_collision_check: false, speed: 0.75, timeout_ms: 45000}
+
+      # pos3 抓取：已位于上方 25 cm，保持原夹爪动作后直线下降/上升。
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [150, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.07041885677706797, 0.47121305586375317, 0.809425205611046, 0.9997497626317644, 0.018087754590757787, -0.0011260440596656592, 0.013114010689757696], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [255, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.07041885677706797, 0.47121305586375317, 1.059425205611046, 0.9997497626317644, 0.018087754590757787, -0.0011260440596656592, 0.013114010689757696], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_joints
+        params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, 0.0], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+
+      # pos3 放置。
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.9069208549906494, 0.25191607795777543, 1.0895591237349523, 0.7301853390242112, -0.6829015268606541, 0.0029220605097779757, -0.021594833823448595], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: false, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.9069208549906494, 0.25191607795777543, 0.8395591237349523, 0.7301853390242112, -0.6829015268606541, 0.0029220605097779757, -0.021594833823448595], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [150, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.9069208549906494, 0.25191607795777543, 1.0895591237349523, 0.7301853390242112, -0.6829015268606541, 0.0029220605097779757, -0.021594833823448595], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      # pos3 放置结束：腰部回抓取侧与左臂直达 pos4 上方 25 cm 同时执行。
+      - parallel_actions:
+          - action_type: move_joints
+            params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, -1.57], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+          - action_type: move_joints
+            params: {arm_id: "0", joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L], position: [-0.6882728413041646, -0.8465917254504656, 1.218368669873962, -1.207832160183426, -0.9418645278392574, -0.026824332258859513, -1.2215786491224216], enable_collision_check: false, speed: 0.75, timeout_ms: 45000}
+
+      # pos4 抓取：已位于上方 25 cm，保持原夹爪动作后直线下降/上升。
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [150, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [-0.020488671965205887, 0.4663234158170935, 0.8110538704784376, 0.9997777493748791, 0.014391057874240207, -0.005599209011229197, 0.014352636225110803], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [255, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [-0.020488671965205887, 0.4663234158170935, 1.0610538704784376, 0.9997777493748791, 0.014391057874240207, -0.005599209011229197, 0.014352636225110803], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_joints
+        params: {arm_id: "4", joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint], position: [-1.0, 2.2, -1.2, 0.0], enable_collision_check: false, speed: 1.0, timeout_ms: 15000}
+
+      # pos4 放置；最后左臂回预抓点，body_joint 保持 0。
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.8815058025518091, 0.28954574337631794, 1.0740146951235792, 0.7152090637231283, -0.6987413538505769, 0.0034368686798951172, 0.014990114109855545], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: false, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.8815058025518091, 0.28954574337631794, 0.8240146951235792, 0.7152090637231283, -0.6987413538505769, 0.0034368686798951172, 0.014990114109855545], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: gripper_ctrl
+        params: {gripper_id: 0, comport: [2, 2], position: [150, 0], speed: [255, 0], max_torque: [60, 0], block: true, timeout_ms: 10000}
+      - action_type: move_pose
+        params: {arm_id: "0", frame_id: base_link, target_pose: [0.8815058025518091, 0.28954574337631794, 1.0740146951235792, 0.7152090637231283, -0.6987413538505769, 0.0034368686798951172, 0.014990114109855545], bound_size: [0.0, 0.0, 0.0], use_config_pose: true, enable_collision_check: false, use_force_control: false, enable_move_line: true, speed: 0.75, timeout_ms: 45000}
+      - action_type: move_joints
+        params: {arm_id: "0", joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L], position: [0.7020176523023209, -0.6844777404679229, -1.022266368651821, -1.3441378822115608, 0.24833399591927485, 0.2807132244399194, -1.1694727310640054], enable_collision_check: false, speed: 0.75, timeout_ms: 45000}
+
+  # 保留原有吸盘示例任务。
   control_suck_example:
     trigger_reg: 40002
     status_reg: 50002
@@ -46,10 +140,10 @@ tasks:
     action_sequence1:
       - action_type: control_suck
         params:
-          suck_id: "0"           # 部件编号：0：左吸盘，1：右吸盘，2：双吸盘
-          active: [true, false]  # 打开/关闭
-          timeout_ms: 5000       # 操作超时时间 (毫秒)
-   
+          suck_id: "0"
+          active: [true, false]
+          timeout_ms: 5000
+
 boot_task:
   self_check:
     action_sequence:

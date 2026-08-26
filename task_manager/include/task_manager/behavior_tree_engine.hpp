@@ -133,7 +133,7 @@ private:
 };
 
 /// @brief 并行执行节点（控制流节点）
-/// 所有子节点并行执行，全部成功才返回 SUCCESS，任一失败立即返回 FAILURE。
+/// 所有子节点并行执行并等待已启动分支进入终态；全部成功才返回 SUCCESS。
 class ParallelNode : public BTNode
 {
 public:

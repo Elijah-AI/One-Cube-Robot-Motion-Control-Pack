@@ -274,6 +274,7 @@ void TaskManagerNode::handle_trigger_task(uint32_t trigger_addr)
   {
     if(item.trigger_reg == trigger_addr)
     {
+      start_normal_task_timing(name);
       LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Trigger task: " << name << " (reg=" << trigger_addr << ")");
       switch_state(task_fsm::SystemState::RUNNING);
       // 重置所有状态并释放所有资源锁，确保新任务从干净状态开始
@@ -299,6 +300,32 @@ void TaskManagerNode::switch_state(task_fsm::SystemState new_state, uint64_t err
   if(current_state_ == new_state) return;
   current_state_ = new_state;
   publish_state_change();
+}
+
+void TaskManagerNode::start_normal_task_timing(const std::string& task_name)
+{
+  current_task_id_ = task_name;
+  normal_task_start_time_ = std::chrono::steady_clock::now();
+  task_running_.store(true);
+}
+
+void TaskManagerNode::log_normal_task_total_time(const char* result)
+{
+  if (!task_running_.exchange(false))
+  {
+    return;
+  }
+
+  const auto end_time = std::chrono::steady_clock::now();
+  const double execution_time =
+    std::chrono::duration<double>(end_time - normal_task_start_time_).count();
+
+  LOG_INFO_TITLE(this->get_logger(), task_log::Tag::FSM,
+    "===== Task Complete: " << current_task_id_
+    << ", result=" << result
+    << ", total_time=" << execution_time << "s =====");
+
+  current_task_id_.clear();
 }
 
 void TaskManagerNode::clear_error_flag(uint64_t mask)
@@ -843,6 +870,7 @@ void TaskManagerNode::bt_tick_cb()
     }
     else
     {
+      const bool task_success = bt_engine_->isTaskSuccess();
 
       if (modbus_slave_)
       {
@@ -850,7 +878,7 @@ void TaskManagerNode::bt_tick_cb()
         LOG_DEBUG(this->get_logger(), task_log::Tag::MODBUS, "Set running reg to 0, addr=" << modbus_slave_->get_regaddr());
       }
 
-      if (bt_engine_->isTaskSuccess())
+      if (task_success)
       {
         if (modbus_slave_)
         {
@@ -873,6 +901,7 @@ void TaskManagerNode::bt_tick_cb()
 
         LOG_ERROR(this->get_logger(), task_log::Tag::FSM, "Task execution failed");
       }
+      log_normal_task_total_time(task_success ? "SUCCESS" : "FAILURE");
       // 无论成功还是失败，都重置所有 action 客户端状态并释放所有资源锁，确保下次任务从干净状态开始
       action_client_->reset_all_states();
       switch_state(task_fsm::SystemState::IDLE);

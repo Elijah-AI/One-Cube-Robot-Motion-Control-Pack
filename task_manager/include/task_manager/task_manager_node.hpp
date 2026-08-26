@@ -142,8 +142,15 @@ private:
   /// @brief 行为树 tick 回调（定时驱动）
   void bt_tick_cb();
 
+  /// @brief 开始记录普通业务任务总耗时
+  void start_normal_task_timing(const std::string& task_name);
+
+  /// @brief 输出普通业务任务总耗时并结束计时
+  void log_normal_task_total_time(const char* result);
+
   std::string current_task_id_;            ///< 当前任务 ID
   std::atomic<bool> task_running_{false};  ///< 任务运行标志
+  std::chrono::steady_clock::time_point normal_task_start_time_;  ///< 普通任务开始时间
 
   /// @brief 防止重复发送系统状态请求
   std::atomic<bool> boot_state_req_pending_{false};

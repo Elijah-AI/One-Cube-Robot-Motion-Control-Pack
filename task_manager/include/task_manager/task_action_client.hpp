@@ -9,7 +9,7 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
-#include <vector>
+#include <cctype>
 
 #include "task_config_parser.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -108,6 +108,8 @@ enum class ResourceType
     RIGHT_GRIPPER,  ///< 右夹爪
     LEFT_SUCK,      ///< 左吸盘
     RIGHT_SUCK,     ///< 右吸盘
+    HEAD,           ///< 头部
+    LOWER_BODY,     ///< 腿部/腰部
     COUNT           ///< 资源总数（哨兵）
 };
 
@@ -123,6 +125,8 @@ inline const char* resource_type_to_str(ResourceType r)
         case ResourceType::RIGHT_GRIPPER: return "RIGHT_GRIPPER";
         case ResourceType::LEFT_SUCK:     return "LEFT_SUCK";
         case ResourceType::RIGHT_SUCK:    return "RIGHT_SUCK";
+        case ResourceType::HEAD:          return "HEAD";
+        case ResourceType::LOWER_BODY:    return "LOWER_BODY";
         default:                          return "UNKNOWN";
     }
 }
@@ -135,13 +139,36 @@ struct ActionContext
     rclcpp::Time start_time{0, 0};
     uint32_t execution_time_ms{60000};  // 默认 60 秒超时
     std::vector<ResourceType> acquired_resources;  ///< 该 action 占用的资源列表
+
+    // ========== vision_detect 返回数据存储 ==========
+    /// @brief 是否有有效的视觉检测结果（区分"未检测"和"检测失败"）
+    bool has_vision_result{false};
+    /// @brief 视觉检测返回的完整结果（6D pose + 环境点云 + 置信度）
+    VisionDet::Result vision_result;
 };
+
+/// @brief 从 state_key 推导出序列级 key（如 "seq1_move_pose_2" → "seq1"）
+/// 序列级 key 用于在同一 action_sequence 分支内共享 vision_detect 结果
+inline std::string derive_seq_key(const std::string& state_key)
+{
+    // state_key 格式: "seq{N}_{action_type}_{index}"
+    // 提取 "seq" 后跟数字的前缀作为序列级 key
+    if (state_key.size() >= 4 && state_key.substr(0, 3) == "seq" && std::isdigit(state_key[3]))
+    {
+        size_t pos = 4;
+        while (pos < state_key.size() && std::isdigit(state_key[pos]))
+        {
+            ++pos;
+        }
+        return state_key.substr(0, pos);
+    }
+    return "";  // 非序列级 key，返回空
+}
 
 namespace detail
 {
 
-/// Atomically finishes one branch and transfers only that branch's leases
-/// to the caller for release. Other concurrently running branches are untouched.
+/// @brief 原子地完成一个分支，并仅移交该分支占用的资源。
 inline std::vector<ResourceType> complete_context(
     std::map<std::string, ActionContext>& contexts,
     std::mutex& contexts_mutex,
@@ -156,6 +183,43 @@ inline std::vector<ResourceType> complete_context(
     std::vector<ResourceType> resources;
     resources.swap(context.acquired_resources);
     return resources;
+}
+
+/// @brief 构造夹爪 Goal，避免索引 ROS 动态数组的空初始值。
+inline ActionCallResult build_gripper_goal(
+    const std::string& task_id,
+    const task_cfg::GripperParam& param,
+    CtrlGripper::Goal& goal,
+    std::string& error_message)
+{
+    error_message.clear();
+    if (task_id.empty())
+    {
+        error_message = "task_id is empty";
+        return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+
+    constexpr std::size_t kRequiredGripperValues = 2U;
+    if (param.position.size() < kRequiredGripperValues ||
+        param.speed.size() < kRequiredGripperValues ||
+        param.max_torque.size() < kRequiredGripperValues ||
+        param.com_port.size() < kRequiredGripperValues)
+    {
+        error_message =
+            "position, speed, max_torque, and com_port must each contain at least 2 values";
+        return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+
+    goal = CtrlGripper::Goal{};
+    goal.task_id = task_id;
+    goal.gripper_id = param.gripper_id;
+    goal.position = param.position;
+    goal.speed = param.speed;
+    goal.max_torque = param.max_torque;
+    goal.com_port = param.com_port;
+    goal.block_until_complete = param.block;
+    goal.timeout_ms = param.timeout_ms;
+    return ActionCallResult::SUCCESS;
 }
 
 }  // namespace detail
@@ -232,7 +296,7 @@ public:
     bool is_action_success(const std::string& state_key) const;
     /// @brief 查询指定 state_key 的动作是否失败
     bool is_action_failure(const std::string& state_key) const;
-    /// @brief 重置指定 state_key 的状态
+    /// @brief 重置指定 state_key 的状态（同时清除 vision 结果）
     void reset_action_state(const std::string& state_key);
 
     /// @brief 重置所有 state_key 的状态并释放所有资源
@@ -270,6 +334,37 @@ public:
 
     /// @brief 获取指定 state_key 的最近一次调用结果
     ActionCallResult get_last_call_result(const std::string& state_key = "default") const;
+
+    // ========= vision_detect 结果查询接口 =========
+    /// @brief 获取指定 state_key 下 vision_detect 返回的完整结果
+    /// @param state_key 状态标识
+    /// @param out_result [输出] 视觉检测结果（6D pose + 点云）
+    /// @return true 表示有有效的检测结果，false 表示尚未检测或检测失败
+    bool get_vision_result(const std::string& state_key, VisionDet::Result& out_result) const;
+
+    /// @brief 检查指定 state_key 是否有有效的视觉检测结果
+    bool has_vision_result(const std::string& state_key) const;
+
+    /// @brief 获取指定 state_key 下的完整 ActionContext（供外部读取）
+    const ActionContext& get_context(const std::string& state_key) const;
+
+    // ========= 序列级视觉结果存储（跨 action 共享） =========
+    /// @brief 将 vision_detect 结果存储到序列级 key（如 "seq1"），供同序列后续 move_pose/move_joints 使用
+    /// @param seq_key 序列级 key（由 derive_seq_key 推导）
+    /// @param result 视觉检测结果
+    void store_vision_result_at_seq_key(const std::string& seq_key, const VisionDet::Result& result);
+
+    /// @brief 从序列级 key 获取之前 vision_detect 的结果
+    /// @param seq_key 序列级 key
+    /// @param out_result [输出] 视觉检测结果
+    /// @return true 表示序列级 key 下有有效的检测结果
+    bool get_vision_result_from_seq_key(const std::string& seq_key, VisionDet::Result& out_result) const;
+
+    /// @brief 检查序列级 key 是否有有效的视觉检测结果
+    bool has_vision_result_at_seq_key(const std::string& seq_key) const;
+
+    /// @brief 清除所有序列级视觉结果
+    void clear_all_seq_vision_results();
 
     // ========= 资源锁接口 =========
     /// @brief 尝试获取指定资源，返回 true 表示成功获取
@@ -365,6 +460,12 @@ private:
     mutable std::map<std::string, ActionContext> action_contexts_;
     /// @brief 上下文访问互斥锁
     mutable std::mutex ctx_mutex_;
+
+    // ========= 序列级视觉结果存储（跨 action 共享） =========
+    /// @brief 序列级视觉检测结果映射表（key: "seq1","seq2", value: VisionDet::Result）
+    mutable std::map<std::string, VisionDet::Result> seq_vision_results_;
+    /// @brief 序列级视觉结果访问互斥锁
+    mutable std::mutex seq_vision_mutex_;
 
     // ========= 资源锁状态管理 =========
     /// @brief 每个资源的占用标志（true=被占用）

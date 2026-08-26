@@ -12,6 +12,7 @@
 #ifndef TASK_MANAGER__TASK_CONFIG_PARSER_HPP_
 #define TASK_MANAGER__TASK_CONFIG_PARSER_HPP_
 
+#include <rclcpp/rclcpp.hpp>
 #include <yaml-cpp/yaml.h>
 #include <string>
 #include <vector>
@@ -35,21 +36,25 @@ struct VisionActionParam
 /// @brief 机械臂位姿移动动作参数（对应 MovePose.action）
 struct MovePoseParam
 {
-  std::string arm_id;                     ///< 机械臂ID (YAML字符串，发送时转为uint8): "0"=左臂, "1"=右臂, "2"=双臂, "3"=头部, "4"=折叠推杆
-  bool enable_collision_check{false};     ///< 是否启用碰撞检测
-  std::vector<float> config_pose;         ///< 配置位姿 [x, y, z, qx, qy, qz, qw]
-  bool use_config_pose{false};            ///< 是否使用配置中的位姿
-  std::vector<float> bound_size;          ///< 包围盒尺寸 [x, y, z]
-  bool use_force_control{false};          ///< 是否使用力控模式
-  float speed{0.5F};                      ///< 控制速度，范围0～1
+  uint8_t arm_id;                         ///< 部件编号，与 com_interfaces/action/MovePose 一致：0=ARM_LEFT, 1=ARM_RIGHT, 2=ARM_BOTH, 3=HEAD, 4=LEG
+  bool enable_collision_check;            ///< 是否启用碰撞检测
+  std::vector<float> config_pose;         ///< 目标位姿 [x, y, z, qx, qy, qz, qw]（对应 YAML target_pose；ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
+  bool use_config_pose;                   ///< 是否使用配置中的位姿
+  std::vector<float> bound_size;          ///< 包围盒尺寸 [x, y, z]（ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
+  /// @name ARM_BOTH 专用字段（与 com_interfaces/action/MovePose.action 一致）
+  /// @{
+  std::vector<float> left_target_pose;    ///< 左臂目标位姿 [x, y, z, qx, qy, qz, qw]（对应 YAML left_target_pose；ARM_BOTH 使用）
+  std::vector<float> right_target_pose;   ///< 右臂目标位姿 [x, y, z, qx, qy, qz, qw]（对应 YAML right_target_pose；ARM_BOTH 使用）
+  std::vector<float> left_bound_size;     ///< 左臂包围盒尺寸 [x, y, z]（对应 YAML left_bound_size；ARM_BOTH 使用）
+  std::vector<float> right_bound_size;    ///< 右臂包围盒尺寸 [x, y, z]（对应 YAML right_bound_size；ARM_BOTH 使用）
+  uint8_t synchronization_mode;           ///< 同步模式：0=SYNC_START_AND_FINISH, 1=SYNC_START_ONLY（对应 YAML synchronization_mode；ARM_BOTH 使用）
+  /// @}
+  bool use_force_control;                 ///< 是否使用力控模式
+  bool enable_move_line;                  ///< 是否启用笛卡尔直线运动
+  float speed;                            ///< 控制速度，范围0～1
   std::vector<uint8_t> hand_action_type;  ///< 灵巧手动作类型
-  int64_t timeout_ms{5000};               ///< 超时时间(毫秒), 默认5000ms
-  std::string frame_id{"base_link"};      ///< 配置位姿所在坐标系
-  std::vector<float> left_target_pose;    ///< 双臂模式左臂 TCP [x,y,z,qx,qy,qz,qw]
-  std::vector<float> right_target_pose;   ///< 双臂模式右臂 TCP [x,y,z,qx,qy,qz,qw]
-  std::vector<float> left_bound_size{0.0F, 0.0F, 0.0F};
-  std::vector<float> right_bound_size{0.0F, 0.0F, 0.0F};
-  uint8_t synchronization_mode{0};        ///< 0=同步开始并同步结束
+  std::string frame_id;                   ///< 坐标系 ID
+  int64_t timeout_ms;                     ///< 超时时间(毫秒), 默认5000ms
 };
 
 /// @brief 夹爪控制动作参数
@@ -102,23 +107,26 @@ struct ControlResetParam
 /// @brief 关节空间移动动作参数
 struct MoveJointsParam
 {
-  std::string arm_id;                     ///< 部件编号：0：左臂，1：右臂，2：双臂，3：头部，4：折叠推
-  std::vector<std::string> joint_name;    ///< 关节名称列表
-  std::vector<double> position;           ///< 关节位置（单位 rad）
-  bool enable_collision_check{false};     ///< 是否启用碰撞检测
-  float speed{0.5F};                      ///< 控制速度，范围0～1
-  int64_t timeout_ms{5000};               ///< 操作超时时间 (毫秒)，默认 5000ms
-  std::vector<std::string> left_joint_name;   ///< 双臂模式左臂七关节名称
-  std::vector<double> left_position;          ///< 双臂模式左臂七关节目标 (rad)
-  std::vector<std::string> right_joint_name;  ///< 双臂模式右臂七关节名称
-  std::vector<double> right_position;         ///< 双臂模式右臂七关节目标 (rad)
-  uint8_t synchronization_mode{0};            ///< 0=同步开始并同步结束
+  uint8_t arm_id;                         ///< 部件编号，与 com_interfaces/action/MoveJoints 一致：0=ARM_LEFT, 1=ARM_RIGHT, 2=ARM_BOTH, 3=HEAD, 4=LEG
+  std::vector<std::string> joint_name;    ///< 关节名称列表（ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
+  std::vector<double> position;           ///< 关节位置（单位 rad）（ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
+  /// @name ARM_BOTH 专用字段（与 com_interfaces/action/MoveJoints.action 一致）
+  /// @{
+  std::vector<std::string> left_joint_name;   ///< 左臂关节名称列表（ARM_BOTH 使用）
+  std::vector<double> left_position;          ///< 左臂关节位置（ARM_BOTH 使用）
+  std::vector<std::string> right_joint_name;  ///< 右臂关节名称列表（ARM_BOTH 使用）
+  std::vector<double> right_position;         ///< 右臂关节位置（ARM_BOTH 使用）
+  uint8_t synchronization_mode;               ///< 同步模式：0=SYNC_START_AND_FINISH, 1=SYNC_START_ONLY（ARM_BOTH 使用）
+  /// @}
+  bool enable_collision_check;            ///< 是否启用碰撞检测
+  float speed;                            ///< 控制速度，范围0～1
+  int64_t timeout_ms;                     ///< 操作超时时间 (毫秒)，默认 5000ms
 };
 
 /// @brief 吸盘控制动作参数（对应 ControlSuck.action）
 struct SuckParam
 {
-  std::string suck_id;                    ///< 部件编号 (YAML字符串，发送时转为uint8)：0：左吸盘，1：右吸盘，2：双吸盘
+  uint8_t suck_id;                        ///< 部件编号，与 com_interfaces/action/ControlSuck 一致：0=SUCK_LEFT, 1=SUCK_RIGHT, 2=SUCK_BOTH
   std::vector<bool> active;               ///< 打开/关闭
   int64_t timeout_ms;                     ///< 操作超时时间 (毫秒)，默认 5000ms
 };
@@ -137,6 +145,8 @@ struct AtomicAction
   MoveJointsParam move_joints_param;           ///< 关节移动参数
   SuckParam suck_param;                        ///< 吸盘控制参数
   condition action_execut_condition;           ///< 动作执行前置条件
+  bool is_parallel_group{false};               ///< true 时本节点为局部并行动作组
+  std::vector<AtomicAction> parallel_actions;  ///< 组内动作并发执行，全部结束后继续
 };
 
 /// @brief 任务映射表项

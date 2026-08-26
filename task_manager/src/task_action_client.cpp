@@ -5,14 +5,14 @@
 #include <uuid/uuid.h>
 #include <cmath>
 #include <iomanip>
+#include <utility>
 
 // 使用 com_interfaces 中的 Action 定义
 #include "com_interfaces/action/vision_detection.hpp"
 #include "com_interfaces/action/control_gripper.hpp"
-#include "com_interfaces/action/control_suck.hpp"
 #include "com_interfaces/action/move_pose.hpp"
 #include "com_interfaces/action/move_joints.hpp"
-#include "task_manager/arm_action_adapter.hpp"
+#include "com_interfaces/action/control_suck.hpp"
 
 namespace task_act
 {
@@ -23,6 +23,8 @@ TaskActionClient::TaskActionClient(rclcpp::Node::SharedPtr node)
   vision_client_ = rclcpp_action::create_client<VisionDet>(node_, "/vision/detection_pose_cloud");
   arm_client_ = rclcpp_action::create_client<MovePose>(node_, "/Control/move_pose");
   gripper_client_ = rclcpp_action::create_client<CtrlGripper>(node_, "/Control/control_gripper");
+  move_joints_client_ = rclcpp_action::create_client<MoveJoints>(node_, "/Control/move_joints");
+  control_suck_client_ = rclcpp_action::create_client<CtrlSuck>(node_, "/Control/control_suck");
   // HardwareCheck 客户端（用于视觉自检 /vision/Check_self）
   hw_check_client_ = rclcpp_action::create_client<HardWareCheck>(node_, "/vision/Check_self");
   // HardwareReset 客户端（用于视觉复位 /vision/Reset）
@@ -30,10 +32,6 @@ TaskActionClient::TaskActionClient(rclcpp::Node::SharedPtr node)
   // 运控自检/复位独立客户端（必须为成员变量，否则回调无法触发）
   control_check_client_ = rclcpp_action::create_client<HardWareCheck>(node_, "/Control/Checkself");
   control_reset_client_ = rclcpp_action::create_client<HardWareReset>(node_, "/Control/Reset");
-  // 关节移动客户端
-  move_joints_client_ = rclcpp_action::create_client<MoveJoints>(node_, "/Control/move_joints");
-  // 吸盘控制客户端
-  control_suck_client_ = rclcpp_action::create_client<CtrlSuck>(node_, "/Control/control_suck");
   std::shared_future<GoalHandleCtrlGripper> gripper_send_future_{};
   reset_state();
 
@@ -163,44 +161,50 @@ TaskActionClient::call_vision_detect(
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleVisionDetection::WrappedResult & result)
     {
+      auto& ctx = get_ctx(state_key);
+
       if(result.result->success)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION, "Vision detect succeeded [" << state_key << "]");
         print_vision_result(node_->get_logger(), *result.result);
-        auto& ctx = get_ctx(state_key);
+
+        // ========== 保存视觉检测结果到 context，供后续动作使用 ==========
+        ctx.vision_result = *result.result;
+        ctx.has_vision_result = true;
+
         ctx.state = ActionRunState::SUCCESS;
         ctx.call_result = ActionCallResult::SUCCESS;
       }
       else
       {
+        // 失败时标记无有效结果
+        ctx.has_vision_result = false;
+
         if (result.result->status_code == 3)
         {
           LOG_WARN(node_->get_logger(), task_log::Tag::VISION, "Vision detect server busy [" << state_key << "]: " << result.result->error_message);
-          auto& ctx = get_ctx(state_key);
           ctx.call_result = ActionCallResult::FAIL_SERVER_BUSY;
         }
         else
         {
           LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision detect failed [" << state_key << "]: " << result.result->error_message);
-          auto& ctx = get_ctx(state_key);
           ctx.call_result = ActionCallResult::FAIL_GENERAL;
         }
-        auto& ctx = get_ctx(state_key);
         ctx.state = ActionRunState::FAILURE;
       }
 
       // 释放该 action 占用的资源（遍历所有 context）
       {
         std::lock_guard<std::mutex> lock(ctx_mutex_);
-        for (auto& [key, ctx] : action_contexts_)
+        for (auto& [key, ctx_inner] : action_contexts_)
         {
-          if (!ctx.acquired_resources.empty())
+          if (!ctx_inner.acquired_resources.empty())
           {
-            for (const auto& res : ctx.acquired_resources)
+            for (const auto& res : ctx_inner.acquired_resources)
             {
               release_resource(res);
             }
-            ctx.acquired_resources.clear();
+            ctx_inner.acquired_resources.clear();
           }
         }
       }
@@ -389,35 +393,216 @@ ActionCallResult TaskActionClient::call_move_pose(
     LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "task_id is empty");
     return ActionCallResult::FAIL_PARAM_INVALID;
   }
-  if (param.arm_id.empty())
+  if (param.arm_id != MovePose::Goal::ARM_LEFT && param.arm_id != MovePose::Goal::ARM_RIGHT &&
+      param.arm_id != MovePose::Goal::ARM_BOTH && param.arm_id != MovePose::Goal::HEAD &&
+      param.arm_id != MovePose::Goal::LEG)
   {
-    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "arm_id is empty");
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "invalid arm_id: " << static_cast<int>(param.arm_id));
     return ActionCallResult::FAIL_PARAM_INVALID;
   }
 
   auto goal = MovePose::Goal();
-  const auto build_result = build_move_pose_goal(
-    task_id, param, target_pose, cloud, frame_id, goal);
-  if (!build_result)
-  {
-    LOG_ERROR(
-      node_->get_logger(), task_log::Tag::ARM,
-      "MovePose goal is invalid: " << build_result.error_message);
-    return ActionCallResult::FAIL_PARAM_INVALID;
-  }
   goal.header.stamp = node_->now();
+  goal.header.frame_id = param.frame_id;
 
+  goal.task_id = task_id;
 
-  // 增加等待时间和重试机制
+  // arm_id 直接使用 uint8，与 com_interfaces 保持一致
+  goal.arm_id = param.arm_id;
+
+  goal.enable_collision_check = param.enable_collision_check;
+
+  //   com_interfaces/action/MovePose.action 定义：
+  //   ARM_LEFT/ARM_RIGHT/HEAD/LEG → 使用 target_pose + bound_size
+  //   ARM_BOTH → 使用 left_target_pose/left_bound_size + right_target_pose/right_bound_size + synchronization_mode
+  if (param.arm_id == MovePose::Goal::ARM_BOTH)
+  {
+    // 填充左臂目标位姿（YAML 中为 [x, y, z, qx, qy, qz, qw] 浮点数组）
+
+    if (param.use_config_pose)
+    {
+      if (param.left_target_pose.size() >= 7)
+      {
+        goal.left_target_pose.header.stamp = node_->now();
+        goal.left_target_pose.header.frame_id = param.frame_id;
+        goal.left_target_pose.pose.position.x    = param.left_target_pose[0];
+        goal.left_target_pose.pose.position.y    = param.left_target_pose[1];
+        goal.left_target_pose.pose.position.z    = param.left_target_pose[2];
+        goal.left_target_pose.pose.orientation.x = param.left_target_pose[3];
+        goal.left_target_pose.pose.orientation.y = param.left_target_pose[4];
+        goal.left_target_pose.pose.orientation.z = param.left_target_pose[5];
+        goal.left_target_pose.pose.orientation.w = param.left_target_pose[6];
+      }
+      // 填充右臂目标位姿
+      if (param.right_target_pose.size() >= 7)
+      {
+        goal.right_target_pose.header.stamp = node_->now();
+        goal.right_target_pose.header.frame_id = param.frame_id;
+        goal.right_target_pose.pose.position.x    = param.right_target_pose[0];
+        goal.right_target_pose.pose.position.y    = param.right_target_pose[1];
+        goal.right_target_pose.pose.position.z    = param.right_target_pose[2];
+        goal.right_target_pose.pose.orientation.x = param.right_target_pose[3];
+        goal.right_target_pose.pose.orientation.y = param.right_target_pose[4];
+        goal.right_target_pose.pose.orientation.z = param.right_target_pose[5];
+        goal.right_target_pose.pose.orientation.w = param.right_target_pose[6];
+      }
+    }
+    else
+    {
+      // 如果不使用配置位姿，则直接使用传入的 target_pose
+      goal.left_target_pose = target_pose;
+      goal.right_target_pose = target_pose;
+      // 强制使用配置文件中定义的 frame_id（配置了非空 frame_id 时）
+      if (!param.frame_id.empty())
+      {
+        goal.left_target_pose.header.frame_id = param.frame_id;
+        goal.right_target_pose.header.frame_id = param.frame_id;
+      }
+    }
+
+    // 填充左右包围盒尺寸（固定长度 3）
+    for (size_t i = 0; i < param.left_bound_size.size() && i < goal.left_bound_size.size(); ++i)
+    {
+      goal.left_bound_size[i] = param.left_bound_size[i];
+    }
+
+    for (size_t i = 0; i < param.right_bound_size.size() && i < goal.right_bound_size.size(); ++i)
+    {
+      goal.right_bound_size[i] = param.right_bound_size[i];
+    }
+
+    goal.synchronization_mode = param.synchronization_mode;
+  }
+  else
+  {
+    if (param.use_config_pose)
+    {
+      goal.target_pose = target_pose;
+      if (param.config_pose.size() >= 7)
+      {
+        goal.target_pose.pose.position.x    = param.config_pose[0];
+        goal.target_pose.pose.position.y    = param.config_pose[1];
+        goal.target_pose.pose.position.z    = param.config_pose[2];
+        goal.target_pose.pose.orientation.x = param.config_pose[3];
+        goal.target_pose.pose.orientation.y = param.config_pose[4];
+        goal.target_pose.pose.orientation.z = param.config_pose[5];
+        goal.target_pose.pose.orientation.w = param.config_pose[6];
+      }
+      else
+      {
+        LOG_WARN(node_->get_logger(), task_log::Tag::ARM, "config_pose size < 7, using target_pose directly");
+      }
+    }
+    else
+    {
+      goal.target_pose = target_pose;
+    }
+    // 若配置文件中定义了 frame_id 则强制使用，否则保留 target_pose 自带的 frame_id
+    if (!param.frame_id.empty())
+    {
+      goal.target_pose.header.frame_id = param.frame_id;
+    }
+    if (!param.bound_size.empty())
+    {
+      goal.bound_size.resize(param.bound_size.size());
+      for (size_t i = 0; i < param.bound_size.size(); ++i)
+      {
+        goal.bound_size[i] = param.bound_size[i];
+      }
+    }
+  }
+  goal.use_force_control = param.use_force_control;
+
+  goal.speed = param.speed;
+  if (!param.hand_action_type.empty())
+  {
+    goal.hand_action_type = param.hand_action_type;
+  }
+  goal.env_point_cloud = cloud;
+  goal.point_cloud_frame_id = frame_id;
+  goal.timeout_ms = param.timeout_ms;
+  goal.enable_move_line = param.enable_move_line;
+
+  // ========== 参数打印（实际发送的 Goal） ==========
+  {
+    std::ostringstream oss;
+    oss << "MovePose Goal: task_id=" << goal.task_id
+        << "\n arm_id=" << static_cast<int>(goal.arm_id)
+        << "\n collision_check=" << (goal.enable_collision_check ? "true" : "false")
+        << "\n force_control=" << (goal.use_force_control ? "true" : "false")
+        << "\n enable_move_line=" << (goal.enable_move_line ? "true" : "false")
+        << "\n speed=" << goal.speed
+        << "\n timeout_ms=" << goal.timeout_ms
+        << "\n cloud_frame=" << goal.point_cloud_frame_id
+        << "\n cloud_size=" << goal.env_point_cloud.data.size()
+        << "\n Target.head.frame_id=" << goal.target_pose.header.frame_id
+        << "\n";
+    if (goal.arm_id == MovePose::Goal::ARM_BOTH)
+    {
+
+      oss << "\n  [ARM_BOTH] sync_mode=" << static_cast<int>(goal.synchronization_mode);
+      oss << "\n  left_target_pose=("
+          << goal.left_target_pose.pose.position.x << ","
+          << goal.left_target_pose.pose.position.y << ","
+          << goal.left_target_pose.pose.position.z << ","
+          << goal.left_target_pose.pose.orientation.x << ","
+          << goal.left_target_pose.pose.orientation.y << ","
+          << goal.left_target_pose.pose.orientation.z << ","
+          << goal.left_target_pose.pose.orientation.w << ")";
+      oss << "\n  right_target_pose=("
+          << goal.right_target_pose.pose.position.x << ","
+          << goal.right_target_pose.pose.position.y << ","
+          << goal.right_target_pose.pose.position.z << ","
+          << goal.right_target_pose.pose.orientation.x << ","
+          << goal.right_target_pose.pose.orientation.y << ","
+          << goal.right_target_pose.pose.orientation.z << ","
+          << goal.right_target_pose.pose.orientation.w << ")";
+      oss << "\n  left_bound_size=(";
+      for (size_t i = 0; i < goal.left_bound_size.size(); ++i)
+        oss << (i ? "," : "") << goal.left_bound_size[i];
+      oss << ")\nright_bound_size=(";
+      for (size_t i = 0; i < goal.right_bound_size.size(); ++i)
+        oss << (i ? "," : "") << goal.right_bound_size[i];
+      oss << ")";
+    }
+    else
+    {
+      oss << "\n  use_config_pose=" << (param.use_config_pose ? "true" : "false");
+      oss << "\n  frame_id=(";
+      oss << goal.target_pose.header.frame_id << ")";
+      oss << "\n  target_pose=("
+          << goal.target_pose.pose.position.x << ","
+          << goal.target_pose.pose.position.y << ","
+          << goal.target_pose.pose.position.z << ","
+          << goal.target_pose.pose.orientation.x << ","
+          << goal.target_pose.pose.orientation.y << ","
+          << goal.target_pose.pose.orientation.z << ","
+          << goal.target_pose.pose.orientation.w << ")";
+      oss << "\n  bound_size=(";
+      for (size_t i = 0; i < goal.bound_size.size(); ++i)
+        oss << (i ? "," : "") << goal.bound_size[i];
+      oss << ")";
+    }
+    if (!goal.hand_action_type.empty())
+    {
+      oss << "\n  hand_action_type=[";
+      for (size_t i = 0; i < goal.hand_action_type.size(); ++i)
+        oss << (i ? "," : "") << static_cast<int>(goal.hand_action_type[i]);
+      oss << "]";
+    }
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM, oss.str());
+  }
+
+  // 等待服务端就绪
   int max_retries = 3;
   int retry_count = 0;
   bool server_ready = false;
-  
+
   while (retry_count < max_retries && !server_ready) {
-    LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Waiting for ArmMove action server (attempt " << (retry_count + 1) << "/" << max_retries << ")...");
-    
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Waiting for MovePose action server (attempt " << (retry_count + 1) << "/" << max_retries << ")...");
+
     server_ready = arm_client_->wait_for_action_server(std::chrono::seconds(5));
-    
+
     if (!server_ready) {
       retry_count++;
       if (retry_count < max_retries) {
@@ -425,66 +610,371 @@ ActionCallResult TaskActionClient::call_move_pose(
       }
     }
   }
-  
+
   if (!server_ready) {
-    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "move arm action server timeout after " << max_retries << " attempts");
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MovePose action server timeout after " << max_retries << " attempts");
     return ActionCallResult::FAIL_SERVER_TIMEOUT;
   }
-  
-  LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "move arm action server connected successfully");
 
+  LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MovePose action server connected successfully");
 
-
-  // 5. 配置异步回调选项 (SendGoalOptions)
   auto send_goal_options = rclcpp_action::Client<MovePose>::SendGoalOptions();
-  
-  // 目标响应回调：使用 lambda 捕获 state_key，更新正确的 context
+
   send_goal_options.goal_response_callback =
     [this, state_key](GoalHandleMovePose::SharedPtr goal_handle)
     {
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Goal was rejected by server [" << state_key << "]");
-        complete_action_context(
-          state_key, ActionRunState::FAILURE,
-          ActionCallResult::FAIL_GOAL_REJECTED);
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
       } else {
         LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Goal accepted by server [" << state_key << "], waiting for result...");
       }
     };
-    
-  // 反馈回调：服务器周期性发送进度时触发
+
   send_goal_options.feedback_callback =
     std::bind(&TaskActionClient::arm_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
-    
-  // 结果回调：使用 lambda 捕获 state_key，更新正确的 context
+
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleMovePose::WrappedResult & result)
     {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
       if(result.result->success)
       {
-        LOG_SUCCESS(
-          node_->get_logger(), task_log::Tag::ARM,
-          "MovePose succeeded [" << state_key << "]"
-          << ", execution_time=" << result.result->execution_time << "s"
-          << ", final_error=" << result.result->final_distance_error
-          << ", left_error=" << result.result->left_final_distance_error_m
-          << ", right_error=" << result.result->right_final_distance_error_m
-          << ", completion_skew=" << result.result->completion_time_skew_sec << "s");
-        complete_action_context(
-          state_key, ActionRunState::SUCCESS, ActionCallResult::SUCCESS);
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "MovePose succeeded [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
       }
       else
       {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Move arm failed [" << state_key << "]: " << result.result->error_message);
-        complete_action_context(
-          state_key, ActionRunState::FAILURE, ActionCallResult::FAIL_GENERAL);
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MovePose failed [" << state_key << "]: " << result.result->error_message);
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GENERAL;
+      }
+
+      // 释放该 action 占用的资源
+      {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        for (auto& [key, ctx] : action_contexts_)
+        {
+          if (!ctx.acquired_resources.empty())
+          {
+            for (const auto& res : ctx.acquired_resources)
+            {
+              release_resource(res);
+            }
+            ctx.acquired_resources.clear();
+          }
+        }
       }
     };
-  auto send_goal_future = arm_client_->async_send_goal(goal, send_goal_options);
+
+  arm_client_->async_send_goal(goal, send_goal_options);
   return ActionCallResult::SUCCESS;
- 
 }
+
+// ============================================================================
+// call_move_joints
+// ============================================================================
+
+ActionCallResult TaskActionClient::call_move_joints(
+  const std::string& task_id, const task_cfg::MoveJointsParam& param,
+  const std::string& state_key)
+{
+  if (task_id.empty())
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "task_id is empty");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+  if (param.arm_id != MoveJoints::Goal::ARM_LEFT && param.arm_id != MoveJoints::Goal::ARM_RIGHT &&
+      param.arm_id != MoveJoints::Goal::ARM_BOTH && param.arm_id != MoveJoints::Goal::HEAD &&
+      param.arm_id != MoveJoints::Goal::LEG)
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "invalid arm_id: " << static_cast<int>(param.arm_id));
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+
+  if (param.arm_id == MoveJoints::Goal::ARM_BOTH)
+  {
+    constexpr size_t kArmJointCount = 7U;
+    if (param.left_joint_name.size() != kArmJointCount ||
+        param.left_position.size() != kArmJointCount ||
+        param.right_joint_name.size() != kArmJointCount ||
+        param.right_position.size() != kArmJointCount)
+    {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+        "ARM_BOTH requires exactly 7 joint names and positions per arm");
+      return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+  }
+  else
+  {
+    const size_t expected_joint_count =
+      (param.arm_id == MoveJoints::Goal::HEAD) ? 2U :
+      (param.arm_id == MoveJoints::Goal::LEG) ? 4U : 7U;
+    if (param.joint_name.size() != expected_joint_count ||
+        param.position.size() != expected_joint_count)
+    {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+        "arm_id=" << static_cast<int>(param.arm_id) << " requires exactly "
+        << expected_joint_count << " joint names and positions, got names="
+        << param.joint_name.size() << ", positions=" << param.position.size());
+      return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+  }
+
+  auto goal = MoveJoints::Goal();
+  goal.header.stamp = node_->now();
+  goal.task_id = task_id;
+
+  // arm_id 直接使用 uint8，与 com_interfaces 保持一致
+  goal.arm_id = param.arm_id;
+
+  // com_interfaces/action/MoveJoints.action 定义：
+  //   ARM_LEFT/ARM_RIGHT/HEAD/LEG → 使用 joint_name + position（可变长 vector）
+  //   ARM_BOTH → 使用 left_joint_name/left_position + right_joint_name/right_position（固定长 array<7>）
+  if (param.arm_id == MoveJoints::Goal::ARM_BOTH)
+  {
+    for (size_t i = 0; i < param.left_joint_name.size() && i < goal.left_joint_name.size(); ++i)
+      goal.left_joint_name[i] = param.left_joint_name[i];
+    for (size_t i = 0; i < param.left_position.size() && i < goal.left_position.size(); ++i)
+      goal.left_position[i] = param.left_position[i];
+    for (size_t i = 0; i < param.right_joint_name.size() && i < goal.right_joint_name.size(); ++i)
+      goal.right_joint_name[i] = param.right_joint_name[i];
+    for (size_t i = 0; i < param.right_position.size() && i < goal.right_position.size(); ++i)
+      goal.right_position[i] = param.right_position[i];
+    goal.synchronization_mode = param.synchronization_mode;
+  }
+  else
+  {
+    goal.joint_name = param.joint_name;
+    goal.position = param.position;
+  }
+  goal.enable_collision_check = param.enable_collision_check;
+  goal.speed = param.speed;
+  goal.timeout_ms = param.timeout_ms;
+
+  // ========== 参数打印（实际发送的 Goal） ==========
+  {
+    std::ostringstream oss;
+    oss << "MoveJoints Goal: task_id=" << goal.task_id
+        << ", arm_id=" << static_cast<int>(goal.arm_id)
+        << ", collision_check=" << (goal.enable_collision_check ? "true" : "false")
+        << ", speed=" << goal.speed
+        << ", timeout_ms=" << goal.timeout_ms;
+    if (goal.arm_id == MoveJoints::Goal::ARM_BOTH)
+    {
+      oss << "\n  [ARM_BOTH] sync_mode=" << static_cast<int>(goal.synchronization_mode);
+      oss << "\n  left_joint_name=[";
+      for (size_t i = 0; i < goal.left_joint_name.size(); ++i)
+        oss << (i ? "," : "") << goal.left_joint_name[i];
+      oss << "]";
+      oss << "\n  left_position=[";
+      for (size_t i = 0; i < goal.left_position.size(); ++i)
+        oss << (i ? "," : "") << goal.left_position[i];
+      oss << "]";
+      oss << "\n  right_joint_name=[";
+      for (size_t i = 0; i < goal.right_joint_name.size(); ++i)
+        oss << (i ? "," : "") << goal.right_joint_name[i];
+      oss << "]";
+      oss << "\n  right_position=[";
+      for (size_t i = 0; i < goal.right_position.size(); ++i)
+        oss << (i ? "," : "") << goal.right_position[i];
+      oss << "]";
+    }
+    else
+    {
+      oss << "\n  joint_name=[";
+      for (size_t i = 0; i < goal.joint_name.size(); ++i)
+        oss << (i ? "," : "") << goal.joint_name[i];
+      oss << "]";
+      oss << "\n  position=[";
+      for (size_t i = 0; i < goal.position.size(); ++i)
+        oss << (i ? "," : "") << goal.position[i];
+      oss << "]";
+    }
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM, oss.str());
+  }
+
+  // 等待服务端就绪
+  int max_retries = 3;
+  int retry_count = 0;
+  bool server_ready = false;
+
+  while (retry_count < max_retries && !server_ready) {
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Waiting for MoveJoints action server (attempt " << (retry_count + 1) << "/" << max_retries << ")...");
+
+    server_ready = move_joints_client_->wait_for_action_server(std::chrono::seconds(5));
+
+    if (!server_ready) {
+      retry_count++;
+      if (retry_count < max_retries) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      }
+    }
+  }
+
+  if (!server_ready) {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints action server timeout after " << max_retries << " attempts");
+    return ActionCallResult::FAIL_SERVER_TIMEOUT;
+  }
+
+  LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints action server connected successfully");
+
+  auto send_goal_options = rclcpp_action::Client<MoveJoints>::SendGoalOptions();
+
+  send_goal_options.goal_response_callback =
+    [this, state_key](GoalHandleMoveJoints::SharedPtr goal_handle)
+    {
+      auto goal = goal_handle.get();
+      if (!goal) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal rejected by server [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+      } else {
+        LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal accepted by server [" << state_key << "], waiting for result...");
+      }
+    };
+
+  send_goal_options.feedback_callback =
+    std::bind(&TaskActionClient::move_joints_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
+
+  send_goal_options.result_callback =
+    [this, state_key](const GoalHandleMoveJoints::WrappedResult & result)
+    {
+      auto& ctx = get_ctx(state_key);
+      if(result.result->success)
+      {
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "MoveJoints succeeded [" << state_key << "]");
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
+      }
+      else
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints failed [" << state_key << "]: " << result.result->error_message);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GENERAL;
+      }
+
+      // 只释放当前 Goal 的资源；不能影响仍在运行的并行兄弟动作。
+      release_acquired_resources(ctx);
+    };
+
+  move_joints_client_->async_send_goal(goal, send_goal_options);
+  return ActionCallResult::SUCCESS;
+}
+
+// ============================================================================
+// call_control_suck
+// ============================================================================
+
+ActionCallResult TaskActionClient::call_control_suck(
+  const std::string& task_id, const task_cfg::SuckParam& param,
+  const std::string& state_key)
+{
+  if (task_id.empty())
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "task_id is empty (control_suck)");
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+
+  auto goal = CtrlSuck::Goal();
+  goal.header.stamp = node_->now();
+  goal.task_id = task_id;
+
+  // suck_id 直接使用 uint8，与 com_interfaces 保持一致
+  if (param.suck_id != CtrlSuck::Goal::SUCK_LEFT && param.suck_id != CtrlSuck::Goal::SUCK_RIGHT &&
+      param.suck_id != CtrlSuck::Goal::SUCK_BOTH)
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "invalid suck_id: " << static_cast<int>(param.suck_id));
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+  goal.suck_id = param.suck_id;
+
+  goal.active = param.active;
+  goal.timeout_ms = param.timeout_ms;
+
+  // ========== 参数打印（实际发送的 Goal） ==========
+  {
+    std::ostringstream oss;
+    oss << "ControlSuck Goal: task_id=" << goal.task_id
+        << ", suck_id=" << static_cast<int>(goal.suck_id)
+        << ", active=[";
+    for (size_t i = 0; i < goal.active.size(); ++i)
+      oss << (i ? "," : "") << (goal.active[i] ? "true" : "false");
+    oss << "], timeout_ms=" << goal.timeout_ms;
+    LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, oss.str());
+  }
+
+  // 等待服务端就绪
+  if (!control_suck_client_->wait_for_action_server(std::chrono::seconds(2))) {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck action server not available");
+    return ActionCallResult::FAIL_SERVER_TIMEOUT;
+  }
+
+  auto send_goal_options = rclcpp_action::Client<CtrlSuck>::SendGoalOptions();
+
+  send_goal_options.goal_response_callback =
+    [this, state_key](GoalHandleCtrlSuck::SharedPtr goal_handle)
+    {
+      auto goal = goal_handle.get();
+      if (!goal) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck goal rejected by server [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+      } else {
+        LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck goal accepted by server [" << state_key << "], waiting for result...");
+      }
+    };
+
+  send_goal_options.result_callback =
+    [this, state_key](const GoalHandleCtrlSuck::WrappedResult & result)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      if(result.result->success)
+      {
+        LOG_SUCCESS(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck succeeded [" << state_key << "]");
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::SUCCESS;
+        ctx.call_result = ActionCallResult::SUCCESS;
+      }
+      else
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck failed [" << state_key << "]: " << result.result->error_message);
+        auto& ctx = get_ctx(state_key);
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GENERAL;
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        for (auto& [key, ctx] : action_contexts_)
+        {
+          if (!ctx.acquired_resources.empty())
+          {
+            for (const auto& res : ctx.acquired_resources)
+            {
+              release_resource(res);
+            }
+            ctx.acquired_resources.clear();
+          }
+        }
+      }
+    };
+
+  control_suck_client_->async_send_goal(goal, send_goal_options);
+  return ActionCallResult::SUCCESS;
+}
+
+// ============================================================================
+// arm 回调（默认 key 版本，保留兼容性）
+// ============================================================================
 
 void TaskActionClient::arm_goal_response_callback(GoalHandleMovePose::SharedPtr goal_handle)
 {
@@ -501,37 +991,136 @@ void TaskActionClient::arm_goal_response_callback(GoalHandleMovePose::SharedPtr 
 
 void TaskActionClient::arm_feedback_callback(GoalHandleMovePose::SharedPtr, const std::shared_ptr<const MovePose::Feedback> feedback)
 {
-  if (feedback)
-  {
-    LOG_DEBUG(
-      node_->get_logger(), task_log::Tag::ARM,
-      "MovePose feedback: progress=" << feedback->progress_rate << "%"
-      << ", left=" << feedback->left_progress_rate << "%"
-      << ", right=" << feedback->right_progress_rate << "%"
-      << ", dual_status=" << static_cast<unsigned>(feedback->dual_task_status)
-      << ", step=" << feedback->current_step_info);
-  }
+  LOG_DEBUG(node_->get_logger(), task_log::Tag::ARM, "Feedback: progress=" << (feedback ? std::to_string(feedback->progress_rate) : "N/A"));
 }
 
 void TaskActionClient::arm_result_callback(const GoalHandleMovePose::WrappedResult & result)
 {
   if(result.result->success)
   {
-    LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "Move arm succeeded");
+    LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "MovePose succeeded");
     auto& ctx = get_ctx("default");
     ctx.state = ActionRunState::SUCCESS;
     ctx.call_result = ActionCallResult::SUCCESS;
-    
   }
   else
   {
-    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Move arm failed: " << result.result->error_message);
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MovePose failed: " << result.result->error_message);
     auto& ctx = get_ctx("default");
     ctx.state = ActionRunState::FAILURE;
     ctx.call_result = ActionCallResult::FAIL_GENERAL;
   }
 
-  // 释放该 action 占用的资源（遍历所有 context）
+  {
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    for (auto& [key, ctx] : action_contexts_)
+    {
+      if (!ctx.acquired_resources.empty())
+      {
+        for (const auto& res : ctx.acquired_resources)
+        {
+          release_resource(res);
+        }
+        ctx.acquired_resources.clear();
+      }
+    }
+  }
+}
+
+// ============================================================================
+// move_joints 回调（默认 key 版本）
+// ============================================================================
+
+void TaskActionClient::move_joints_goal_response_callback(GoalHandleMoveJoints::SharedPtr goal_handle)
+{
+    auto goal = goal_handle.get();
+    if (!goal) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal rejected by server");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+    } else {
+        LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal accepted by server, waiting for result...");
+    }
+}
+
+void TaskActionClient::move_joints_feedback_callback(GoalHandleMoveJoints::SharedPtr, const std::shared_ptr<const MoveJoints::Feedback> feedback)
+{
+  LOG_DEBUG(node_->get_logger(), task_log::Tag::ARM, "MoveJoints feedback: progress=" << (feedback ? std::to_string(feedback->progress_rate) : "N/A"));
+}
+
+void TaskActionClient::move_joints_result_callback(const GoalHandleMoveJoints::WrappedResult & result)
+{
+  if(result.result->success)
+  {
+    LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "MoveJoints succeeded");
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::SUCCESS;
+    ctx.call_result = ActionCallResult::SUCCESS;
+  }
+  else
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints failed: " << result.result->error_message);
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::FAILURE;
+    ctx.call_result = ActionCallResult::FAIL_GENERAL;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    for (auto& [key, ctx] : action_contexts_)
+    {
+      if (!ctx.acquired_resources.empty())
+      {
+        for (const auto& res : ctx.acquired_resources)
+        {
+          release_resource(res);
+        }
+        ctx.acquired_resources.clear();
+      }
+    }
+  }
+}
+
+// ============================================================================
+// control_suck 回调（默认 key 版本）
+// ============================================================================
+
+void TaskActionClient::control_suck_goal_response_callback(GoalHandleCtrlSuck::SharedPtr goal_handle)
+{
+    auto goal = goal_handle.get();
+    if (!goal) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck goal rejected by server");
+        auto& ctx = get_ctx("default");
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+    } else {
+        LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck goal accepted by server, waiting for result...");
+    }
+}
+
+void TaskActionClient::control_suck_feedback_callback(GoalHandleCtrlSuck::SharedPtr, const std::shared_ptr<const CtrlSuck::Feedback> feedback)
+{
+  LOG_DEBUG(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck feedback: progress=" << (feedback ? std::to_string(feedback->progress_rate) : "N/A"));
+}
+
+void TaskActionClient::control_suck_result_callback(const GoalHandleCtrlSuck::WrappedResult & result)
+{
+  if(result.result->success)
+  {
+    LOG_SUCCESS(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck succeeded");
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::SUCCESS;
+    ctx.call_result = ActionCallResult::SUCCESS;
+  }
+  else
+  {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck failed: " << result.result->error_message);
+    auto& ctx = get_ctx("default");
+    ctx.state = ActionRunState::FAILURE;
+    ctx.call_result = ActionCallResult::FAIL_GENERAL;
+  }
+
   {
     std::lock_guard<std::mutex> lock(ctx_mutex_);
     for (auto& [key, ctx] : action_contexts_)
@@ -559,40 +1148,25 @@ ActionCallResult TaskActionClient::call_gripper(
 {
 
   LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::GRIPPER, "===== Gripper Control Start =====");
-  
-  // 参数校验
-  if (task_id.empty())
+
+  // 在访问动态数组前完成校验和整体赋值。
+  CtrlGripper::Goal goal;
+  std::string goal_error;
+  const auto build_result = detail::build_gripper_goal(
+    task_id, param, goal, goal_error);
+  if (!action_call_result_is_ok(build_result))
   {
-    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "task_id is empty");
-    return ActionCallResult::FAIL_PARAM_INVALID;
+    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER,
+      "Invalid gripper goal: " << goal_error);
+    return build_result;
   }
-  if (param.position.size() < 2)
-  {
-    LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "position size < 2");
-    return ActionCallResult::FAIL_PARAM_INVALID;
-  }
+  goal.header.stamp = node_->now();
 
   // 1. 等待 Server 就绪
   if(!gripper_client_->wait_for_action_server(std::chrono::seconds(2))) {
     LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper action server not available");
     return ActionCallResult::FAIL_SERVER_TIMEOUT;
   }
-
-  // 2. 构造 Goal
-  auto goal = CtrlGripper::Goal();
-  goal.header.stamp = node_->now();
-  goal.task_id = task_id;
-  goal.gripper_id = param.gripper_id;
-  goal.position[0] = param.position[0];
-  goal.position[1] = param.position[1];
-  goal.speed[0] = param.speed[0];
-  goal.speed[1] = param.speed[1];
-  goal.max_torque[0] = param.max_torque[0];
-  goal.max_torque[1] = param.max_torque[1];
-  goal.com_port[0] = param.com_port[0];
-  goal.com_port[1] = param.com_port[1];
-  goal.block_until_complete = param.block;
-  goal.timeout_ms = param.timeout_ms;
 
   LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "Goal: task_id=" << task_id
     << ", gripper_id=" << (int)goal.gripper_id
@@ -637,9 +1211,9 @@ ActionCallResult TaskActionClient::call_gripper(
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Goal was rejected by server [" << state_key << "]");
-        auto& ctx = get_ctx(state_key);
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GOAL_REJECTED);
       } else {
         LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "Goal accepted by server [" << state_key << "], waiting for result...");
       }
@@ -648,42 +1222,46 @@ ActionCallResult TaskActionClient::call_gripper(
   // 反馈回调：服务器周期性发送进度时触发
   send_goal_options.feedback_callback =
     std::bind(&TaskActionClient::gripper_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
-    
+
   // 结果回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleCtrlGripper::WrappedResult & result)
     {
-      if(result.result->success)
+      if (!result.result)
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER,
+          "Gripper control returned an empty result [" << state_key << "]");
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GENERAL);
+      }
+      else if (result.result->success &&
+        (result.result->final_position.size() < 2U ||
+        result.result->final_torque.size() < 2U))
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER,
+          "Gripper control returned incomplete final arrays [" << state_key
+          << "]: position_size=" << result.result->final_position.size()
+          << ", torque_size=" << result.result->final_torque.size());
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GENERAL);
+      }
+      else if(result.result->success)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper control succeeded [" << state_key << "]: final_position=["
           << (int)result.result->final_position[0] << "," << (int)result.result->final_position[1]
           << "], final_torque=[" << (int)result.result->final_torque[0] << "," << (int)result.result->final_torque[1] << "]");
-        auto& ctx = get_ctx(state_key);
-        ctx.state = ActionRunState::SUCCESS;
-        ctx.call_result = ActionCallResult::SUCCESS;
+        complete_action_context(
+          state_key, ActionRunState::SUCCESS,
+          ActionCallResult::SUCCESS);
       }
       else
       {
         LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Gripper control failed [" << state_key << "]: " << result.result->error_message);
-        auto& ctx = get_ctx(state_key);
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GENERAL;
-      }
-
-      // 释放该 action 占用的资源（遍历所有 context）
-      {
-        std::lock_guard<std::mutex> lock(ctx_mutex_);
-        for (auto& [key, ctx] : action_contexts_)
-        {
-          if (!ctx.acquired_resources.empty())
-          {
-            for (const auto& res : ctx.acquired_resources)
-            {
-              release_resource(res);
-            }
-            ctx.acquired_resources.clear();
-          }
-        }
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GENERAL);
       }
     };
   gripper_send_future_ = gripper_client_->async_send_goal(goal, send_goal_options);
@@ -810,10 +1388,37 @@ ActionCallResult TaskActionClient::dispatch_action(
     else if (act_type == "move_pose" || act_type == "move_arm")
     {
         ctx.state = ActionRunState::RUNNING;
-        ctx.execution_time_ms = 60000;
-        geometry_msgs::msg::PoseStamped dummy_pose = pose;
-        sensor_msgs::msg::PointCloud2 dummy_cloud = cloud;
-        ActionCallResult res = call_move_pose(task_id, act.arm_param, dummy_pose, dummy_cloud, "base_link", state_key);
+        ctx.execution_time_ms = static_cast<uint32_t>(act.arm_param.timeout_ms > 0 ?
+            act.arm_param.timeout_ms : 60000);
+
+        // 尝试从序列级 key 获取同序列 vision_detect 的结果
+        geometry_msgs::msg::PoseStamped target_pose = pose;
+        sensor_msgs::msg::PointCloud2 env_cloud = cloud;
+        std::string cloud_frame = "base_link";
+
+        std::string seq_key = derive_seq_key(state_key);
+        if (!seq_key.empty())
+        {
+            VisionDet::Result vis_res;
+            if (get_vision_result_from_seq_key(seq_key, vis_res))
+            {
+                LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix
+                    << "Using seq-level vision result from [" << seq_key << "] for move_pose");
+                target_pose = vis_res.target_6d_pose;
+                cloud_frame = vis_res.point_cloud_frame_id;
+                if (!vis_res.env_point_cloud.data.empty())
+                {
+                    env_cloud = vis_res.env_point_cloud;
+                }
+            }
+            else
+            {
+                LOG_WARN(node_->get_logger(), task_log::Tag::ACTION, log_prefix
+                    << "No seq-level vision result at [" << seq_key << "] for move_pose, using config_pose if set");
+            }
+        }
+
+        ActionCallResult res = call_move_pose(task_id, act.arm_param, target_pose, env_cloud, cloud_frame, state_key);
         if (action_call_result_is_ok(res))
         {
             LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_pose: " << action_call_result_to_str(res));
@@ -823,6 +1428,42 @@ ActionCallResult TaskActionClient::dispatch_action(
         ctx.state = ActionRunState::FAILURE;
         ctx.call_result = res;
         LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_pose failed: " << action_call_result_to_str(res));
+        return res;
+    }
+    else if (act_type == "move_joints")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = static_cast<uint32_t>(act.move_joints_param.timeout_ms > 0 ?
+            act.move_joints_param.timeout_ms : 60000);
+
+        // move_joints 不使用视觉结果注入（关节目标由 YAML 配置直接指定）
+        ActionCallResult res = call_move_joints(task_id, act.move_joints_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_joints: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_joints failed: " << action_call_result_to_str(res));
+        return res;
+    }
+    else if (act_type == "control_suck")
+    {
+        ctx.state = ActionRunState::RUNNING;
+        ctx.execution_time_ms = static_cast<uint32_t>(act.suck_param.timeout_ms > 0 ?
+            act.suck_param.timeout_ms : 30000);
+        ActionCallResult res = call_control_suck(task_id, act.suck_param, state_key);
+        if (action_call_result_is_ok(res))
+        {
+            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_suck: " << action_call_result_to_str(res));
+            ctx.state = ActionRunState::RUNNING;
+            return ActionCallResult::SUCCESS;
+        }
+        ctx.state = ActionRunState::FAILURE;
+        ctx.call_result = res;
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_suck failed: " << action_call_result_to_str(res));
         return res;
     }
     else if (act_type == "gripper_ctrl")
@@ -911,41 +1552,6 @@ ActionCallResult TaskActionClient::dispatch_action(
         LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_reset failed: " << action_call_result_to_str(res));
         return res;
     }
-    else if (act_type == "move_joints")
-    {
-        ctx.state = ActionRunState::RUNNING;
-        ctx.execution_time_ms = act.move_joints_param.timeout_ms > 0 ?
-            static_cast<uint32_t>(act.move_joints_param.timeout_ms) : 60000;
-        ActionCallResult res = call_move_joints(task_id, act.move_joints_param, state_key);
-        if (action_call_result_is_ok(res))
-        {
-            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_joints: " << action_call_result_to_str(res));
-            ctx.state = ActionRunState::RUNNING;
-            return ActionCallResult::SUCCESS;
-        }
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = res;
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal move_joints failed: " << action_call_result_to_str(res));
-        return res;
-    }
-    else if (act_type == "control_suck")
-    {
-        ctx.state = ActionRunState::RUNNING;
-        ctx.execution_time_ms = act.suck_param.timeout_ms > 0 ?
-            static_cast<uint32_t>(act.suck_param.timeout_ms) : 30000;
-        LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_suck: suck_id=" << act.suck_param.suck_id);
-        ActionCallResult res = call_control_suck(task_id, act.suck_param, state_key);
-        if (action_call_result_is_ok(res))
-        {
-            LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_suck: " << action_call_result_to_str(res));
-            ctx.state = ActionRunState::RUNNING;
-            return ActionCallResult::SUCCESS;
-        }
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = res;
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "send_goal control_suck failed: " << action_call_result_to_str(res));
-        return res;
-    }
     else
     {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, log_prefix << "Unknown action type: " << act_type);
@@ -980,6 +1586,9 @@ void TaskActionClient::reset_action_state(const std::string& state_key)
     ctx.state = ActionRunState::IDLE;
     ctx.call_result = ActionCallResult::SUCCESS;
     ctx.start_time = rclcpp::Time(0, 0);
+    // 清除之前缓存的 vision 检测结果
+    ctx.has_vision_result = false;
+    ctx.vision_result = VisionDet::Result();
     // 释放该 context 占用的资源，防止资源锁泄漏导致下次任务无法获取资源
     release_acquired_resources(ctx);
 }
@@ -992,6 +1601,9 @@ void TaskActionClient::reset_all_states()
         ctx.state = ActionRunState::IDLE;
         ctx.call_result = ActionCallResult::SUCCESS;
         ctx.start_time = rclcpp::Time(0, 0);
+        // 清除之前缓存的 vision 检测结果
+        ctx.has_vision_result = false;
+        ctx.vision_result = VisionDet::Result();
         // 释放该 context 占用的所有资源
         for (const auto& res : ctx.acquired_resources)
         {
@@ -999,6 +1611,81 @@ void TaskActionClient::reset_all_states()
         }
         ctx.acquired_resources.clear();
     }
+}
+
+// ============================================================================
+// vision_detect 结果查询接口实现
+// ============================================================================
+
+bool TaskActionClient::get_vision_result(const std::string& state_key, VisionDet::Result& out_result) const
+{
+    const auto& ctx = get_ctx(state_key);
+    if (!ctx.has_vision_result)
+    {
+        return false;
+    }
+    out_result = ctx.vision_result;
+    return true;
+}
+
+bool TaskActionClient::has_vision_result(const std::string& state_key) const
+{
+    return get_ctx(state_key).has_vision_result;
+}
+
+const ActionContext& TaskActionClient::get_context(const std::string& state_key) const
+{
+    return get_ctx(state_key);
+}
+
+// ============================================================================
+// 序列级视觉结果存储实现（跨 action 共享）
+// ============================================================================
+
+void TaskActionClient::store_vision_result_at_seq_key(const std::string& seq_key, const VisionDet::Result& result)
+{
+    if (seq_key.empty())
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(seq_vision_mutex_);
+    seq_vision_results_[seq_key] = result;
+    LOG_INFO(node_->get_logger(), task_log::Tag::VISION,
+        "Stored vision result at seq_key [" << seq_key
+        << "], target=" << result.target_6d_pose.header.frame_id);
+}
+
+bool TaskActionClient::get_vision_result_from_seq_key(const std::string& seq_key, VisionDet::Result& out_result) const
+{
+    if (seq_key.empty())
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(seq_vision_mutex_);
+    auto it = seq_vision_results_.find(seq_key);
+    if (it == seq_vision_results_.end())
+    {
+        return false;
+    }
+    out_result = it->second;
+    return true;
+}
+
+bool TaskActionClient::has_vision_result_at_seq_key(const std::string& seq_key) const
+{
+    if (seq_key.empty())
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(seq_vision_mutex_);
+    return seq_vision_results_.find(seq_key) != seq_vision_results_.end();
+}
+
+void TaskActionClient::clear_all_seq_vision_results()
+{
+    std::lock_guard<std::mutex> lock(seq_vision_mutex_);
+    seq_vision_results_.clear();
+    LOG_DEBUG(node_->get_logger(), task_log::Tag::VISION, "Cleared all seq-level vision results");
 }
 
 ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act, const std::string& state_key)
@@ -1019,10 +1706,15 @@ ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act, 
 
     // ========== 资源锁检查：尝试获取所需资源 ==========
     auto required_res = get_required_resources(act_type, act);
+    std::vector<ResourceType> acquired_res;
     for (const auto& res : required_res)
     {
         if (!acquire_resource(res))
         {
+            for (const auto& acquired : acquired_res)
+            {
+                release_resource(acquired);
+            }
             LOG_WARN(node_->get_logger(), task_log::Tag::ACTION,
                 "[Branch " << state_key << "] send_goal " << act_type
                 << " failed: resource " << resource_type_to_str(res) << " is busy, will retry");
@@ -1030,8 +1722,9 @@ ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act, 
             ctx.call_result = ActionCallResult::FAIL_RESOURCE_BUSY;
             return ActionCallResult::FAIL_RESOURCE_BUSY;
         }
+        acquired_res.push_back(res);
     }
-    ctx.acquired_resources = required_res;
+    ctx.acquired_resources = std::move(acquired_res);
     ctx.start_time = node_->now();
 
     // ========== 动作类型分发 ==========
@@ -1132,18 +1825,43 @@ std::vector<ResourceType> TaskActionClient::get_required_resources(
     }
     else if (act_type == "move_pose" || act_type == "move_arm")
     {
-        if (act.arm_param.arm_id == "0")
+        // arm_id 使用 com_interfaces 命名常量: ARM_LEFT=0, ARM_RIGHT=1, ARM_BOTH=2
+        const auto& aid = act.arm_param.arm_id;
+        if (aid == MovePose::Goal::ARM_LEFT || aid == MovePose::Goal::ARM_BOTH)
         {
             resources.push_back(ResourceType::LEFT_ARM);
         }
-        else if (act.arm_param.arm_id == "1")
+        if (aid == MovePose::Goal::ARM_RIGHT || aid == MovePose::Goal::ARM_BOTH)
         {
             resources.push_back(ResourceType::RIGHT_ARM);
         }
-        else if (act.arm_param.arm_id == "2")
+        if (aid == MovePose::Goal::HEAD)
+        {
+            resources.push_back(ResourceType::HEAD);
+        }
+        if (aid == MovePose::Goal::LEG)
+        {
+            resources.push_back(ResourceType::LOWER_BODY);
+        }
+    }
+    else if (act_type == "move_joints")
+    {
+        const auto& aid = act.move_joints_param.arm_id;
+        if (aid == MoveJoints::Goal::ARM_LEFT || aid == MoveJoints::Goal::ARM_BOTH)
         {
             resources.push_back(ResourceType::LEFT_ARM);
+        }
+        if (aid == MoveJoints::Goal::ARM_RIGHT || aid == MoveJoints::Goal::ARM_BOTH)
+        {
             resources.push_back(ResourceType::RIGHT_ARM);
+        }
+        if (aid == MoveJoints::Goal::HEAD)
+        {
+            resources.push_back(ResourceType::HEAD);
+        }
+        if (aid == MoveJoints::Goal::LEG)
+        {
+            resources.push_back(ResourceType::LOWER_BODY);
         }
     }
     else if (act_type == "gripper_ctrl")
@@ -1157,38 +1875,7 @@ std::vector<ResourceType> TaskActionClient::get_required_resources(
             resources.push_back(ResourceType::RIGHT_GRIPPER);
         }
     }
-    else if (act_type == "move_joints")
-    {
-        if (act.move_joints_param.arm_id == "0")
-        {
-            resources.push_back(ResourceType::LEFT_ARM);
-        }
-        else if (act.move_joints_param.arm_id == "1")
-        {
-            resources.push_back(ResourceType::RIGHT_ARM);
-        }
-        else if (act.move_joints_param.arm_id == "2")
-        {
-            resources.push_back(ResourceType::LEFT_ARM);
-            resources.push_back(ResourceType::RIGHT_ARM);
-        }
-    }
-    else if (act_type == "control_suck")
-    {
-        if (act.suck_param.suck_id == "0")
-        {
-            resources.push_back(ResourceType::LEFT_SUCK);
-        }
-        else if (act.suck_param.suck_id == "1")
-        {
-            resources.push_back(ResourceType::RIGHT_SUCK);
-        }
-        else if (act.suck_param.suck_id == "2")
-        {
-            resources.push_back(ResourceType::LEFT_SUCK);
-            resources.push_back(ResourceType::RIGHT_SUCK);
-        }
-    }
+    // control_suck 不占用互斥资源（可与其他 action 并行）
     return resources;
 }
 
@@ -1221,7 +1908,8 @@ ActionCallResult TaskActionClient::call_vision_check_self(
     goal.priority = 1;
 
     LOG_INFO(node_->get_logger(), task_log::Tag::VISION,
-        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+        "VisionCheckSelf Goal: task_id=" << goal.task_id
+        << ", timeout_ms=" << goal.timeout_ms << ", priority=" << (int)goal.priority);
 
     auto send_goal_options = rclcpp_action::Client<HardWareCheck>::SendGoalOptions();
 
@@ -1322,7 +2010,9 @@ ActionCallResult TaskActionClient::call_control_check_self(
     }
 
     LOG_INFO(node_->get_logger(), task_log::Tag::ARM,
-        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+        "ControlCheckSelf Goal: task_id=" << goal.task_id
+        << ", timeout_ms=" << goal.timeout_ms << ", priority=" << (int)goal.priority
+        << ", com_port=[" << (int)goal.com_port[0] << "," << (int)goal.com_port[1] << "]");
 
     auto send_goal_options = rclcpp_action::Client<HardWareCheck>::SendGoalOptions();
 
@@ -1422,7 +2112,8 @@ ActionCallResult TaskActionClient::call_vision_reset(
     goal.priority = 1;
 
     LOG_INFO(node_->get_logger(), task_log::Tag::VISION,
-        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+        "VisionReset Goal: task_id=" << goal.task_id
+        << ", timeout_ms=" << goal.timeout_ms << ", priority=" << (int)goal.priority);
 
     auto send_goal_options = rclcpp_action::Client<HardWareReset>::SendGoalOptions();
 
@@ -1517,7 +2208,8 @@ ActionCallResult TaskActionClient::call_control_reset(
     goal.priority = 1;
 
     LOG_INFO(node_->get_logger(), task_log::Tag::ARM,
-        "Goal: task_id=" << goal.task_id << ", timeout_ms=" << goal.timeout_ms);
+        "ControlReset Goal: task_id=" << goal.task_id
+        << ", timeout_ms=" << goal.timeout_ms << ", priority=" << (int)goal.priority);
 
     auto send_goal_options = rclcpp_action::Client<HardWareReset>::SendGoalOptions();
 
@@ -1586,210 +2278,6 @@ ActionCallResult TaskActionClient::call_control_reset(
 
     control_reset_client_->async_send_goal(goal, send_goal_options);
     LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ARM, "===== Control Reset End =====");
-    return ActionCallResult::SUCCESS;
-}
-
-// ============================================================================
-// call_move_joints - 调用关节空间移动（/Control/move_joints）
-// ============================================================================
-ActionCallResult TaskActionClient::call_move_joints(
-    const std::string& task_id, const task_cfg::MoveJointsParam& param,
-    const std::string& state_key)
-{
-    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ARM, "===== MoveJoints Start =====");
-
-    if (task_id.empty())
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "task_id is empty");
-        return ActionCallResult::FAIL_PARAM_INVALID;
-    }
-    if (param.arm_id.empty())
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "arm_id is empty");
-        return ActionCallResult::FAIL_PARAM_INVALID;
-    }
-
-    // 等待 server 就绪
-    if (!move_joints_client_->wait_for_action_server(std::chrono::seconds(5)))
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints action server not available");
-        return ActionCallResult::FAIL_SERVER_TIMEOUT;
-    }
-
-    auto goal = MoveJoints::Goal();
-    const auto build_result = build_move_joints_goal(task_id, param, goal);
-    if (!build_result)
-    {
-        LOG_ERROR(
-          node_->get_logger(), task_log::Tag::ARM,
-          "MoveJoints goal is invalid: " << build_result.error_message);
-        return ActionCallResult::FAIL_PARAM_INVALID;
-    }
-    goal.header.stamp = node_->now();
-
-    LOG_INFO(node_->get_logger(), task_log::Tag::ARM,
-        "Goal: task_id=" << goal.task_id
-        << ", arm_id=" << goal.arm_id
-        << ", joint_count=" <<
-          (goal.arm_id == MoveJoints::Goal::ARM_BOTH ?
-          goal.left_joint_name.size() + goal.right_joint_name.size() :
-          goal.joint_name.size())
-        << ", enable_collision_check=" << (goal.enable_collision_check ? "true" : "false")
-        << ", speed=" << goal.speed
-        << ", timeout_ms=" << goal.timeout_ms);
-
-    auto send_goal_options = rclcpp_action::Client<MoveJoints>::SendGoalOptions();
-
-    send_goal_options.goal_response_callback =
-        [this, state_key](GoalHandleMoveJoints::SharedPtr goal_handle)
-        {
-            if (!goal_handle)
-            {
-                LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal rejected [" << state_key << "]");
-                complete_action_context(
-                  state_key, ActionRunState::FAILURE,
-                  ActionCallResult::FAIL_GOAL_REJECTED);
-            }
-            else
-            {
-                LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal accepted [" << state_key << "]");
-            }
-        };
-
-    send_goal_options.feedback_callback =
-        std::bind(&TaskActionClient::move_joints_feedback_callback, this,
-                  std::placeholders::_1, std::placeholders::_2);
-
-    send_goal_options.result_callback =
-        [this, state_key](const GoalHandleMoveJoints::WrappedResult& result)
-        {
-            if (result.result->success)
-            {
-                LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM,
-                    "MoveJoints succeeded [" << state_key << "], execution_time=" << result.result->execution_time << "s"
-                    << ", final_distance_error=" << result.result->final_distance_error
-                    << ", left_error=" << result.result->left_final_distance_error_rad
-                    << ", right_error=" << result.result->right_final_distance_error_rad
-                    << ", completion_skew=" << result.result->completion_time_skew_sec << "s");
-                complete_action_context(
-                  state_key, ActionRunState::SUCCESS,
-                  ActionCallResult::SUCCESS);
-            }
-            else
-            {
-                LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
-                    "MoveJoints failed [" << state_key << "]: " << result.result->error_message);
-                complete_action_context(
-                  state_key, ActionRunState::FAILURE,
-                  ActionCallResult::FAIL_GENERAL);
-            }
-        };
-
-    move_joints_client_->async_send_goal(goal, send_goal_options);
-    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ARM, "===== MoveJoints End =====");
-    return ActionCallResult::SUCCESS;
-}
-
-// ============================================================================
-// call_control_suck - 调用吸盘控制（/Control/control_suck）
-// ============================================================================
-ActionCallResult TaskActionClient::call_control_suck(
-    const std::string& task_id, const task_cfg::SuckParam& param,
-    const std::string& state_key)
-{
-    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::GRIPPER, "===== Control Suck Start =====");
-
-    if (task_id.empty())
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "task_id is empty");
-        return ActionCallResult::FAIL_PARAM_INVALID;
-    }
-
-    // 等待 server 就绪
-    if (!control_suck_client_->wait_for_action_server(std::chrono::seconds(5)))
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "ControlSuck action server not available");
-        return ActionCallResult::FAIL_SERVER_TIMEOUT;
-    }
-
-    auto goal = CtrlSuck::Goal();
-    goal.header.stamp = node_->now();
-    goal.task_id = task_id;
-    // suck_id 在 action 定义为 uint8，YAML 中为字符串，运行时转换
-    {
-      int id_int = std::stoi(param.suck_id);
-      goal.suck_id = static_cast<uint8_t>(id_int);
-    }
-    goal.active = param.active;
-    goal.timeout_ms = param.timeout_ms > 0 ? param.timeout_ms : 5000;
-
-    LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER,
-        "Goal: task_id=" << goal.task_id
-        << ", suck_id=" << goal.suck_id
-        << ", active_count=" << goal.active.size()
-        << ", timeout_ms=" << goal.timeout_ms);
-
-    auto send_goal_options = rclcpp_action::Client<CtrlSuck>::SendGoalOptions();
-
-    send_goal_options.goal_response_callback =
-        [this, state_key](GoalHandleCtrlSuck::SharedPtr goal_handle)
-        {
-            if (!goal_handle)
-            {
-                LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "ControlSuck goal rejected [" << state_key << "]");
-                auto& ctx = get_ctx(state_key);
-                ctx.state = ActionRunState::FAILURE;
-                ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
-            }
-            else
-            {
-                LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "ControlSuck goal accepted [" << state_key << "]");
-            }
-        };
-
-    send_goal_options.feedback_callback =
-        std::bind(&TaskActionClient::control_suck_feedback_callback, this,
-                  std::placeholders::_1, std::placeholders::_2);
-
-    send_goal_options.result_callback =
-        [this, state_key](const GoalHandleCtrlSuck::WrappedResult& result)
-        {
-            if (result.result->success)
-            {
-                LOG_SUCCESS(node_->get_logger(), task_log::Tag::GRIPPER,
-                    "ControlSuck succeeded [" << state_key << "]");
-                auto& ctx = get_ctx(state_key);
-                ctx.state = ActionRunState::SUCCESS;
-                ctx.call_result = ActionCallResult::SUCCESS;
-            }
-            else
-            {
-                LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER,
-                    "ControlSuck failed [" << state_key << "]: " << result.result->error_message);
-                auto& ctx = get_ctx(state_key);
-                ctx.state = ActionRunState::FAILURE;
-                ctx.call_result = ActionCallResult::FAIL_GENERAL;
-            }
-
-            // 释放资源
-            {
-                std::lock_guard<std::mutex> lock(ctx_mutex_);
-                for (auto& [key, ctx] : action_contexts_)
-                {
-                    if (!ctx.acquired_resources.empty())
-                    {
-                        for (const auto& res : ctx.acquired_resources)
-                        {
-                            release_resource(res);
-                        }
-                        ctx.acquired_resources.clear();
-                    }
-                }
-            }
-        };
-
-    control_suck_client_->async_send_goal(goal, send_goal_options);
-    LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::GRIPPER, "===== Control Suck End =====");
     return ActionCallResult::SUCCESS;
 }
 
@@ -1901,141 +2389,6 @@ void TaskActionClient::hw_reset_result_callback(const GoalHandleHardWareReset::W
     {
         LOG_ERROR(node_->get_logger(), task_log::Tag::VISION,
             "HardwareReset failed: " << result.result->error_message);
-        auto& ctx = get_ctx("default");
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GENERAL;
-    }
-
-    // 释放资源
-    {
-        std::lock_guard<std::mutex> lock(ctx_mutex_);
-        for (auto& [key, ctx] : action_contexts_)
-        {
-            if (!ctx.acquired_resources.empty())
-            {
-                for (const auto& res : ctx.acquired_resources)
-                {
-                    release_resource(res);
-                }
-                ctx.acquired_resources.clear();
-            }
-        }
-    }
-}
-
-// ============================================================================
-// MoveJoints 回调函数
-// ============================================================================
-void TaskActionClient::move_joints_goal_response_callback(GoalHandleMoveJoints::SharedPtr goal_handle)
-{
-    if (!goal_handle)
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal was rejected by server");
-        auto& ctx = get_ctx("default");
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
-    }
-    else
-    {
-        LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal accepted by server, waiting for result...");
-    }
-}
-
-void TaskActionClient::move_joints_feedback_callback(
-    GoalHandleMoveJoints::SharedPtr,
-    const std::shared_ptr<const MoveJoints::Feedback> feedback)
-{
-    if (feedback)
-    {
-        LOG_DEBUG(node_->get_logger(), task_log::Tag::ARM,
-            "MoveJoints feedback: status=" << feedback->task_status
-            << ", progress=" << feedback->progress_rate << "%"
-            << ", left=" << feedback->left_progress_rate << "%"
-            << ", right=" << feedback->right_progress_rate << "%"
-            << ", dual_status=" << static_cast<unsigned>(feedback->dual_task_status)
-            << ", step=" << feedback->current_step_info);
-    }
-}
-
-void TaskActionClient::move_joints_result_callback(const GoalHandleMoveJoints::WrappedResult& result)
-{
-    if (result.result->success)
-    {
-        LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM,
-            "MoveJoints succeeded, execution_time=" << result.result->execution_time << "s"
-            << ", final_distance_error=" << result.result->final_distance_error);
-        auto& ctx = get_ctx("default");
-        ctx.state = ActionRunState::SUCCESS;
-        ctx.call_result = ActionCallResult::SUCCESS;
-    }
-    else
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
-            "MoveJoints failed: " << result.result->error_message);
-        auto& ctx = get_ctx("default");
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GENERAL;
-    }
-
-    // 释放资源
-    {
-        std::lock_guard<std::mutex> lock(ctx_mutex_);
-        for (auto& [key, ctx] : action_contexts_)
-        {
-            if (!ctx.acquired_resources.empty())
-            {
-                for (const auto& res : ctx.acquired_resources)
-                {
-                    release_resource(res);
-                }
-                ctx.acquired_resources.clear();
-            }
-        }
-    }
-}
-
-// ============================================================================
-// ControlSuck 回调函数
-// ============================================================================
-void TaskActionClient::control_suck_goal_response_callback(GoalHandleCtrlSuck::SharedPtr goal_handle)
-{
-    if (!goal_handle)
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "ControlSuck goal was rejected by server");
-        auto& ctx = get_ctx("default");
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
-    }
-    else
-    {
-        LOG_INFO(node_->get_logger(), task_log::Tag::GRIPPER, "ControlSuck goal accepted by server, waiting for result...");
-    }
-}
-
-void TaskActionClient::control_suck_feedback_callback(
-    GoalHandleCtrlSuck::SharedPtr,
-    const std::shared_ptr<const CtrlSuck::Feedback> feedback)
-{
-    if (feedback)
-    {
-        LOG_DEBUG(node_->get_logger(), task_log::Tag::GRIPPER,
-            "ControlSuck feedback: progress=" << feedback->progress_rate);
-    }
-}
-
-void TaskActionClient::control_suck_result_callback(const GoalHandleCtrlSuck::WrappedResult& result)
-{
-    if (result.result->success)
-    {
-        LOG_SUCCESS(node_->get_logger(), task_log::Tag::GRIPPER, "ControlSuck succeeded");
-        auto& ctx = get_ctx("default");
-        ctx.state = ActionRunState::SUCCESS;
-        ctx.call_result = ActionCallResult::SUCCESS;
-    }
-    else
-    {
-        LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER,
-            "ControlSuck failed: " << result.result->error_message);
         auto& ctx = get_ctx("default");
         ctx.state = ActionRunState::FAILURE;
         ctx.call_result = ActionCallResult::FAIL_GENERAL;

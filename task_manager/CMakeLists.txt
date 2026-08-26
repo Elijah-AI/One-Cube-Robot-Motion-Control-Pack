@@ -33,7 +33,6 @@ include_directories(include)
 set(SRC_LIST
   src/fsm_state.cpp
   src/task_config_parser.cpp
-  src/arm_action_adapter.cpp
   src/modbus_slave.cpp
   src/task_action_client.cpp
   src/behavior_tree_engine.cpp
@@ -116,21 +115,6 @@ if(BUILD_TESTING)
     com_interfaces
   )
 
-  # ----- test_arm_action_adapter -----
-  ament_add_gtest(test_arm_action_adapter
-    test/test_arm_action_adapter.cpp
-    src/arm_action_adapter.cpp
-  )
-  target_include_directories(test_arm_action_adapter PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
-  ament_target_dependencies(test_arm_action_adapter
-    rclcpp
-    rclcpp_action
-    std_msgs
-    geometry_msgs
-    sensor_msgs
-    com_interfaces
-  )
-
   # ----- test_task_config_parser -----
   ament_add_gtest(test_task_config_parser
     test/test_task_config_parser.cpp
@@ -138,10 +122,27 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_task_config_parser PRIVATE include)
   target_compile_definitions(test_task_config_parser PRIVATE
-    TASK_MANAGER_TEST_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/dual_arm_task_config.yaml"
+    TASK_MANAGER_LOCAL_PARALLEL_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/local_parallel_task_config.yaml"
   )
   target_link_libraries(test_task_config_parser yaml-cpp)
   ament_target_dependencies(test_task_config_parser rclcpp)
+
+  # ----- test_behavior_tree_engine -----
+  ament_add_gtest(test_behavior_tree_engine
+    test/test_behavior_tree_engine.cpp
+    src/behavior_tree_engine.cpp
+    src/task_action_client.cpp
+  )
+  target_include_directories(test_behavior_tree_engine PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(test_behavior_tree_engine uuid)
+  ament_target_dependencies(test_behavior_tree_engine
+    rclcpp
+    rclcpp_action
+    std_msgs
+    geometry_msgs
+    sensor_msgs
+    com_interfaces
+  )
 endif()
 
 ament_package()

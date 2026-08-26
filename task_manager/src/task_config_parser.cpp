@@ -13,6 +13,7 @@
 #include "task_manager/task_config_parser.hpp"
 #include "task_manager/log_helper.hpp"
 #include <rclcpp/rclcpp.hpp>
+#include <utility>
 
 namespace task_cfg
 {
@@ -56,10 +57,13 @@ bool TaskConfigParser::load_config(const std::string& file_path, GlobalConfig& o
       item.trigger_reg = it->second["trigger_reg"].as<uint32_t>();
       item.status_reg = it->second["status_reg"].as<uint32_t>();
 
-      if(parse_task(it->second, item))
+      if(!parse_task(it->second, item))
       {
-        out_cfg.task_dict[it->first.as<std::string>()] = item;
+        LOG_ERROR(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+          "Failed to parse task: " << name);
+        return false;
       }
+      out_cfg.task_dict[it->first.as<std::string>()] = item;
     }
 
     // 解析启动任务
@@ -109,42 +113,36 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
       LOG_DEBUG(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG, "No condition defined for: " << act.action_type);
     }
   }
-  else if(act.action_type == "move_pose" || act.action_type == "move_arm")
+  else if(act.action_type == "move_pose")
   {
     // 机械臂位姿移动参数（对应 MovePose.action）
-    act.arm_param.arm_id = p["arm_id"].as<std::string>();
+    act.arm_param.arm_id = p["arm_id"].as<uint8_t>();
     act.arm_param.enable_collision_check = p["enable_collision_check"].as<bool>();
-    act.arm_param.use_config_pose = p["use_config_pose"] ?
-      p["use_config_pose"].as<bool>() : true;
-    act.arm_param.frame_id = p["frame_id"] ?
-      p["frame_id"].as<std::string>() : "base_link";
+    act.arm_param.use_config_pose = p["use_config_pose"].as<bool>();
     act.arm_param.use_force_control = p["use_force_control"].as<bool>();
+    act.arm_param.enable_move_line = p["enable_move_line"] ?
+      p["enable_move_line"].as<bool>() : false;
     act.arm_param.speed = p["speed"] ? p["speed"].as<float>() : 0.5f;
     act.arm_param.hand_action_type = p["hand_action_type"] ?
-      p["hand_action_type"].as<std::vector<uint8_t>>() :
-      std::vector<uint8_t>{};
+      p["hand_action_type"].as<std::vector<uint8_t>>() : std::vector<uint8_t>{};
     act.arm_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+    act.arm_param.frame_id = p["frame_id"] ? p["frame_id"].as<std::string>() : "";
 
-    if (act.arm_param.arm_id == "2")
+    // com_interfaces/action/MovePose.action 定义：
+    //   ARM_LEFT/ARM_RIGHT/HEAD/LEG → 使用 target_pose + bound_size
+    //   ARM_BOTH → 使用 left_target_pose/left_bound_size + right_target_pose/right_bound_size + synchronization_mode
+    if (act.arm_param.arm_id == 2) // ARM_BOTH
     {
-      act.arm_param.left_target_pose =
-        p["left_target_pose"].as<std::vector<float>>();
-      act.arm_param.right_target_pose =
-        p["right_target_pose"].as<std::vector<float>>();
-      act.arm_param.left_bound_size = p["left_bound_size"] ?
-        p["left_bound_size"].as<std::vector<float>>() :
-        std::vector<float>{0.0F, 0.0F, 0.0F};
-      act.arm_param.right_bound_size = p["right_bound_size"] ?
-        p["right_bound_size"].as<std::vector<float>>() :
-        std::vector<float>{0.0F, 0.0F, 0.0F};
-      act.arm_param.synchronization_mode = p["synchronization_mode"] ?
-        p["synchronization_mode"].as<uint8_t>() : 0U;
+      act.arm_param.left_target_pose = p["left_target_pose"].as<std::vector<float>>();
+      act.arm_param.right_target_pose = p["right_target_pose"].as<std::vector<float>>();
+      act.arm_param.left_bound_size = p["left_bound_size"].as<std::vector<float>>();
+      act.arm_param.right_bound_size = p["right_bound_size"].as<std::vector<float>>();
+      act.arm_param.synchronization_mode = p["synchronization_mode"].as<uint8_t>();
     }
     else
     {
       act.arm_param.config_pose = p["target_pose"].as<std::vector<float>>();
-      act.arm_param.bound_size = p["bound_size"] ?
-        p["bound_size"].as<std::vector<float>>() : std::vector<float>{};
+      act.arm_param.bound_size = p["bound_size"].as<std::vector<float>>();
     }
 
     // 解析执行条件（可选）
@@ -208,30 +206,26 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
   else if (act.action_type == "move_joints")
   {
     // 关节空间移动参数
-    act.move_joints_param.arm_id = p["arm_id"].as<std::string>();
+    act.move_joints_param.arm_id = p["arm_id"].as<uint8_t>();
     act.move_joints_param.enable_collision_check = p["enable_collision_check"].as<bool>();
     act.move_joints_param.speed = p["speed"].as<float>();
     act.move_joints_param.timeout_ms = p["timeout_ms"].as<int64_t>();
 
-    if (act.move_joints_param.arm_id == "2")
+    // com_interfaces/action/MoveJoints.action 定义：
+    //   ARM_LEFT/ARM_RIGHT/HEAD/LEG → 使用 joint_name + position
+    //   ARM_BOTH → 使用 left_joint_name/left_position + right_joint_name/right_position + synchronization_mode
+    if (act.move_joints_param.arm_id == 2) // ARM_BOTH
     {
-      act.move_joints_param.left_joint_name =
-        p["left_joint_name"].as<std::vector<std::string>>();
-      act.move_joints_param.left_position =
-        p["left_position"].as<std::vector<double>>();
-      act.move_joints_param.right_joint_name =
-        p["right_joint_name"].as<std::vector<std::string>>();
-      act.move_joints_param.right_position =
-        p["right_position"].as<std::vector<double>>();
-      act.move_joints_param.synchronization_mode = p["synchronization_mode"] ?
-        p["synchronization_mode"].as<uint8_t>() : 0U;
+      act.move_joints_param.left_joint_name = p["left_joint_name"].as<std::vector<std::string>>();
+      act.move_joints_param.left_position = p["left_position"].as<std::vector<double>>();
+      act.move_joints_param.right_joint_name = p["right_joint_name"].as<std::vector<std::string>>();
+      act.move_joints_param.right_position = p["right_position"].as<std::vector<double>>();
+      act.move_joints_param.synchronization_mode = p["synchronization_mode"].as<uint8_t>();
     }
     else
     {
-      act.move_joints_param.joint_name =
-        p["joint_name"].as<std::vector<std::string>>();
-      act.move_joints_param.position =
-        p["position"].as<std::vector<double>>();
+      act.move_joints_param.joint_name = p["joint_name"].as<std::vector<std::string>>();
+      act.move_joints_param.position = p["position"].as<std::vector<double>>();
     }
 
     // 解析执行条件（可选）
@@ -250,7 +244,7 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
   else if (act.action_type == "control_suck")
   {
     // 吸盘控制参数
-    act.suck_param.suck_id = p["suck_id"].as<std::string>();
+    act.suck_param.suck_id = p["suck_id"].as<uint8_t>();
     act.suck_param.active = p["active"].as<std::vector<bool>>();
     act.suck_param.timeout_ms = p["timeout_ms"].as<int64_t>();
 
@@ -290,8 +284,43 @@ bool TaskConfigParser::parse_task(YAML::Node task_node, TaskMapItem& item)
     std::vector<AtomicAction> action_list;
     for(auto a : seq)
     {
-      AtomicAction act;
-      parse_action(a, act);
+      AtomicAction act{};
+      const auto parallel = a["parallel_actions"];
+      if (parallel.IsDefined())
+      {
+        if (!parallel.IsSequence() || parallel.size() < 2U)
+        {
+          LOG_ERROR(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+            node_name << " parallel_actions must contain at least two actions");
+          return false;
+        }
+
+        act.action_type = "parallel_actions";
+        act.is_parallel_group = true;
+        for (const auto& parallel_action_node : parallel)
+        {
+          if (parallel_action_node["parallel_actions"].IsDefined())
+          {
+            LOG_ERROR(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+              node_name << " nested parallel_actions are not supported");
+            return false;
+          }
+
+          AtomicAction parallel_action{};
+          if (!parse_action(parallel_action_node, parallel_action))
+          {
+            return false;
+          }
+          act.parallel_actions.push_back(std::move(parallel_action));
+        }
+        LOG_INFO(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
+          "Parsed local parallel group with " << act.parallel_actions.size()
+          << " actions in " << node_name);
+      }
+      else if (!parse_action(a, act))
+      {
+        return false;
+      }
       action_list.push_back(act);
     }
     item.action_seq.push_back(action_list);
@@ -312,7 +341,7 @@ bool TaskConfigParser::parse_boot(YAML::Node boot_node, BootTaskSet& boot)
   auto sc_seq = boot_node["self_check"]["action_sequence"];
   for(auto a : sc_seq)
   {
-    AtomicAction act;
+    AtomicAction act{};
     parse_action(a, act);
     boot.self_check_seq.push_back(act);
   }
@@ -321,7 +350,7 @@ bool TaskConfigParser::parse_boot(YAML::Node boot_node, BootTaskSet& boot)
   auto rst_seq = boot_node["reset"]["action_sequence"];
   for(auto a : rst_seq)
   {
-    AtomicAction act;
+    AtomicAction act{};
     parse_action(a, act);
     boot.reset_seq.push_back(act);
   }

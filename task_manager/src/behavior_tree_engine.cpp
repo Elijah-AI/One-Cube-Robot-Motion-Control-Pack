@@ -166,48 +166,62 @@ ParallelNode::ParallelNode(const std::string& name, rclcpp::Logger logger)
 
 BTStatus ParallelNode::tick()
 {
-    
-    bool all_success = true;
+    bool all_terminal = true;
+    bool any_failure = false;
+    bool stop_starting_idle_branches = false;
 
     for (auto& child : children_) {
-
-        
         const std::string& child_name = child->getName();
         auto current_status = branch_status_[child_name];
-       
-        // 已经执行完成的分支跳过，不需要重复tick
-        if (current_status == BTStatus::SUCCESS || current_status == BTStatus::FAILURE) {
+
+        if (current_status == BTStatus::SUCCESS) {
             continue;
         }
-        
-        // 驱动当前活跃分支执行tick
 
-        //child->name_ = child_name;
+        if (current_status == BTStatus::FAILURE) {
+            any_failure = true;
+            stop_starting_idle_branches = true;
+            continue;
+        }
+
+        // 某分支失败后，不再启动尚未发送 Goal 的空闲分支。已经 RUNNING
+        // 的分支继续 tick，等待其进入终态后并行节点才结束。
+        if (stop_starting_idle_branches && current_status == BTStatus::IDLE) {
+            branch_status_[child_name] = BTStatus::FAILURE;
+            any_failure = true;
+            continue;
+        }
+
         BTStatus child_run_status = child->tick();
         branch_status_[child_name] = child_run_status;
 
-        // 任意分支返回失败，立刻标记全局失败
         if (child_run_status == BTStatus::FAILURE) {
-            LOG_ERROR(logger_, task_log::Tag::BT, "Parallel branch [" << child_name << "] failed, whole parallel node abort");
-            status_ = BTStatus::FAILURE;
-            return BTStatus::FAILURE;
+            LOG_ERROR(logger_, task_log::Tag::BT,
+                "Parallel branch [" << child_name
+                << "] failed; waiting for already-running sibling branches");
+            any_failure = true;
+            stop_starting_idle_branches = true;
         }
-        // 当前分支还在运行，标记整体还未全部成功
-        if (child_run_status != BTStatus::SUCCESS) {
-            all_success = false;
+        else if (child_run_status != BTStatus::SUCCESS) {
+            all_terminal = false;
         }
     }
 
-    // 所有分支全部执行成功，返回成功状态
-    if (all_success) {
-        LOG_SUCCESS(logger_, task_log::Tag::BT, "All parallel branches executed successfully");
-        status_ = BTStatus::SUCCESS;
-        return BTStatus::SUCCESS;
+    if (!all_terminal) {
+        status_ = BTStatus::RUNNING;
+        return BTStatus::RUNNING;
     }
 
-    // 仍有分支处于运行态，返回RUNNING
-    status_ = BTStatus::RUNNING;
-    return BTStatus::RUNNING;
+    if (any_failure) {
+        LOG_ERROR(logger_, task_log::Tag::BT,
+            "Parallel node failed after all started branches reached a terminal state");
+        status_ = BTStatus::FAILURE;
+        return BTStatus::FAILURE;
+    }
+
+    LOG_SUCCESS(logger_, task_log::Tag::BT, "All parallel branches executed successfully");
+    status_ = BTStatus::SUCCESS;
+    return BTStatus::SUCCESS;
 }
 
 void ParallelNode::reset()
@@ -407,9 +421,55 @@ inline BTStatus send_action_goal(
     rclcpp::Logger logger)
 {
     LOG_INFO_TITLE(logger, task_log::Tag::BT, "===== Execute Action Type: " << action_type << " =====");
-    LOG_INFO(logger, task_log::Tag::BT, "VisionParam -> target: " << atomic_act.vision_param.target_obj_name << ", need_6d: " << (atomic_act.vision_param.need_6d_pose ? "true" : "false"));
-    LOG_INFO(logger, task_log::Tag::BT, "ArmParam -> arm_id: " << atomic_act.arm_param.arm_id << ", enable_collision_check: " << (atomic_act.arm_param.enable_collision_check ? "true" : "false"));
-    LOG_INFO(logger, task_log::Tag::BT, "GripperParam -> gripper_id: " << (int)atomic_act.gripper_param.gripper_id << ", block: " << (atomic_act.gripper_param.block ? "true" : "false"));
+    if (action_type == "vision_detect")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "VisionParam -> target: " << atomic_act.vision_param.target_obj_name << ", need_6d: " << (atomic_act.vision_param.need_6d_pose ? "true" : "false"));
+    }
+    else if (action_type == "move_pose")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "MovePoseParam -> arm_id: " << static_cast<int>(atomic_act.arm_param.arm_id)
+        << ", collision_check: " << (atomic_act.arm_param.enable_collision_check ? "true" : "false")
+        << ", speed: " << atomic_act.arm_param.speed << ", timeout_ms: " << atomic_act.arm_param.timeout_ms);
+    }
+    else if (action_type == "move_joints")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "MoveJointsParam -> arm_id: " << static_cast<int>(atomic_act.move_joints_param.arm_id)
+        << ", collision_check: " << (atomic_act.move_joints_param.enable_collision_check ? "true" : "false")
+        << ", speed: " << atomic_act.move_joints_param.speed << ", timeout_ms: " << atomic_act.move_joints_param.timeout_ms);
+    }
+    else if (action_type == "gripper_ctrl")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "GripperParam -> gripper_id: " << static_cast<int>(atomic_act.gripper_param.gripper_id)
+        << ", block: " << (atomic_act.gripper_param.block ? "true" : "false"));
+    }
+    else if (action_type == "control_suck")
+    {
+      std::ostringstream oss;
+      oss << "SuckParam -> suck_id: " << static_cast<int>(atomic_act.suck_param.suck_id)
+          << ", active=[";
+      for (size_t i = 0; i < atomic_act.suck_param.active.size(); ++i)
+        oss << (i ? "," : "") << (atomic_act.suck_param.active[i] ? "true" : "false");
+      oss << "], timeout_ms: " << atomic_act.suck_param.timeout_ms;
+      LOG_INFO(logger, task_log::Tag::BT, oss.str());
+    }
+    else if (action_type == "vision_check_self")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "VisionCheckSelfParam -> timeout_ms: " << atomic_act.vision_check_self_param.timeout_ms);
+    }
+    else if (action_type == "control_check_self")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "ControlCheckSelfParam -> com_port[0]: " << static_cast<int>(atomic_act.control_check_self_param.com_port[0])
+        << ", com_port[1]: " << static_cast<int>(atomic_act.control_check_self_param.com_port[1])
+        << ", timeout_ms: " << atomic_act.control_check_self_param.timeout_ms);
+    }
+    else if (action_type == "vision_reset")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "VisionResetParam -> timeout_ms: " << atomic_act.vision_reset_param.timeout_ms);
+    }
+    else if (action_type == "control_reset")
+    {
+      LOG_INFO(logger, task_log::Tag::BT, "ControlResetParam -> timeout_ms: " << atomic_act.control_reset_param.timeout_ms);
+    }
 
     task_act::ActionCallResult send_ret = act_client.send_goal(atomic_act);
     if (!task_act::action_call_result_is_ok(send_ret))
@@ -421,6 +481,75 @@ inline BTStatus send_action_goal(
     {
         return BTStatus::RUNNING;
     }
+}
+
+BTNode::Ptr make_keyed_action_node(
+    task_act::TaskActionClient& act_client,
+    const task_cfg::AtomicAction& action,
+    const std::string& state_key,
+    const std::string& node_name,
+    const std::string& log_scope,
+    rclcpp::Logger logger)
+{
+    auto atomic_act = std::make_shared<task_cfg::AtomicAction>(action);
+    auto action_cb = [&act_client, atomic_act, state_key, log_scope, logger]() -> BTStatus
+    {
+        if (act_client.is_action_running(state_key))
+        {
+            return check_action_running(
+                act_client, atomic_act->action_type, logger, state_key);
+        }
+        if (act_client.is_action_success(state_key))
+        {
+            LOG_SUCCESS(logger, task_log::Tag::BT,
+                log_scope << " Action [" << atomic_act->action_type
+                << "] executed successfully");
+
+            // 保留原有顶层并行序列的视觉结果共享行为。
+            if (atomic_act->action_type == "vision_detect" &&
+                act_client.has_vision_result(state_key))
+            {
+                task_act::VisionDet::Result vis_res;
+                if (act_client.get_vision_result(state_key, vis_res))
+                {
+                    const std::string seq_key = task_act::derive_seq_key(state_key);
+                    act_client.store_vision_result_at_seq_key(seq_key, vis_res);
+                }
+            }
+
+            act_client.reset_action_state(state_key);
+            return BTStatus::SUCCESS;
+        }
+        if (act_client.is_action_failure(state_key))
+        {
+            const auto detail = act_client.get_last_call_result(state_key);
+            LOG_ERROR(logger, task_log::Tag::BT,
+                log_scope << " Action [" << atomic_act->action_type
+                << "] execution failed: "
+                << task_act::action_call_result_to_str(detail));
+            return action_result_to_bt_status(detail);
+        }
+
+        LOG_INFO_TITLE(logger, task_log::Tag::BT,
+            "===== " << log_scope << " Execute Action Type: "
+            << atomic_act->action_type << " =====");
+        LOG_DEBUG(logger, task_log::Tag::BT,
+            log_scope << " ActionClient state_key: " << state_key);
+
+        const auto send_ret = act_client.send_goal(*atomic_act, state_key);
+        if (!task_act::action_call_result_is_ok(send_ret))
+        {
+            LOG_ERROR(logger, task_log::Tag::BT,
+                log_scope << " Action [" << atomic_act->action_type
+                << "] send goal failed: "
+                << task_act::action_call_result_to_str(send_ret));
+            return action_result_to_bt_status(send_ret);
+        }
+        return BTStatus::RUNNING;
+    };
+
+    return std::make_shared<ActionNode>(
+        node_name, std::move(action_cb), std::move(logger));
 }
 
 } // anonymous namespace
@@ -477,65 +606,58 @@ void BehaviorTreeEngine::load_parallel_task(std::vector<std::vector<task_cfg::At
     for (const auto& single_group : parallel_action_groups) {
         Sequence_index++;
         LOG_INFO_FLOW(logger_, task_log::Tag::BT, "Loading parallel branch [" << Sequence_index << "] with " << single_group.size() << " actions");
-        
+
         // 每个分组生成一个独立的Sequence顺序节点，作为并行分支
         auto group_seq = std::make_shared<SequenceNode>("Sequence_Branch_" + std::to_string(Sequence_index), logger_);
         for (size_t i = 0; i < single_group.size(); i++) {
-            auto atomic_act = std::make_shared<task_cfg::AtomicAction>(single_group[i]);
-            // 生成唯一状态 key：seq{序号}_{动作类型}_{索引}
-            std::string state_key = "seq" + std::to_string(Sequence_index) + "_" + atomic_act->action_type + "_" + std::to_string(i);
-            // 记录当前分支序号，用于日志输出
-            long branch_index = Sequence_index;
-            LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] Action [" << atomic_act->action_type << "] added");
-            auto action_cb = [&act_client, atomic_act, state_key, branch_index, this]() -> BTStatus
+            const auto& action_step = single_group[i];
+            const std::string branch_scope =
+                "[Branch " + std::to_string(Sequence_index) + "]";
+
+            if (action_step.is_parallel_group)
             {
-              // 使用独立状态 key 查询，不干扰其他并行分支的动作状态
-              if (act_client.is_action_running(state_key))
-              {
-                return check_action_running(act_client, atomic_act->action_type, logger_, state_key);
-              }
-              else if (act_client.is_action_success(state_key))
-              {
-                LOG_SUCCESS(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] Action [" << atomic_act->action_type << "] executed successfully");
-                act_client.reset_action_state(state_key);
-                return BTStatus::SUCCESS;
+                auto local_parallel = std::make_shared<ParallelNode>(
+                    "Local_Parallel_" + std::to_string(Sequence_index) + "_" +
+                    std::to_string(i), logger_);
+                LOG_INFO_FLOW(logger_, task_log::Tag::BT,
+                    branch_scope << " loading local parallel group [" << i
+                    << "] with " << action_step.parallel_actions.size()
+                    << " actions");
 
-              }
-              else if (act_client.is_action_failure(state_key))
-              {
-                task_act::ActionCallResult detail = act_client.get_last_call_result(state_key);
-                LOG_ERROR(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] Action [" << atomic_act->action_type << "] execution failed: " << task_act::action_call_result_to_str(detail));
-                return action_result_to_bt_status(detail);
-              }
-            
+                for (size_t j = 0; j < action_step.parallel_actions.size(); ++j)
+                {
+                    const auto& parallel_action = action_step.parallel_actions[j];
+                    const std::string state_key =
+                        "seq" + std::to_string(Sequence_index) + "_parallel" +
+                        std::to_string(i) + "_" + parallel_action.action_type +
+                        "_" + std::to_string(j);
+                    const std::string node_name =
+                        parallel_action.action_type + "_seq" +
+                        std::to_string(Sequence_index) + "_parallel" +
+                        std::to_string(i) + "_" + std::to_string(j);
+                    const std::string action_scope =
+                        branch_scope + "[Parallel " + std::to_string(i) + "]";
+                    local_parallel->addChild(make_keyed_action_node(
+                        act_client, parallel_action, state_key, node_name,
+                        action_scope, logger_));
+                }
+                group_seq->addChild(local_parallel);
+                continue;
+            }
 
-              LOG_INFO_TITLE(logger_, task_log::Tag::BT, "===== [Branch " << branch_index << "] Execute Action Type: " << atomic_act->action_type << " =====");
-              LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] VisionParam -> target: " << atomic_act->vision_param.target_obj_name << ", need_6d: " << (atomic_act->vision_param.need_6d_pose ? "true" : "false"));
-              LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] ArmParam -> arm_id: " << atomic_act->arm_param.arm_id << ", enable_collision_check: " << (atomic_act->arm_param.enable_collision_check ? "true" : "false"));
-              LOG_INFO(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] GripperParam -> gripper_id: " << (int)atomic_act->gripper_param.gripper_id << ", block: " << (atomic_act->gripper_param.block ? "true" : "false"));
-              
-              LOG_DEBUG(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] ActionClient state_key: " << state_key);
-              
-              // 使用 ActionCallResult 替代 bool
-              task_act::ActionCallResult send_ret = act_client.send_goal(*atomic_act, state_key);
-              if (!task_act::action_call_result_is_ok(send_ret))
-              {
-                LOG_ERROR(logger_, task_log::Tag::BT, "[Branch " << branch_index << "] Action [" << atomic_act->action_type << "] send goal failed: " << task_act::action_call_result_to_str(send_ret));
-                return action_result_to_bt_status(send_ret);
-              }
-              else
-              {
-                return BTStatus::RUNNING;
-              }
-            };
-            
-            auto node_name = atomic_act->action_type;
-            auto act_node = std::make_shared<ActionNode>(node_name + std::to_string(Sequence_index), std::move(action_cb), logger_);
-            group_seq->addChild(act_node);
+            const std::string state_key =
+                "seq" + std::to_string(Sequence_index) + "_" +
+                action_step.action_type + "_" + std::to_string(i);
+            const std::string node_name =
+                action_step.action_type + "_seq" +
+                std::to_string(Sequence_index) + "_" + std::to_string(i);
+            group_seq->addChild(make_keyed_action_node(
+                act_client, action_step, state_key, node_name,
+                branch_scope, logger_));
         }
         parallel_root->addChild(group_seq);
     }
-    
+
     this->setRoot(parallel_root);
     
     LOG_SUCCESS(logger_, task_log::Tag::BT, "Parallel task tree loaded, total branches: " << parallel_action_groups.size());
