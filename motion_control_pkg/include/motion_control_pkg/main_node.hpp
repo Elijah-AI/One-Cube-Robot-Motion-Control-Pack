@@ -15,6 +15,7 @@
 #include "com_interfaces/msg/heart_beat.hpp"
 #include "com_interfaces/msg/node_status.hpp"
 #include "com_interfaces/msg/motor_status.hpp"
+#include "com_interfaces/msg/synced_robot_vision.hpp"
 #include "com_interfaces/action/move_joints.hpp"
 #include "com_interfaces/action/control_suck.hpp"
 
@@ -46,6 +47,7 @@ using GoalHandleAdjustBasePose = rclcpp_action::ServerGoalHandle<AdjustBasePose>
 
 using HeartBeat = com_interfaces::msg::HeartBeat;
 using NodeStatus = com_interfaces::msg::NodeStatus;
+using RobotVision = com_interfaces::msg::SyncedRobotVision;
 
 using MotorStatus = com_interfaces::msg::MotorStatus;
 

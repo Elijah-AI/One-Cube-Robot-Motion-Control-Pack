@@ -323,7 +323,7 @@ MiracleMAlgo::MiracleMAlgo(const std::string& urdf_path, const std::string& mesh
     // Setup custom collision pairs specified by user
     setupInternalCollisionPairs();
 
-
+    // node_ = std::make_shared<rclcpp::Node>("pointcloud_sub_node");
 }
 
 void MiracleMAlgo::setupInternalCollisionPairs() {
@@ -424,6 +424,145 @@ void MiracleMAlgo::addExternalCollisionBox(const std::string& name,
     geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "Added external object '%s'. New collision pairs: %d. Total active pairs: %zu",
                 name.c_str(), added_pairs, geom_model_.collisionPairs.size());
+}
+
+std::shared_ptr<coal::OcTree> MiracleMAlgo::buildOcTreeFromCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud,
+                                                                        double resolution,
+                                                                        Eigen::Vector3d& out_center) {
+  if (cloud->empty())
+    throw std::runtime_error("Input cloud is empty");
+
+  // 1. 计算 AABB 与中心
+  double min_x = std::numeric_limits<double>::max();
+  double min_y = std::numeric_limits<double>::max();
+  double min_z = std::numeric_limits<double>::max();
+  double max_x = std::numeric_limits<double>::lowest();
+  double max_y = std::numeric_limits<double>::lowest();
+  double max_z = std::numeric_limits<double>::lowest();
+  for (const auto& p : cloud->points) {
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+    min_x = std::min(min_x, (double)p.x); max_x = std::max(max_x, (double)p.x);
+    min_y = std::min(min_y, (double)p.y); max_y = std::max(max_y, (double)p.y);
+    min_z = std::min(min_z, (double)p.z); max_z = std::max(max_z, (double)p.z);
+  }
+  if (min_x > max_x)
+    throw std::runtime_error("No valid points");
+
+  const double center_x = (min_x + max_x) / 2.0;
+  const double center_y = (min_y + max_y) / 2.0;
+  const double center_z = (min_z + max_z) / 2.0;
+  out_center << center_x, center_y, center_z;
+
+  // 2. 构建 octomap::OcTree,插入点云(平移到以 center 为原点)
+  auto octree = std::make_shared<octomap::OcTree>(resolution);
+  // 默认 occupancy 阈值 0.5,可以直接用 true 强制占据
+  for (const auto& p : cloud->points) {
+    if (!std::isfinite(p.x)) continue;
+    octree->updateNode(
+        octomap::point3d((float)(p.x - center_x),
+                         (float)(p.y - center_y),
+                         (float)(p.z - center_z)),
+        true);
+  }
+  // 同步内部节点的占据状态(必须!)
+  octree->updateInnerOccupancy();
+
+  // 3. 统计占据叶节点数(诊断)
+  size_t leaf_count = 0;
+  for (auto it = octree->begin_leafs(); it != octree->end_leafs(); ++it) {
+    if (it->getOccupancy() > octree->getOccupancyThres()) leaf_count++;
+  }
+  RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+              "[OcTree] resolution=%.4f, occupied leaves=%zu",
+              resolution, leaf_count);
+  if (leaf_count == 0)
+    throw std::runtime_error("OcTree has 0 occupied leaves");
+
+  // 4. 包装成 coal::OcTree
+  //    coal::OcTree 内部持有 shared_ptr<const octomap::OcTree>,生命周期安全
+  std::shared_ptr<const octomap::OcTree> const_octree = octree;
+  auto coal_octree = std::make_shared<coal::OcTree>(const_octree);
+  return coal_octree;
+}
+
+void MiracleMAlgo::addExternalCollisionPointcloud(const std::string& name, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud) {
+
+  std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+
+  // 防重
+  if (std::find(external_objects_.begin(), external_objects_.end(), name)
+      != external_objects_.end()) {
+    removeExternalCollisionObject(name);
+    RCLCPP_WARN(rclcpp::get_logger("MiracleMAlgo"),
+                "External object '%s' already exists. Removing old one.", name.c_str());
+  }
+
+  // 1cm 体素,与 MoveIt 默认一致
+  const double resolution = 0.01;
+
+  try {
+    // 1. 加载点云
+    // auto cloud = loadPointCloud("/fusion/synced_robot_vision");
+    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+                "[PCD] loaded %zu points", cloud->size());
+
+    // 2. 构建 coal::OcTree
+    auto start_time_bvh = std::chrono::high_resolution_clock::now();
+    Eigen::Vector3d cloud_center;
+    auto coal_octree = buildOcTreeFromCloud(cloud, resolution, cloud_center);
+    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+                "[OcTree] built, cloud_center=(%.3f,%.3f,%.3f)",
+                cloud_center.x(), cloud_center.y(), cloud_center.z());
+
+    auto end_time_bvh = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed_ms_bvh = end_time_bvh - start_time_bvh;
+    std::cout<<"改进体素化+bvh耗时:"<<elapsed_ms_bvh.count()<<"ms"<<std::endl;
+
+    // 4. placement = pose (OcTree 内部坐标已以原点为中心)
+    Eigen::Isometry3d pose;
+    pose.translation() = cloud_center;
+    Eigen::Quaterniond q(1.0, 0.0, 0.0, 0.0); 
+    pose.linear() = q.toRotationMatrix(); 
+    pinocchio::SE3 placement(pose.rotation(), pose.translation());
+
+    // 5. 加到 GeometryModel
+    pinocchio::GeometryObject obj(name, 0, placement, coal_octree);
+    pinocchio::GeomIndex obj_id = geom_model_.addGeometryObject(obj);
+    external_objects_.push_back(name);
+
+    // 6. 加碰撞对(逻辑保持不变)
+    int added_pairs = 0;
+    for (const auto& arm_link : arm_collision_detect) {
+      for (size_t i = 0; i < geom_model_.geometryObjects.size(); ++i) {
+        const std::string& geom_name = geom_model_.geometryObjects[i].name;
+        if (geom_name.find(arm_link + "_") == 0 || geom_name == arm_link) {
+          bool exists = false;
+          for (const auto& pair : geom_model_.collisionPairs) {
+            if ((pair.first == i && pair.second == obj_id) ||
+                (pair.first == obj_id && pair.second == i)) {
+              exists = true; break;
+            }
+          }
+          if (!exists) {
+            geom_model_.addCollisionPair(pinocchio::CollisionPair(i, obj_id));
+            added_pairs++;
+          }
+        }
+      }
+    }
+
+    geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
+
+    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+                "Added external object '%s' as OcTree. "
+                "New pairs: %d. Total: %zu",
+                name.c_str(), added_pairs, geom_model_.collisionPairs.size());
+
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                 "Failed to add pointcloud collision '%s': %s",
+                 name.c_str(), e.what());
+  }
 }
 
 void MiracleMAlgo::removeExternalCollisionObject(const std::string& name) {
@@ -842,6 +981,7 @@ bool MiracleMAlgo::planSingleArmJointSpace(bool is_left,
             }
             path.push_back(current_dual_q);
         }
+        // savePathToTxt(path, "/home/cxs/桌面/pose.txt");
         return true;
     }
     return false;
@@ -2946,4 +3086,49 @@ int MiracleMAlgo::quadraticInterpolation(const std::vector<std::vector<double>> 
     pos.push_back(raw_pos[last_idx]);
 
     return 0; 
+}
+
+void MiracleMAlgo::savePathToTxt(const std::vector<std::vector<double> >& out_path, const std::string& filename)
+{
+    if (out_path.empty()) {
+        RCLCPP_WARN(rclcpp::get_logger("DualArmModule"), "Path is empty, nothing to save.");
+        return;
+    }
+
+    std::ofstream outFile(filename);
+    if (!outFile.is_open()) {
+        RCLCPP_ERROR(rclcpp::get_logger("DualArmModule"), "Failed to open file: %s", filename.c_str());
+        return;
+    }
+
+    // 设置浮点数格式：固定小数点，保留 6 位小数
+    outFile << std::fixed << std::setprecision(6);
+
+    // 获取自由度 (假设所有路径点维度一致)
+    int dof = static_cast<int>(out_path[0].size());
+
+    for (size_t i = 0; i < out_path.size(); ++i) {
+        const std::vector<double>& q = out_path[i];
+        
+        // 安全检查：确保维度一致
+        if (static_cast<int>(q.size()) != dof) {
+            RCLCPP_WARN(rclcpp::get_logger("DualArmModule"), 
+                        "Dimension mismatch at waypoint %zu. Skipping.", i);
+            continue;
+        }
+
+        for (int j = 0; j < dof; ++j) {
+            outFile << q[j];
+            // 如果不是该行的最后一个元素，则添加逗号
+            if (j < dof - 1) {
+                outFile << ","; 
+            }
+        }
+        // 【关键】每个轨迹点（每一行）结束后换行
+        outFile << std::endl;
+    }
+
+    outFile.close();
+    RCLCPP_INFO(rclcpp::get_logger("DualArmModule"), 
+                "Path saved to %s (%zu waypoints).", filename.c_str(), out_path.size());
 }

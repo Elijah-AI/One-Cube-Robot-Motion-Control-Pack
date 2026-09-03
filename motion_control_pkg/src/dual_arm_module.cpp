@@ -385,6 +385,12 @@ DualArmModule::DualArmModule(
 
     // joint_command_timer_ = create_wall_timer(250ms,
     // std::bind(&DualArmModule::joint_command_cb, this));
+
+    head_status_pub_=shared_node->create_publisher<MotorStatus>("/Control/HeadPose", 10);
+    head_feedback_timer_ = shared_node->create_wall_timer(33ms, std::bind(&DualArmModule::head_status_cb, this));
+    head_status_msg_ = com_interfaces::msg::MotorStatus();
+
+    sub_pointcloudNode_ = std::make_shared<rclcpp::Node>("pointcloud_sub_node");
 }
 
 bool DualArmModule::initialize(std::string& error_message)
@@ -2327,9 +2333,25 @@ void DualArmModule::execution_loop_move_pose_impl(
     }
 
     //加上偏移量
-    normalized_target.pose.position.x +=  goal->bound_size[0];
-    normalized_target.pose.position.y +=  goal->bound_size[1];
-    normalized_target.pose.position.z +=  goal->bound_size[2];
+    std::array<float, 3> safe_bound_size = {0.0f, 0.0f, 0.0f}; // 默认值
+
+    if (!goal->bound_size.empty()) {
+        if (goal->bound_size.size() >= 3) {
+            safe_bound_size[0] = goal->bound_size[0];
+            safe_bound_size[1] = goal->bound_size[1];
+            safe_bound_size[2] = goal->bound_size[2];
+        } else {
+            RCLCPP_WARN(rclcpp::get_logger("DualArmModule"), "bound_size has less than 3 elements, using defaults for missing ones.");
+            for (size_t i = 0; i < goal->bound_size.size(); ++i) {
+                safe_bound_size[i] = goal->bound_size[i];
+            }
+        }
+    } else {
+        RCLCPP_INFO(rclcpp::get_logger("DualArmModule"), "bound_size is empty, using default [0, 0, 0].");
+    }
+    normalized_target.pose.position.x +=  safe_bound_size[0];
+    normalized_target.pose.position.y +=  safe_bound_size[1];
+    normalized_target.pose.position.z +=  safe_bound_size[2];
 
     //使用固定姿态，测试y轴180度,z轴90度，固定轴
     // normalized_target.pose.orientation.x = -0.7071068;
@@ -2513,6 +2535,8 @@ void DualArmModule::execution_loop_move_pose_impl(
         if (goal->enable_collision_check) {
             // 复用 MiracleMAlgo 内部 Pinocchio IK、Coal 状态有效性与 OMPL
             // RRTConnect；旧的恒真 OMPLWrapper 不再进入 MovePose 主链。
+            auto cloud = this->loadPointCloud("/fusion/synced_robot_vision");  
+            miracle_algo_->addExternalCollisionPointcloud("box",cloud);
             std::vector<std::vector<double>> full_ompl_path;
             if (!miracle_algo_->planSingleArmCartesianGoal(
                 is_left, full_start_q, root_to_model_end, full_ompl_path))
@@ -2521,6 +2545,7 @@ void DualArmModule::execution_loop_move_pose_impl(
                     " arm Pinocchio/Coal/OMPL pose planning failed");
                 return;
             }
+            RCLCPP_INFO(rclcpp::get_logger("DualArmModule"), "进入执行move_pose_碰撞规划成功");
             active_arm_path.reserve(full_ompl_path.size());
             for (const auto& full_q : full_ompl_path) {
                 std::vector<double> arm_q;
@@ -3964,6 +3989,106 @@ void DualArmModule::motor_statu_cb()
       motor_status_msg_.header.stamp = node->get_clock()->now();
       motor_status_pub_->publish(motor_status_msg_);
     }
+}
+
+void DualArmModule::head_status_cb()
+{
+    head_status_msg_.end_effector_pose.clear(); 
+    head_status_msg_.header.frame_id = planning_frame_;
+    std::string model_end_frame = "head_pitch_link";
+
+    auto node = lockNode(__func__);
+    if (!node) {
+      return;
+    }
+    // 查验连接是否成功
+    if (!init_robot_link_) {
+      init_motor_status();
+      head_status_msg_.header.frame_id = planning_frame_;
+      head_status_msg_.header.stamp = node->get_clock()->now();
+      head_status_pub_->publish(head_status_msg_);
+      return;
+    }
+    Eigen::Matrix4d T_source_target;
+    if (!miracle_algo_->getForwardKinematics(planning_frame_, model_end_frame, T_source_target))
+    {
+        RCLCPP_ERROR(node->get_logger(), "Failed to get forward kinematics");
+    }
+
+    Eigen::Matrix3d rotation_matrix = T_source_target.block<3,3>(0,0);
+    Eigen::Quaterniond quat(rotation_matrix);
+    Eigen::Vector3d translation = T_source_target.block<3,1>(0,3);
+    geometry_msgs::msg::Pose identity_pose;
+    identity_pose.orientation.x = quat.x();
+    identity_pose.orientation.y = quat.y();
+    identity_pose.orientation.z = quat.z();
+    identity_pose.orientation.w = quat.w();
+    identity_pose.position.x = translation.x();
+    identity_pose.position.y = translation.y();
+    identity_pose.position.z = translation.z();
+    head_status_msg_.end_effector_pose.push_back(identity_pose);
+    head_status_pub_->publish(head_status_msg_);
+
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr DualArmModule::loadPointCloud(const std::string& topic_name) {
+  // path 在此处语义为“话题名”，例如 "/fusion/synced_robot_vision"
+  const std::string& topic = topic_name;
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+  std::atomic<bool> got{false};
+
+  // 1. 临时订阅，仅本次调用有效
+  // 使用完整的命名空间 com_interfaces::msg::SyncedRobotVision
+  auto sub = sub_pointcloudNode_->create_subscription<RobotVision>(
+      topic, 10,
+      [&](const RobotVision::SharedPtr msg) {
+        if (got.exchange(true)) return;   // 只取第一帧
+        
+        // 从自定义消息中提取 sensor_msgs/PointCloud2 字段
+        // 确保 msg 定义中该字段名为 camera_rgbd_pointcloud
+        const auto& pc2_msg = msg->camera_rgbd_pointcloud;
+        
+        // 检查点云数据是否为空
+        if (pc2_msg.data.empty()) {
+            RCLCPP_WARN(sub_pointcloudNode_->get_logger(), "Received empty pointcloud in SyncedRobotVision");
+            got.store(false); // 重置标志，尝试接收下一帧
+            return;
+        }
+
+        try {
+            // 将 ROS2 PointCloud2 消息转换为 PCL 点云
+            pcl::fromROSMsg(pc2_msg, *cloud);
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(sub_pointcloudNode_->get_logger(), "Failed to convert ROS msg to PCL: %s", e.what());
+            got.store(false);
+        }
+      });
+
+  // 2. 阻塞等待，固定 2 秒超时
+  constexpr int kTimeoutMs = 2000;
+  auto start = std::chrono::steady_clock::now();
+  rclcpp::Rate rate(50);
+  while (rclcpp::ok() && !got.load()) {
+    rclcpp::spin_some(sub_pointcloudNode_);
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count() >= kTimeoutMs) {
+      RCLCPP_WARN(sub_pointcloudNode_->get_logger(),
+                  "Timeout after %d ms waiting for %s", kTimeoutMs, topic.c_str());
+      throw std::runtime_error("Timeout waiting for synced robot vision on topic: " + topic);
+    }
+    rate.sleep();
+  }
+
+  // 3. sub 离开作用域自动销毁，不再读取后续消息
+  if (cloud->empty()) {
+      RCLCPP_WARN(sub_pointcloudNode_->get_logger(), "Got empty point cloud from %s", topic.c_str());
+  } else {
+      RCLCPP_INFO(sub_pointcloudNode_->get_logger(), "Got %lu points from %s",
+                cloud->size(), topic.c_str());
+  }
+  
+  return cloud;
 }
 
 void DualArmModule::joint_command_cb()
