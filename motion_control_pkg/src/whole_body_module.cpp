@@ -573,7 +573,7 @@ bool WholeBodyModule::plan_trajectory(
                 if (!miracle_algo_->solveWholeBodyIK(
                         q_current, left_step, right_step, q_next,
                         std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
-                        30.0 * 0.017453292519943295, 10.0, 5U, false)) {
+                        30.0 * 0.017453292519943295, 10.0, 5U, true)) {
                     error_message =
                         "failed to solve dual-arm whole-body IK at Cartesian "
                         "substep " + std::to_string(step) + "/" +
@@ -813,26 +813,59 @@ void WholeBodyModule::execution_loop(
         return;
     }
 
-    publish_feedback(30.0F, "dispatching preplanned arm and leg trajectories");
-    auto cancel = std::make_shared<motion_control_pkg::execution::CancellationToken>();
-    const auto start_time = std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(100);
+    publish_feedback(20.0F, "preparing arm and leg trajectories");
     std::string arm_error;
+    if (!dual_arm_module_->prepare_preplanned_dispatch(
+            left_path, right_path, goal->control_mode, arm_error)) {
+        result->error_message = arm_error;
+        finish_time();
+        terminal.abort(result);
+        release_child_resources();
+        return;
+    }
     std::string leg_error;
+    if (!lower_body_module_->prepare_preplanned_dispatch(leg_path, leg_error)) {
+        result->error_message = leg_error;
+        finish_time();
+        terminal.abort(result);
+        release_child_resources();
+        return;
+    }
+    // splitWholeBodyActiveTrajectory 保证 left/right/leg 三段同源等长；
+    // 此处显式校验，避免后续重构让两路独立规划时样本数失配，导致一侧
+    // 先发完报成功而另一侧仍在运动。
+    const std::size_t arm_samples =
+        need_left ? left_path.size() : right_path.size();
+    if (arm_samples != leg_path.size()) {
+        result->error_message =
+            "whole-body arm/leg trajectory sample counts differ: arm=" +
+            std::to_string(arm_samples) + " leg=" + std::to_string(leg_path.size());
+        finish_time();
+        terminal.abort(result);
+        release_child_resources();
+        return;
+    }
+
+    publish_feedback(30.0F, "dispatching synchronized arm and leg trajectories");
+    auto cancel = std::make_shared<motion_control_pkg::execution::CancellationToken>();
+    // 两路 prepare 已在主线程完成（电机使能、控制模式切换、单位转换），
+    // 起点不再需要预留 100ms 硬编码预算，仅需覆盖线程调度抖动；这样即便
+    // 某次 prepare 耗时较长，start_time 也始终在未来，4ms 节拍不会坍缩。
+    const auto start_time = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(10);
     std::future<bool> arm_future;
     std::future<bool> leg_future;
     try {
         arm_future = std::async(
             std::launch::async,
-            [this, &left_path, &right_path, goal, start_time, cancel, &arm_error]() {
-                return dual_arm_module_->execute_preplanned_trajectory(
-                    left_path, right_path, goal->control_mode, start_time,
-                    cancel, arm_error);
+            [this, start_time, cancel, &arm_error]() {
+                return dual_arm_module_->dispatch_preplanned(
+                    start_time, cancel, arm_error);
             });
         leg_future = std::async(
             std::launch::async,
             [this, &leg_path, start_time, cancel, &leg_error]() {
-                return lower_body_module_->execute_preplanned_trajectory(
+                return lower_body_module_->dispatch_preplanned(
                     leg_path, start_time, cancel, leg_error);
             });
     } catch (const std::exception& error) {

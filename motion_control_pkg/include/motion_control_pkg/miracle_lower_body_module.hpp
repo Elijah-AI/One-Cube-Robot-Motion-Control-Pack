@@ -180,6 +180,19 @@ namespace miracle {
             const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
             std::string& error_message);
 
+        // 预规划轨迹下发拆为两阶段：prepare 做关节角校验与电机使能，
+        // dispatch 在 start_time 到来后按 4ms 节拍循环下发。调用者应在
+        // arm/leg 两路 prepare 均成功后再统一设定 start_time，避免准备
+        // 阶段耗时吃掉启动预算导致首帧失同步。
+        bool prepare_preplanned_dispatch(
+            const std::vector<std::vector<double>>& positions,
+            std::string& error_message);
+        bool dispatch_preplanned(
+            const std::vector<std::vector<double>>& positions,
+            const std::chrono::steady_clock::time_point& start_time,
+            const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+            std::string& error_message);
+
         // Reserve the leg execution flag before whole-body planning starts.
         bool reserve_preplanned_trajectory_resource(std::string& error_message);
         void release_preplanned_trajectory_resource() noexcept;
