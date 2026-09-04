@@ -337,6 +337,39 @@ if(BUILD_TESTING)
   target_link_libraries(test_dual_arm_pose_transforms
     Eigen3::Eigen
   )
+
+  ament_add_gtest(test_cartesian_line_sampling
+    test/test_cartesian_line_sampling.cpp
+  )
+  target_include_directories(test_cartesian_line_sampling PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${Eigen3_INCLUDE_DIRS}
+  )
+  target_link_libraries(test_cartesian_line_sampling
+    Eigen3::Eigen
+  )
+
+  ament_add_gtest(test_gripper_worker_threads
+    test/test_gripper_worker_threads.cpp
+  )
+  target_include_directories(test_gripper_worker_threads PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_link_libraries(test_gripper_worker_threads Threads::Threads)
+
+  ament_add_gtest(test_toppra_stable_solver
+    test/test_toppra_stable_solver.cpp
+  )
+  target_include_directories(test_toppra_stable_solver PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${dirToppRA}/include
+    ${Eigen3_INCLUDE_DIRS}
+  )
+  target_link_libraries(test_toppra_stable_solver
+    toppra_lib
+    Eigen3::Eigen
+  )
+  set_tests_properties(test_toppra_stable_solver PROPERTIES TIMEOUT 15)
 endif()
 
 # 如果 MarvinSDK 或 Kine 依赖系统库（如 pthread, dl, rt 等），需在此补充

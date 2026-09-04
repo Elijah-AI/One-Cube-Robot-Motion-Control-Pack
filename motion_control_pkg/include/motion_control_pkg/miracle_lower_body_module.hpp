@@ -39,6 +39,7 @@
 #include <vector>
 #include <memory>
 #include <thread>
+#include <chrono>
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "miracle_module.hpp"
 #include "jsoncpp/json/json.h"
@@ -136,7 +137,11 @@ namespace miracle {
 
 
         template <typename ActionT>
-        void followTrajectoryHandle(std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> goal_handle);
+        void followTrajectoryHandle(
+            std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> goal_handle,
+            const std::chrono::steady_clock::time_point& action_started_at,
+            double ik_time_seconds,
+            double planning_time_seconds);
         /*
         ** for gmca
         **/

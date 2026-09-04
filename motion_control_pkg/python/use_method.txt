@@ -84,10 +84,10 @@ ros2 action send_goal --feedback \
       'leg_joint1','leg_joint2','leg_joint3','body_joint'
     ],
     position: [
-      -1.0, 2.0, -1.0, 0.0
+      -1.0, 2.2, -1.2, 0.0
     ],
     enable_collision_check: false,
-    speed: 0.2,
+    speed: 0.9,
     timeout_ms: 3000}" \
   --feedback
 
@@ -115,7 +115,7 @@ ros2 action send_goal --feedback \
     },
     bound_size: [0.0, 0.0, 0.0],
     enable_collision_check: true,
-    enable_move_line: true,
+    enable_move_line: false,
     use_force_control: false,
     speed: 0.2,
     timeout_ms: 45000}" \

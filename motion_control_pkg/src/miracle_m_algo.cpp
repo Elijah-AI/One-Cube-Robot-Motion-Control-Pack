@@ -37,6 +37,7 @@
 #include <cstddef>
 #include <limits>
 #include <random>
+#include <sstream>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/frames.hpp>
@@ -52,6 +53,8 @@
 #include <ompl/base/spaces/RealVectorStateSpace.h>
 #include <ompl/geometric/planners/rrt/RRTConnect.h>
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "motion_control_pkg/motion/cartesian_line_sampling.hpp"
+#include "motion_control_pkg/motion/toppra_path_preparation.hpp"
 
 #include <toppra/algorithm/toppra.hpp>
 #include <toppra/constraint/linear_joint_acceleration.hpp>
@@ -925,6 +928,17 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
                               Eigen::VectorXd& q_res,
                               int mode) {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    SingleArmIkWorkspace workspace;
+    return solveIKWithLockedData(q_init, goal, q_res, mode, workspace);
+}
+
+bool MiracleMAlgo::solveIKWithLockedData(
+    const Eigen::VectorXd& q_init,
+    const Eigen::Isometry3d& goal,
+    Eigen::VectorXd& q_res,
+    int mode,
+    SingleArmIkWorkspace& workspace)
+{
     double eps = 5e-5;
     const int IT_MAX = 1000;
     const double DT = 0.5;
@@ -985,7 +999,16 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
             mode_name);
         return false;
     }
-    Eigen::MatrixXd J_tmp(6, model_.nv);
+    workspace.jacobian.resize(6, model_.nv);
+    workspace.error.resize(6);
+    workspace.jjt.resize(6, 6);
+    workspace.velocity.resize(model_.nv);
+    workspace.damped_pseudo_inverse.resize(model_.nv, 6);
+    workspace.nullspace_projector.resize(model_.nv, model_.nv);
+    workspace.centering_velocity.resize(model_.nv);
+    workspace.candidate.resize(model_.nq);
+    workspace.identity6.setIdentity(6, 6);
+    Eigen::MatrixXd& J_tmp = workspace.jacobian;
 
     bool success = false;
     size_t next_fallback_seed = 0U;
@@ -1015,7 +1038,7 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
     //         return oss.str();
     //     }());
 
-    Eigen::VectorXd err(6);
+    Eigen::VectorXd& err = workspace.error;
     for (int i=0; i<IT_MAX; i++) {
         // pinocchio::forwardKinematics(model_, *data_, q_res);
         // pinocchio::updateFramePlacements(model_, *data_);
@@ -1032,7 +1055,7 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
             passesSimplifiedCcsJoint67Constraint(q_res, *active_q)))
         {
             success = true;
-            RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "solveIK: %s IK converged in %d iterations. Error norm: %f", mode_name, i, err.norm());
+            RCLCPP_DEBUG(rclcpp::get_logger("MiracleMAlgo"), "solveIK: %s IK converged in %d iterations. Error norm: %f", mode_name, i, err.norm());
             break;
         }
 
@@ -1047,22 +1070,27 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
             }
         }
 
-        Eigen::MatrixXd JJt = J_tmp * J_tmp.transpose();
+        Eigen::MatrixXd& JJt = workspace.jjt;
+        JJt.noalias() = J_tmp * J_tmp.transpose();
         JJt.diagonal().array() += damp;
 
         const auto jj_solver = JJt.ldlt();
-        Eigen::VectorXd v = J_tmp.transpose() * jj_solver.solve(err);
+        Eigen::VectorXd& v = workspace.velocity;
+        v.noalias() = J_tmp.transpose() * jj_solver.solve(err);
         if (active_q != nullptr) {
             // Keep the Cartesian task primary while using arm redundancy to
             // bias J6/J7 toward the center of the simplified CCS envelope.
-            const Eigen::MatrixXd damped_pseudo_inverse =
-                J_tmp.transpose() * jj_solver.solve(
-                Eigen::MatrixXd::Identity(6, 6));
-            const Eigen::MatrixXd nullspace_projector =
-                Eigen::MatrixXd::Identity(model_.nv, model_.nv) -
-                damped_pseudo_inverse * J_tmp;
-            Eigen::VectorXd centering_velocity =
-                Eigen::VectorXd::Zero(model_.nv);
+            Eigen::MatrixXd& damped_pseudo_inverse =
+                workspace.damped_pseudo_inverse;
+            damped_pseudo_inverse.noalias() =
+                J_tmp.transpose() * jj_solver.solve(workspace.identity6);
+            Eigen::MatrixXd& nullspace_projector =
+                workspace.nullspace_projector;
+            nullspace_projector.setIdentity();
+            nullspace_projector.noalias() -= damped_pseudo_inverse * J_tmp;
+            Eigen::VectorXd& centering_velocity =
+                workspace.centering_velocity;
+            centering_velocity.setZero();
             addCcsJoint67CenteringVelocity(
                 q_res, *active_q, *active_v, centering_velocity);
             v += nullspace_projector * centering_velocity;
@@ -1075,7 +1103,8 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
                 attempt < kIkLineSearchAttempts; ++attempt)
             {
                 const double step_scale = std::ldexp(1.0, -attempt);
-                Eigen::VectorXd candidate = pinocchio::integrate(
+                Eigen::VectorXd& candidate = workspace.candidate;
+                candidate = pinocchio::integrate(
                     model_, q_res, v * (DT * step_scale));
                 for (int j = 0; j < model_.nq; ++j) {
                     candidate[j] = std::clamp(
@@ -1099,7 +1128,7 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
                 if (std::isfinite(candidate_error_norm) &&
                     candidate_error_norm < current_error_norm)
                 {
-                    q_res = std::move(candidate);
+                    q_res = candidate;
                     step_accepted = true;
                     break;
                 }
@@ -2039,7 +2068,11 @@ bool MiracleMAlgo::planDualArmCartesianGoal(const std::vector<double>& start_q,
 bool MiracleMAlgo::planSingleArmCartesianGoal(bool is_left,
                                                  const std::vector<double>& start_q,
                                                  const Eigen::Isometry3d& goal,
-                                                 std::vector<std::vector<double>>& path) {
+                                                 std::vector<std::vector<double>>& path,
+                                                 double* ik_time_seconds) {
+    if (ik_time_seconds != nullptr) {
+        *ik_time_seconds = 0.0;
+    }
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     if (start_q.size() != static_cast<size_t>(model_.nq)) {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
@@ -2049,7 +2082,13 @@ bool MiracleMAlgo::planSingleArmCartesianGoal(bool is_left,
     }
     Eigen::VectorXd q_init = toEigenConfig(start_q);
     Eigen::VectorXd q_res;
-    if(!solveIK(q_init, goal, q_res, is_left ? 0 : 1)) return false;
+    const auto ik_started_at = std::chrono::steady_clock::now();
+    const bool ik_ok = solveIK(q_init, goal, q_res, is_left ? 0 : 1);
+    if (ik_time_seconds != nullptr) {
+        *ik_time_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - ik_started_at).count();
+    }
+    if (!ik_ok) return false;
     
     const std::vector<size_t>& active_indices = is_left ? left_arm_q_indices_ : right_arm_q_indices_;
     std::vector<double> goal_q(7);
@@ -2403,6 +2442,287 @@ bool MiracleMAlgo::planSingleArmCartesianPath(bool is_left,
     return true;
 }
 
+bool MiracleMAlgo::planSingleArmCartesianIkWaypoints(
+    bool is_left,
+    const std::vector<double>& start_q,
+    const Eigen::Isometry3d& goal,
+    double max_translation_step_m,
+    double max_rotation_step_rad,
+    std::vector<std::vector<double>>& arm_waypoints,
+    Eigen::Isometry3d& actual_start_pose,
+    double* ik_time_seconds)
+{
+    arm_waypoints.clear();
+    actual_start_pose = Eigen::Isometry3d::Identity();
+    if (ik_time_seconds != nullptr) {
+        *ik_time_seconds = 0.0;
+    }
+    if (start_q.size() != static_cast<std::size_t>(model_.nq) ||
+        !goal.matrix().allFinite())
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planSingleArmCartesianIkWaypoints: invalid full q or goal");
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    Eigen::VectorXd q_current = toEigenConfig(start_q);
+    pinocchio::forwardKinematics(model_, *data_, q_current);
+    pinocchio::updateFramePlacements(model_, *data_);
+
+    const pinocchio::FrameIndex ee_id =
+        is_left ? left_ee_frame_id_ : right_ee_frame_id_;
+    const pinocchio::SE3 start_se3 = data_->oMf[ee_id];
+    actual_start_pose.matrix() = start_se3.toHomogeneousMatrix();
+    const auto sampling =
+        motion_control_pkg::motion::computeCartesianLineSegmentCount(
+        actual_start_pose, goal, max_translation_step_m,
+        max_rotation_step_rad);
+    if (!sampling.valid) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planSingleArmCartesianIkWaypoints: %s",
+            sampling.error_message.c_str());
+        return false;
+    }
+    // 保持旧 Move_L 的最短平移保护，避免把数值噪声放大成轨迹。
+    if (sampling.translation_distance_m < 1.0e-2) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planSingleArmCartesianIkWaypoints: translation %.6f m is shorter than 0.01 m",
+            sampling.translation_distance_m);
+        return false;
+    }
+
+    const auto& indices =
+        is_left ? left_arm_q_indices_ : right_arm_q_indices_;
+    if (indices.size() != 7U) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "planSingleArmCartesianIkWaypoints: active arm does not have seven joints");
+        return false;
+    }
+    const auto append_active_arm = [&](const Eigen::VectorXd& full_q) {
+        std::vector<double> arm_q;
+        arm_q.reserve(indices.size());
+        for (const std::size_t index : indices) {
+            if (index >= static_cast<std::size_t>(full_q.size())) {
+                return false;
+            }
+            arm_q.push_back(full_q[static_cast<Eigen::Index>(index)]);
+        }
+        arm_waypoints.push_back(std::move(arm_q));
+        return true;
+    };
+
+    arm_waypoints.reserve(sampling.segments + 1U);
+    if (!append_active_arm(q_current)) {
+        arm_waypoints.clear();
+        return false;
+    }
+
+    SingleArmIkWorkspace workspace;
+    Eigen::VectorXd q_next(model_.nq);
+    for (std::size_t segment = 1U; segment <= sampling.segments; ++segment) {
+        const double alpha = static_cast<double>(segment) /
+            static_cast<double>(sampling.segments);
+        const pinocchio::SE3 interpolated = pinocchio::SE3::Interpolate(
+            start_se3, pinocchio::SE3(goal.rotation(), goal.translation()), alpha);
+        Eigen::Isometry3d target = Eigen::Isometry3d::Identity();
+        target.matrix() = interpolated.toHomogeneousMatrix();
+
+        const auto ik_started_at = std::chrono::steady_clock::now();
+        const bool ik_ok = solveIKWithLockedData(
+            q_current, target, q_next, is_left ? 0 : 1, workspace);
+        if (ik_time_seconds != nullptr) {
+            *ik_time_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - ik_started_at).count();
+        }
+        if (!ik_ok) {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "planSingleArmCartesianIkWaypoints: IK failed at segment %zu/%zu",
+                segment, sampling.segments);
+            arm_waypoints.clear();
+            return false;
+        }
+        q_current = q_next;
+        if (!append_active_arm(q_current)) {
+            arm_waypoints.clear();
+            return false;
+        }
+    }
+
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "Cartesian line coarse IK ready: segments=%zu, translation=%.6f m, rotation=%.6f rad, step<=%.6f m/%.6f rad, ik_time=%.6f s",
+        sampling.segments, sampling.translation_distance_m,
+        sampling.rotation_distance_rad, max_translation_step_m,
+        max_rotation_step_rad,
+        ik_time_seconds != nullptr ? *ik_time_seconds : 0.0);
+    return true;
+}
+
+bool MiracleMAlgo::validateSingleArmCartesianTrajectory(
+    bool is_left,
+    const std::vector<double>& reference_full_q,
+    const Eigen::Isometry3d& start_pose,
+    const Eigen::Isometry3d& goal_pose,
+    const std::vector<std::vector<double>>& arm_trajectory,
+    double position_tolerance_m,
+    double orientation_tolerance_rad,
+    double& max_position_error_m,
+    double& max_orientation_error_rad,
+    std::string& error_message)
+{
+    max_position_error_m = 0.0;
+    max_orientation_error_rad = 0.0;
+    error_message.clear();
+    const auto fk_validation_started_at = std::chrono::steady_clock::now();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "Cartesian line FK validation: begin arm=%s samples=%zu position_tolerance=%.9f m orientation_tolerance=%.9f rad",
+        is_left ? "left" : "right", arm_trajectory.size(),
+        position_tolerance_m, orientation_tolerance_rad);
+    const auto log_fk_validation_end = [&](bool valid) {
+        const double elapsed_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - fk_validation_started_at).count();
+        RCLCPP_INFO(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "Cartesian line FK validation: end arm=%s result=%s samples=%zu elapsed=%.6f s max_position_error=%.9f m max_orientation_error=%.9f rad error=%s",
+            is_left ? "left" : "right", valid ? "success" : "failure",
+            arm_trajectory.size(), elapsed_seconds, max_position_error_m,
+            max_orientation_error_rad,
+            error_message.empty() ? "none" : error_message.c_str());
+    };
+    if (reference_full_q.size() != static_cast<std::size_t>(model_.nq) ||
+        arm_trajectory.empty() || !start_pose.matrix().allFinite() ||
+        !goal_pose.matrix().allFinite() ||
+        !std::isfinite(position_tolerance_m) || position_tolerance_m <= 0.0 ||
+        !std::isfinite(orientation_tolerance_rad) || orientation_tolerance_rad <= 0.0)
+    {
+        error_message = "Cartesian line FK validation inputs are invalid";
+        log_fk_validation_end(false);
+        return false;
+    }
+
+    const auto& indices =
+        is_left ? left_arm_q_indices_ : right_arm_q_indices_;
+    if (indices.size() != 7U) {
+        error_message = "Cartesian line FK validation requires seven arm joints";
+        log_fk_validation_end(false);
+        return false;
+    }
+
+    const double translation_distance =
+        (goal_pose.translation() - start_pose.translation()).norm();
+    if (!std::isfinite(translation_distance) || translation_distance < 1.0e-2) {
+        error_message = "Cartesian line FK validation translation is too short";
+        log_fk_validation_end(false);
+        return false;
+    }
+    const double progress_tolerance =
+        std::max(1.0e-6, position_tolerance_m / translation_distance);
+
+    const auto fk_lock_started_at = std::chrono::steady_clock::now();
+    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    const double fk_lock_wait_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - fk_lock_started_at).count();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "Cartesian line FK validation: Pinocchio lock acquired arm=%s wait=%.6f s",
+        is_left ? "left" : "right", fk_lock_wait_seconds);
+    Eigen::VectorXd full_q = toEigenConfig(reference_full_q);
+    const pinocchio::FrameIndex ee_id =
+        is_left ? left_ee_frame_id_ : right_ee_frame_id_;
+    double previous_progress = -progress_tolerance;
+    Eigen::Isometry3d final_pose = Eigen::Isometry3d::Identity();
+    for (std::size_t sample_index = 0U;
+        sample_index < arm_trajectory.size(); ++sample_index)
+    {
+        const auto& arm_q = arm_trajectory[sample_index];
+        if (arm_q.size() != indices.size()) {
+            error_message = "Cartesian line FK validation arm sample dimension mismatch";
+            log_fk_validation_end(false);
+            return false;
+        }
+        for (std::size_t joint = 0U; joint < indices.size(); ++joint) {
+            full_q[static_cast<Eigen::Index>(indices[joint])] = arm_q[joint];
+        }
+        pinocchio::forwardKinematics(model_, *data_, full_q);
+        pinocchio::updateFramePlacements(model_, *data_);
+        Eigen::Isometry3d sample_pose = Eigen::Isometry3d::Identity();
+        sample_pose.matrix() = data_->oMf[ee_id].toHomogeneousMatrix();
+        const auto sample_error =
+            motion_control_pkg::motion::evaluateCartesianLineSample(
+            start_pose, goal_pose, sample_pose);
+        if (!sample_error.valid) {
+            error_message = sample_error.error_message;
+            log_fk_validation_end(false);
+            return false;
+        }
+
+        max_position_error_m = std::max(
+            max_position_error_m, sample_error.position_error_m);
+        max_orientation_error_rad = std::max(
+            max_orientation_error_rad, sample_error.orientation_error_rad);
+        if (sample_error.progress < -progress_tolerance ||
+            sample_error.progress > 1.0 + progress_tolerance)
+        {
+            std::ostringstream stream;
+            stream << "Cartesian line progress out of range at sample "
+                   << sample_index << ": " << sample_error.progress;
+            error_message = stream.str();
+            log_fk_validation_end(false);
+            return false;
+        }
+        if (sample_error.progress + progress_tolerance < previous_progress) {
+            std::ostringstream stream;
+            stream << "Cartesian line progress regressed at sample "
+                   << sample_index << ": previous=" << previous_progress
+                   << " current=" << sample_error.progress;
+            error_message = stream.str();
+            log_fk_validation_end(false);
+            return false;
+        }
+        if (sample_error.position_error_m > position_tolerance_m ||
+            sample_error.orientation_error_rad > orientation_tolerance_rad)
+        {
+            std::ostringstream stream;
+            stream << "Cartesian line FK tolerance exceeded at sample "
+                   << sample_index << ": position_error="
+                   << sample_error.position_error_m << " m, orientation_error="
+                   << sample_error.orientation_error_rad << " rad";
+            error_message = stream.str();
+            log_fk_validation_end(false);
+            return false;
+        }
+        previous_progress = std::max(previous_progress, sample_error.progress);
+        final_pose = sample_pose;
+    }
+
+    const double endpoint_position_error =
+        (final_pose.translation() - goal_pose.translation()).norm();
+    const double endpoint_orientation_error =
+        motion_control_pkg::motion::quaternionAngularDistance(
+        Eigen::Quaterniond(final_pose.rotation()),
+        Eigen::Quaterniond(goal_pose.rotation()));
+    if (endpoint_position_error > position_tolerance_m ||
+        endpoint_orientation_error > orientation_tolerance_rad)
+    {
+        std::ostringstream stream;
+        stream << "Cartesian line endpoint mismatch: position_error="
+               << endpoint_position_error << " m, orientation_error="
+               << endpoint_orientation_error << " rad";
+        error_message = stream.str();
+        log_fk_validation_end(false);
+        return false;
+    }
+    log_fk_validation_end(true);
+    return true;
+}
+
 Eigen::Quaterniond MiracleMAlgo::slerp_ruckig(const Eigen::Quaterniond& q0,
                                        const Eigen::Quaterniond& q1,
                                        double t)
@@ -2444,8 +2764,12 @@ bool MiracleMAlgo::planSingleArmCartesianLine(bool is_left, const std::vector<do
                                                     const std::vector<double>& end_poseture,
                                                     const double& dt,const double& v_max,
                                                     const double& a_max, const double& j_max,
-                                                    std::vector<std::vector<double>>& path)
+                                                    std::vector<std::vector<double>>& path,
+                                                    double* ik_time_seconds)
 {
+    if (ik_time_seconds != nullptr) {
+        *ik_time_seconds = 0.0;
+    }
     // std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     pinocchio::Data local_data(model_); 
     pinocchio::GeometryData local_geom_data(geom_model_);
@@ -2541,7 +2865,14 @@ bool MiracleMAlgo::planSingleArmCartesianLine(bool is_left, const std::vector<do
         pose.linear() = qk.toRotationMatrix(); // 设置旋转部分
         pose.translation() = xk;
         std::vector<double> q_next;
-        if(!solveSingleArmCartesianIk(is_left, current_full_q, pose, q_next)) {
+        const auto ik_started_at = std::chrono::steady_clock::now();
+        const bool ik_ok = solveSingleArmCartesianIk(
+            is_left, current_full_q, pose, q_next);
+        if (ik_time_seconds != nullptr) {
+            *ik_time_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - ik_started_at).count();
+        }
+        if (!ik_ok) {
             RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "PlanSingleArmCartesianPath: failed to solve IK at %zu point",i+1);
             return false;
         }
@@ -2628,10 +2959,13 @@ bool MiracleMAlgo::toppraPlan(
     double dt,
     const std::vector<double>& max_velocity,
     const std::vector<double>& max_acc,
-    std::vector<std::vector<double>>& res_trajectory)
+    std::vector<std::vector<double>>& res_trajectory,
+    ToppraSolverMode solver_mode,
+    double maximum_duration_seconds)
 {
     const int dof = static_cast<int>(max_velocity.size());
-    if (ompl_path.size() < 2 || dof <= 0 || !std::isfinite(dt) || dt <= 0.0)
+    if (ompl_path.size() < 2 || dof <= 0 || !std::isfinite(dt) || dt <= 0.0 ||
+        std::isnan(maximum_duration_seconds) || maximum_duration_seconds <= 0.0)
     {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: invalid path or dof");
         return false;
@@ -2640,17 +2974,39 @@ bool MiracleMAlgo::toppraPlan(
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: acceleration size mismatch");
         return false;
     }
-    for (const auto& wp : ompl_path) {
-        if (wp.size() != static_cast<std::size_t>(dof)) {
-            RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: waypoint size mismatch");
+    for (int joint = 0; joint < dof; ++joint) {
+        if (!std::isfinite(max_velocity[static_cast<std::size_t>(joint)]) ||
+            max_velocity[static_cast<std::size_t>(joint)] <= 0.0 ||
+            !std::isfinite(max_acc[static_cast<std::size_t>(joint)]) ||
+            max_acc[static_cast<std::size_t>(joint)] <= 0.0)
+        {
+            RCLCPP_ERROR(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "toppraPlan: limits must be finite and positive");
             return false;
         }
+    }
+
+    const bool stable_cartesian_mode =
+        solver_mode == ToppraSolverMode::kStableCartesian;
+    const auto prepared =
+        motion_control_pkg::motion::prepareToppraWaypointPath(
+        ompl_path, static_cast<std::size_t>(dof),
+        stable_cartesian_mode ?
+        motion_control_pkg::motion::kToppraDuplicateWaypointToleranceRad : 0.0,
+        stable_cartesian_mode);
+    if (!prepared.valid) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "toppraPlan: path preparation failed: %s",
+            prepared.error_message.c_str());
+        return false;
     }
     
     // 1. waypoint -> toppra::Vectors
     toppra::Vectors pos_list;
-    int nPt = ompl_path.size();
-    for (const auto& wp : ompl_path)
+    const int nPt = static_cast<int>(prepared.waypoints.size());
+    for (const auto& wp : prepared.waypoints)
     {
         toppra::Vector p(dof);
         for (int j = 0; j < dof; ++j)
@@ -2660,14 +3016,20 @@ bool MiracleMAlgo::toppraPlan(
 
     // 路径参数节点
     toppra::Vector breakPts(nPt);
-    breakPts(0) = 0.0;
-    for (int i = 1; i < nPt; ++i) {
-        breakPts(i) = breakPts(i - 1) + (pos_list[i] - pos_list[i - 1]).norm();
+    for (int i = 0; i < nPt; ++i) {
+        breakPts(i) = prepared.breakpoints[static_cast<std::size_t>(i)];
     }
-    // clamped 起止零速度,一阶为0
+    // TOPPRA already enforces zero temporal path speed at both ends.  A
+    // clamped geometric spline also forces q'(s)=0 and creates a double-zero
+    // endpoint that can collapse the penultimate squared path velocity and
+    // inflate the last segment to many hours.  Keep legacy callers unchanged,
+    // but use zero-curvature natural boundaries for stable Cartesian MoveL.
+    const char* boundary_condition_name = stable_cartesian_mode ?
+        motion_control_pkg::motion::kToppraStableCartesianBoundaryCondition :
+        "clamped";
     std::array<toppra::BoundaryCond,2> bc{
-        toppra::BoundaryCond("clamped"),
-        toppra::BoundaryCond("clamped")
+        toppra::BoundaryCond(boundary_condition_name),
+        toppra::BoundaryCond(boundary_condition_name)
     };
 
     // 三次样条生成路径
@@ -2694,12 +3056,29 @@ bool MiracleMAlgo::toppraPlan(
 
     // 3. TOPPRA求解
     toppra::algorithm::TOPPRA opt(cons, path);
-    // opt.setN(500);  求解时间急剧上升
-    // auto solver = std::make_shared<toppra::solver::qpOASESWrapper>();   //二次规划求解速度更快
-    auto solver = std::make_shared<toppra::solver::Seidel>();
-    opt.solver(solver);
+    // The downloaded libtoppra exports qpOASESWrapper but was built without
+    // qpOASES support, so invoking it throws at runtime.  The stable MoveL
+    // mode therefore keeps the available Seidel backend and fixes the input
+    // pathology (near-duplicate points and ill-conditioned arc-length knots)
+    // before the solver is entered.
+    const char* solver_name = stable_cartesian_mode ? "SeidelStable" : "Seidel";
+    opt.solver(std::make_shared<toppra::solver::Seidel>());
 
-    auto ret = opt.computePathParametrization();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: solve begin solver=%s boundary=%s input_waypoints=%zu retained_waypoints=%zu removed=%zu min_joint_step=%.9f rad max_joint_step=%.9f rad",
+        solver_name, boundary_condition_name, ompl_path.size(), prepared.waypoints.size(),
+        prepared.removed_waypoints, prepared.minimum_joint_step_rad,
+        prepared.maximum_joint_step_rad);
+
+    const auto solve_started_at = std::chrono::steady_clock::now();
+    const auto ret = opt.computePathParametrization();
+    const double solve_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - solve_started_at).count();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: solve end solver=%s result=%d elapsed=%.6f s",
+        solver_name, static_cast<int>(ret), solve_seconds);
     if (ret != toppra::ReturnCode::OK)
     {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: solve failed");
@@ -2708,30 +3087,272 @@ bool MiracleMAlgo::toppraPlan(
 
     // 4. 生成参数化
     const auto& data = opt.getParameterizationData();
+    const auto path_speed_from_squared = [](double squared_path_velocity) {
+        return std::isfinite(squared_path_velocity) && squared_path_velocity >= 0.0 ?
+            std::sqrt(squared_path_velocity) :
+            std::numeric_limits<double>::quiet_NaN();
+    };
+    const auto log_gridpoint_diagnostics =
+        [&](const char* context, Eigen::Index index) {
+            if (index < 0 || index >= data.gridpoints.size() ||
+                index >= data.parametrization.size())
+            {
+                RCLCPP_WARN(
+                    rclcpp::get_logger("MiracleMAlgo"),
+                    "toppraPlan: gridpoint diagnostics context=%s index=%lld unavailable gridpoints=%lld parametrization=%lld",
+                    context, static_cast<long long>(index),
+                    static_cast<long long>(data.gridpoints.size()),
+                    static_cast<long long>(data.parametrization.size()));
+                return;
+            }
+
+            const double gridpoint = data.gridpoints(index);
+            const double squared_path_velocity = data.parametrization(index);
+            const double path_velocity =
+                path_speed_from_squared(squared_path_velocity);
+            const toppra::Vector q_prime = path->eval_single(gridpoint, 1);
+            const toppra::Vector q_double_prime = path->eval_single(gridpoint, 2);
+            const bool controllable_available =
+                index < data.controllable_sets.rows() &&
+                data.controllable_sets.cols() >= 2;
+            const double controllable_lower = controllable_available ?
+                data.controllable_sets(index, 0) :
+                std::numeric_limits<double>::quiet_NaN();
+            const double controllable_upper = controllable_available ?
+                data.controllable_sets(index, 1) :
+                std::numeric_limits<double>::quiet_NaN();
+
+            RCLCPP_INFO(
+                rclcpp::get_logger("MiracleMAlgo"),
+                "toppraPlan: gridpoint diagnostics context=%s index=%lld gridpoint=%.17g squared_path_velocity=%.17g path_velocity=%.17g q_prime_norm=%.17g q_double_prime_norm=%.17g controllable_set=[%.17g,%.17g]",
+                context, static_cast<long long>(index), gridpoint,
+                squared_path_velocity, path_velocity, q_prime.norm(),
+                q_double_prime.norm(), controllable_lower, controllable_upper);
+        };
+
+    Eigen::Index minimum_parametrization_index = -1;
+    Eigen::Index minimum_positive_parametrization_index = -1;
+    Eigen::Index minimum_interior_parametrization_index = -1;
+    double minimum_parametrization = std::numeric_limits<double>::infinity();
+    double minimum_positive_parametrization =
+        std::numeric_limits<double>::infinity();
+    double minimum_interior_parametrization =
+        std::numeric_limits<double>::infinity();
+    std::size_t nonfinite_parametrization_count = 0U;
+    std::size_t negative_parametrization_count = 0U;
+    for (Eigen::Index index = 0; index < data.parametrization.size(); ++index) {
+        const double value = data.parametrization(index);
+        if (!std::isfinite(value)) {
+            ++nonfinite_parametrization_count;
+            continue;
+        }
+        if (value < 0.0) {
+            ++negative_parametrization_count;
+        }
+        if (value < minimum_parametrization) {
+            minimum_parametrization = value;
+            minimum_parametrization_index = index;
+        }
+        if (value > 0.0 && value < minimum_positive_parametrization) {
+            minimum_positive_parametrization = value;
+            minimum_positive_parametrization_index = index;
+        }
+        if (index > 0 && index + 1 < data.parametrization.size() &&
+            value < minimum_interior_parametrization)
+        {
+            minimum_interior_parametrization = value;
+            minimum_interior_parametrization_index = index;
+        }
+    }
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: parametrization summary count=%lld min=%.17g min_index=%lld min_positive=%.17g min_positive_index=%lld min_interior=%.17g min_interior_index=%lld nonfinite=%zu negative=%zu",
+        static_cast<long long>(data.parametrization.size()),
+        minimum_parametrization,
+        static_cast<long long>(minimum_parametrization_index),
+        minimum_positive_parametrization,
+        static_cast<long long>(minimum_positive_parametrization_index),
+        minimum_interior_parametrization,
+        static_cast<long long>(minimum_interior_parametrization_index),
+        nonfinite_parametrization_count, negative_parametrization_count);
+    if (minimum_parametrization_index >= 0) {
+        const Eigen::Index neighborhood_begin =
+            std::max<Eigen::Index>(0, minimum_parametrization_index - 2);
+        const Eigen::Index neighborhood_end =
+            std::min<Eigen::Index>(data.parametrization.size() - 1,
+                minimum_parametrization_index + 2);
+        for (Eigen::Index index = neighborhood_begin;
+            index <= neighborhood_end; ++index)
+        {
+            log_gridpoint_diagnostics("minimum_neighborhood", index);
+        }
+    }
+    if (minimum_positive_parametrization_index >= 0 &&
+        minimum_positive_parametrization_index != minimum_parametrization_index)
+    {
+        log_gridpoint_diagnostics(
+            "minimum_positive", minimum_positive_parametrization_index);
+    }
+    if (minimum_interior_parametrization_index >= 0 &&
+        minimum_interior_parametrization_index != minimum_parametrization_index &&
+        minimum_interior_parametrization_index !=
+            minimum_positive_parametrization_index)
+    {
+        log_gridpoint_diagnostics(
+            "minimum_interior", minimum_interior_parametrization_index);
+    }
     //在时间域拟合一条新的 q(t) 三次样条（更平滑，但可能偏离原 path）
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: spline construction begin gridpoints=%lld parametrization=%lld",
+        static_cast<long long>(data.gridpoints.size()),
+        static_cast<long long>(data.parametrization.size()));
+    const auto spline_started_at = std::chrono::steady_clock::now();
     toppra::parametrizer::Spline param(path, data.gridpoints, data.parametrization);
-    if (!param.validate()) {
+    const double spline_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - spline_started_at).count();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: spline construction end elapsed=%.6f s", spline_seconds);
+
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: validate begin");
+    const auto validate_started_at = std::chrono::steady_clock::now();
+    const bool parameterization_valid = param.validate();
+    const double validate_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - validate_started_at).count();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: validate end result=%s elapsed=%.6f s",
+        parameterization_valid ? "success" : "failure", validate_seconds);
+    if (!parameterization_valid) {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: validate failed.");    
         return false;
     }
     // 总时间 & 按dt采样
     const toppra::Vector& raw_time = param.getTimes();
     double totalT = raw_time.tail(1)(0);
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: duration totalT=%.9f s raw_time_count=%lld dt=%.9f s",
+        totalT, static_cast<long long>(raw_time.size()), dt);
+
+    const Eigen::Index segment_point_count = std::min<Eigen::Index>(
+        raw_time.size(),
+        std::min<Eigen::Index>(
+            data.gridpoints.size(), data.parametrization.size()));
+    Eigen::Index maximum_raw_time_delta_segment = -1;
+    double maximum_raw_time_delta = -std::numeric_limits<double>::infinity();
+    for (Eigen::Index end_index = 1;
+        end_index < segment_point_count; ++end_index)
+    {
+        const Eigen::Index begin_index = end_index - 1;
+        const double gridpoint_delta =
+            data.gridpoints(end_index) - data.gridpoints(begin_index);
+        const double begin_path_velocity = path_speed_from_squared(
+            data.parametrization(begin_index));
+        const double end_path_velocity = path_speed_from_squared(
+            data.parametrization(end_index));
+        const double average_path_velocity =
+            0.5 * (begin_path_velocity + end_path_velocity);
+        const double raw_time_delta =
+            raw_time(end_index) - raw_time(begin_index);
+        RCLCPP_INFO(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "toppraPlan: segment begin_index=%lld end_index=%lld gridpoint_begin=%.17g gridpoint_end=%.17g gridpoint_delta=%.17g squared_path_velocity_begin=%.17g squared_path_velocity_end=%.17g average_path_velocity=%.17g deltaT=%.17g",
+            static_cast<long long>(begin_index),
+            static_cast<long long>(end_index),
+            data.gridpoints(begin_index), data.gridpoints(end_index),
+            gridpoint_delta, data.parametrization(begin_index),
+            data.parametrization(end_index), average_path_velocity,
+            raw_time_delta);
+        if (std::isfinite(raw_time_delta) &&
+            raw_time_delta > maximum_raw_time_delta)
+        {
+            maximum_raw_time_delta = raw_time_delta;
+            maximum_raw_time_delta_segment = begin_index;
+        }
+    }
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: maximum raw_time delta segment=%lld begin_index=%lld end_index=%lld deltaT=%.17g",
+        static_cast<long long>(maximum_raw_time_delta_segment),
+        static_cast<long long>(maximum_raw_time_delta_segment),
+        static_cast<long long>(maximum_raw_time_delta_segment + 1),
+        maximum_raw_time_delta);
+    if (maximum_raw_time_delta_segment >= 0) {
+        log_gridpoint_diagnostics(
+            "maximum_raw_time_delta_begin",
+            maximum_raw_time_delta_segment);
+        log_gridpoint_diagnostics(
+            "maximum_raw_time_delta_end",
+            maximum_raw_time_delta_segment + 1);
+    }
+
+    if (!std::isfinite(totalT) || totalT <= 0.0 ||
+        totalT / dt > static_cast<double>(std::numeric_limits<int>::max()))
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "toppraPlan: invalid trajectory duration");
+        return false;
+    }
+    if (std::isfinite(maximum_duration_seconds) &&
+        totalT > maximum_duration_seconds)
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("MiracleMAlgo"),
+            "toppraPlan: trajectory duration %.9f s exceeds planning limit %.9f s; refusing %lld samples",
+            totalT, maximum_duration_seconds,
+            static_cast<long long>(std::ceil(totalT / dt)));
+        return false;
+    }
 
     int sample_cnt = static_cast<int>(std::ceil(totalT / dt));
     sample_cnt = std::max(1, sample_cnt);
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: sample count=%d totalT=%.9f s dt=%.9f s",
+        sample_cnt, totalT, dt);
 
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: sample time grid construction begin samples=%d",
+        sample_cnt);
+    const auto sample_grid_started_at = std::chrono::steady_clock::now();
     toppra::Vector samp_t(sample_cnt);
     for (int i = 0; i < sample_cnt; ++i)
     {
         samp_t(i) = i + 1 == sample_cnt ? totalT : static_cast<double>(i) * dt;
     }
+    const double sample_grid_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - sample_grid_started_at).count();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: sample time grid construction end samples=%d elapsed=%.6f s",
+        sample_cnt, sample_grid_seconds);
 
     // 批量求值 pos/vel/acc
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: param.eval begin samples=%d order=0", sample_cnt);
+    const auto eval_started_at = std::chrono::steady_clock::now();
     auto pos_buf = param.eval(samp_t, 0);
+    const double eval_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - eval_started_at).count();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: param.eval end samples=%zu elapsed=%.6f s",
+        pos_buf.size(), eval_seconds);
     // auto vel_buf = param.eval(samp_t, 1);
     // auto acc_buf = param.eval(samp_t, 2);
 
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: trajectory materialization begin samples=%d dof=%d",
+        sample_cnt, dof);
+    const auto materialization_started_at = std::chrono::steady_clock::now();
     res_trajectory.clear();
     // 5. 填充统一结构体 
     res_trajectory.resize(sample_cnt, std::vector<double>(dof));
@@ -2746,6 +3367,12 @@ bool MiracleMAlgo::toppraPlan(
             // res.accelerations[i][j] = acc_buf[i](j);
         }
     }
+    const double materialization_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - materialization_started_at).count();
+    RCLCPP_INFO(
+        rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: trajectory materialization end samples=%zu elapsed=%.6f s",
+        res_trajectory.size(), materialization_seconds);
     return true;
 }
 //--------------------------------------------------------------//

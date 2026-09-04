@@ -43,6 +43,10 @@ int64 timeout_ms                         # 操作超时时间，毫秒
 bool success
 string error_message
 float64 execution_time
+bool timing_breakdown_valid           # true 时下列三个阶段耗时有效
+float64 ik_time                       # IK 计算耗时，单位：秒
+float64 planning_time                 # 路径/轨迹规划与校验耗时（不含 IK），单位：秒
+float64 motion_time                   # 轨迹下发及到位等待耗时，单位：秒
 float64 final_distance_error             # 单臂 TCP 误差，ARM_BOTH 时为左右最大值
 float64 left_final_distance_error_m
 float64 right_final_distance_error_m

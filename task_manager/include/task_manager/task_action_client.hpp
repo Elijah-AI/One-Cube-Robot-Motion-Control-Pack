@@ -10,6 +10,8 @@
 #include <atomic>
 #include <cmath>
 #include <cctype>
+#include <chrono>
+#include <vector>
 
 #include "task_config_parser.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -145,6 +147,22 @@ struct ActionContext
     bool has_vision_result{false};
     /// @brief 视觉检测返回的完整结果（6D pose + 环境点云 + 置信度）
     VisionDet::Result vision_result;
+};
+
+/// @brief 一次普通任务中的原子动作耗时记录。
+struct AtomicActionTimingRecord
+{
+    std::size_t sequence{0U};
+    std::string state_key;
+    std::string action_type;
+    std::string result{"RUNNING"};
+    std::chrono::steady_clock::time_point started_at{};
+    std::chrono::steady_clock::time_point finished_at{};
+    bool completed{false};
+    bool timing_breakdown_valid{false};
+    double ik_time{0.0};
+    double planning_time{0.0};
+    double motion_time{0.0};
 };
 
 /// @brief 从 state_key 推导出序列级 key（如 "seq1_move_pose_2" → "seq1"）
@@ -302,6 +320,13 @@ public:
     /// @brief 重置所有 state_key 的状态并释放所有资源
     void reset_all_states();
 
+    /// @brief 开始收集一项普通业务任务内的原子动作耗时。
+    void begin_task_timing();
+
+    /// @brief 在普通任务结束时按动作下发顺序打印耗时汇总。
+    void log_task_timing_summary(
+        const std::string& task_name, const std::string& task_result);
+
     // ========= 默认（串行）状态查询接口（给行为树使用） =========
     ActionRunState get_action_state() const { return get_ctx("default").state; }
     bool is_action_running() const  { return get_ctx("default").state == ActionRunState::RUNNING; }
@@ -424,6 +449,20 @@ private:
         ActionRunState state,
         ActionCallResult call_result);
 
+    /// @brief 记录一次原子动作开始；仅在普通任务计时窗口内生效。
+    void start_action_timing(
+        const std::string& state_key, const std::string& action_type);
+
+    /// @brief 完成原子动作耗时记录。
+    void finish_action_timing(
+        const std::string& state_key,
+        const std::string& result,
+        bool timing_breakdown_valid = false,
+        double ik_time = 0.0,
+        double planning_time = 0.0,
+        double motion_time = 0.0,
+        bool use_client_total_as_motion = false);
+
     /// @brief 动作类型分发执行（send_goal 共享逻辑）
     /// @param act 原子动作
     /// @param task_id 任务 ID
@@ -460,6 +499,12 @@ private:
     mutable std::map<std::string, ActionContext> action_contexts_;
     /// @brief 上下文访问互斥锁
     mutable std::mutex ctx_mutex_;
+
+    // ========= 普通任务原子动作耗时汇总 =========
+    mutable std::mutex action_timing_mutex_;
+    bool action_timing_active_{false};
+    std::vector<AtomicActionTimingRecord> action_timing_records_;
+    std::map<std::string, std::size_t> active_action_timing_index_;
 
     // ========= 序列级视觉结果存储（跨 action 共享） =========
     /// @brief 序列级视觉检测结果映射表（key: "seq1","seq2", value: VisionDet::Result）

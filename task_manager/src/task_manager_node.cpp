@@ -307,6 +307,7 @@ void TaskManagerNode::start_normal_task_timing(const std::string& task_name)
   current_task_id_ = task_name;
   normal_task_start_time_ = std::chrono::steady_clock::now();
   task_running_.store(true);
+  action_client_->begin_task_timing();
 }
 
 void TaskManagerNode::log_normal_task_total_time(const char* result)
@@ -319,6 +320,8 @@ void TaskManagerNode::log_normal_task_total_time(const char* result)
   const auto end_time = std::chrono::steady_clock::now();
   const double execution_time =
     std::chrono::duration<double>(end_time - normal_task_start_time_).count();
+
+  action_client_->log_task_timing_summary(current_task_id_, result);
 
   LOG_INFO_TITLE(this->get_logger(), task_log::Tag::FSM,
     "===== Task Complete: " << current_task_id_

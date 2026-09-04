@@ -7,6 +7,7 @@
 #include "motion_control_pkg/execution/joint_command.hpp"
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
+#include "motion_control_pkg/motion/cartesian_line_sampling.hpp"
 #include "motion_control_pkg/motion/pose_space_control.hpp"
 #include "motion_control_pkg/suck/neardi47_gpio.h"
 
@@ -200,7 +201,11 @@ bool planToppraSamples(
     const std::vector<double>& velocity_limits,
     const std::vector<double>& acceleration_limits,
     std::vector<std::vector<double>>& trajectory,
-    std::string& error_message)
+    std::string& error_message,
+    MiracleMAlgo::ToppraSolverMode solver_mode =
+        MiracleMAlgo::ToppraSolverMode::kSeidel,
+    double maximum_duration_seconds =
+        std::numeric_limits<double>::infinity())
 {
     RCLCPP_INFO_STREAM(rclcpp::get_logger("dual_arm_module"),
         "Using TOPPRA multi-waypoint planner, waypoints=" << waypoints.size()
@@ -215,7 +220,8 @@ bool planToppraSamples(
     if (!miracle_algo.toppraPlan(
             waypoints,
             motion_control_pkg::execution::kDualArmControlPeriodSeconds,
-            velocity_limits, acceleration_limits, trajectory))
+            velocity_limits, acceleration_limits, trajectory, solver_mode,
+            maximum_duration_seconds))
     {
         error_message = "MiracleMAlgo::toppraPlan failed";
         return false;
@@ -502,9 +508,7 @@ DualArmModule::~DualArmModule()
     if (execution_thread_move_dual_pose_.joinable()) {
         execution_thread_move_dual_pose_.join();
     }
-    if (execution_thread_control_gripper_.joinable()) {
-        execution_thread_control_gripper_.join();
-    }
+    gripper_worker_threads_.joinAll();
     if (execution_thread_control_suck_.joinable()) {
         execution_thread_control_suck_.join();
     }
@@ -1927,10 +1931,30 @@ void DualArmModule::execution_loop_move_joint_impl(
     auto feedback = std::make_shared<MoveJoints::Feedback>();
     auto result = std::make_shared<MoveJoints::Result>();
     result->success = ACTION_FAIL;
+    result->timing_breakdown_valid = true;
+    result->ik_time = 0.0;
+    result->planning_time = 0.0;
+    result->motion_time = 0.0;
     result->final_distance_error =
         std::numeric_limits<double>::quiet_NaN();
 
+    bool planning_active = false;
+    bool motion_active = false;
+    std::chrono::steady_clock::time_point planning_started_at;
+    std::chrono::steady_clock::time_point motion_started_at;
+    const auto update_phase_times = [&]() {
+        const auto now = std::chrono::steady_clock::now();
+        if (planning_active) {
+            result->planning_time = std::chrono::duration<double>(
+                now - planning_started_at).count();
+        }
+        if (motion_active) {
+            result->motion_time = std::chrono::duration<double>(
+                now - motion_started_at).count();
+        }
+    };
     const auto update_execution_time = [&]() {
+        update_phase_times();
         result->execution_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - start_time).count();
     };
@@ -2124,6 +2148,8 @@ void DualArmModule::execution_loop_move_joint_impl(
     publish_feedback(15.0F, std::string(arm_name) +
         " arm joint constraints validated");
 
+    planning_started_at = std::chrono::steady_clock::now();
+    planning_active = true;
     std::vector<std::vector<double>> planned_positions;
     if (!planRuckigSamples(
             *miracle_algo_,
@@ -2152,6 +2178,8 @@ void DualArmModule::execution_loop_move_joint_impl(
         abort_goal(conversion_error);
         return;
     }
+    update_phase_times();
+    planning_active = false;
     publish_feedback(25.0F, std::string(arm_name) +
         " arm Ruckig trajectory ready");
 
@@ -2184,6 +2212,8 @@ void DualArmModule::execution_loop_move_joint_impl(
         abort_goal("MoveJoints timed out during control-mode transition");
         return;
     }
+    motion_started_at = std::chrono::steady_clock::now();
+    motion_active = true;
     if (!streamSingleArmTrajectory(
         *sdk_command_gate_, goal_handle, channel, command_points, deadline,
         "MoveJoints",
@@ -2274,10 +2304,32 @@ void DualArmModule::execution_loop_move_pose_impl(
     auto feedback = std::make_shared<MovePose::Feedback>();
     auto result = std::make_shared<MovePose::Result>();
     result->success = ACTION_FAIL;
+    result->timing_breakdown_valid = true;
+    result->ik_time = 0.0;
+    result->planning_time = 0.0;
+    result->motion_time = 0.0;
     result->final_distance_error =
         std::numeric_limits<double>::quiet_NaN();
 
+    bool planning_active = false;
+    bool motion_active = false;
+    std::chrono::steady_clock::time_point planning_started_at;
+    std::chrono::steady_clock::time_point motion_started_at;
+    const auto update_phase_times = [&]() {
+        const auto now = std::chrono::steady_clock::now();
+        if (planning_active) {
+            const double planning_and_ik = std::chrono::duration<double>(
+                now - planning_started_at).count();
+            result->planning_time = std::max(
+                0.0, planning_and_ik - result->ik_time);
+        }
+        if (motion_active) {
+            result->motion_time = std::chrono::duration<double>(
+                now - motion_started_at).count();
+        }
+    };
     const auto update_execution_time = [&]() {
+        update_phase_times();
         result->execution_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - start_time).count();
     };
@@ -2509,13 +2561,16 @@ void DualArmModule::execution_loop_move_pose_impl(
     std::vector<std::vector<double>> planned_positions;
     std::vector<motion_control_pkg::execution::JointCommand> command_points;
     const char* planner_name = "Unknown";
+    planning_started_at = std::chrono::steady_clock::now();
+    planning_active = true;
     if (!goal->enable_move_line) {
         if (goal->enable_collision_check) {
             // 复用 MiracleMAlgo 内部 Pinocchio IK、Coal 状态有效性与 OMPL
             // RRTConnect；旧的恒真 OMPLWrapper 不再进入 MovePose 主链。
             std::vector<std::vector<double>> full_ompl_path;
             if (!miracle_algo_->planSingleArmCartesianGoal(
-                is_left, full_start_q, root_to_model_end, full_ompl_path))
+                is_left, full_start_q, root_to_model_end, full_ompl_path,
+                &result->ik_time))
             {
                 abort_goal(std::string(arm_name) +
                     " arm Pinocchio/Coal/OMPL pose planning failed");
@@ -2538,8 +2593,12 @@ void DualArmModule::execution_loop_move_pose_impl(
             // 无碰撞模式仍使用现成 Pinocchio IK。单目标形成唯一的起终两点，
             // 必须交给 Ruckig，不通过业务层插值。
             std::vector<double> ik_goal;
-            if (!miracle_algo_->solveSingleArmCartesianIk(
-                is_left, full_start_q, root_to_model_end, ik_goal))
+            const auto ik_started_at = std::chrono::steady_clock::now();
+            const bool ik_ok = miracle_algo_->solveSingleArmCartesianIk(
+                is_left, full_start_q, root_to_model_end, ik_goal);
+            result->ik_time += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - ik_started_at).count();
+            if (!ik_ok)
             {
                 abort_goal(std::string(arm_name) + " arm Pinocchio IK failed");
                 return;
@@ -2587,21 +2646,85 @@ void DualArmModule::execution_loop_move_pose_impl(
         }   
     }
     else {  
-        planner_name = "CartesianLine";
-        double x = root_to_model_end.translation().x();
-        double y = root_to_model_end.translation().y();
-        double z = root_to_model_end.translation().z();
-        Eigen::Quaterniond q_root_to_model_end(root_to_model_end.rotation());
-        double qx = q_root_to_model_end.x();
-        double qy = q_root_to_model_end.y();
-        double qz = q_root_to_model_end.z();
-        double qw = q_root_to_model_end.w();
-        std::vector<double> end_poseture={x,y,z,qx,qy,qz,qw};
-        // std::vector<std::vector<double>> path;
-        bool res=miracle_algo_->planSingleArmCartesianLine(is_left, full_start_q, end_poseture, motion_control_pkg::execution::kDualArmControlPeriodSeconds, 
-                                                goal->speed*CARTES_V_MAX, goal->speed*CARTES_A_MAX, goal->speed*CARTES_J_MAX, planned_positions);
-        if(!res){
-            abort_goal("CartesianLine planner failed");
+        planner_name = "CartesianLine/TOPPRA";
+        constexpr std::size_t kMaxCartesianLineRefinementAttempts = 3U;
+        double translation_step =
+            motion_control_pkg::motion::kCartesianIkTranslationStepMeters;
+        double rotation_step =
+            motion_control_pkg::motion::kCartesianIkRotationStepRadians;
+        std::string line_error;
+        bool line_planned = false;
+        for (std::size_t attempt = 0U;
+            attempt < kMaxCartesianLineRefinementAttempts; ++attempt)
+        {
+            active_arm_path.clear();
+            planned_positions.clear();
+            Eigen::Isometry3d actual_start_pose = Eigen::Isometry3d::Identity();
+            double attempt_ik_time = 0.0;
+            const bool ik_planned =
+                miracle_algo_->planSingleArmCartesianIkWaypoints(
+                is_left, full_start_q, root_to_model_end,
+                translation_step, rotation_step, active_arm_path,
+                actual_start_pose, &attempt_ik_time);
+            result->ik_time += attempt_ik_time;
+            if (!ik_planned) {
+                line_error = "coarse continuous IK failed";
+            } else {
+                const auto coarse_validation =
+                    motion_control_pkg::motion::validateTrajectoryPositions(
+                    active_arm_path, effective_limits.lower,
+                    effective_limits.upper, joint67_table);
+                if (!coarse_validation.valid) {
+                    line_error =
+                        "coarse Cartesian IK path violates configured constraints: " +
+                        coarse_validation.error_message;
+                } else {
+                    std::string toppra_error;
+                    if (!planToppraSamples(
+                        *miracle_algo_, active_arm_path, scaled_limits.velocity,
+                        scaled_limits.acceleration, planned_positions,
+                        toppra_error,
+                        MiracleMAlgo::ToppraSolverMode::kStableCartesian,
+                        std::chrono::duration<double>(timeout).count()))
+                    {
+                        line_error = "TOPPRA failed: " + toppra_error;
+                    } else {
+                        double max_position_error_m = 0.0;
+                        double max_orientation_error_rad = 0.0;
+                        if (miracle_algo_->validateSingleArmCartesianTrajectory(
+                            is_left, full_start_q, actual_start_pose,
+                            root_to_model_end, planned_positions,
+                            motion_control_pkg::motion::
+                            kCartesianLinePositionToleranceMeters,
+                            motion_control_pkg::motion::
+                            kCartesianLineOrientationToleranceRadians,
+                            max_position_error_m, max_orientation_error_rad,
+                            line_error))
+                        {
+                            RCLCPP_INFO(
+                                rclcpp::get_logger("dual_arm_module"),
+                                "Cartesian line validated: attempt=%zu, IK waypoints=%zu, 4 ms samples=%zu, max_position_error=%.6f m, max_orientation_error=%.6f rad, ik_time=%.6f s",
+                                attempt + 1U, active_arm_path.size(),
+                                planned_positions.size(), max_position_error_m,
+                                max_orientation_error_rad, attempt_ik_time);
+                            line_planned = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (attempt + 1U < kMaxCartesianLineRefinementAttempts) {
+                RCLCPP_WARN(
+                    rclcpp::get_logger("dual_arm_module"),
+                    "Cartesian line attempt failed at IK steps %.6f m / %.6f rad (%s); refining sampling",
+                    translation_step, rotation_step, line_error.c_str());
+                translation_step *= 0.5;
+                rotation_step *= 0.5;
+            }
+        }
+        if (!line_planned) {
+            abort_goal("Cartesian line planning failed: " + line_error);
             return;
         }
     }
@@ -2621,6 +2744,8 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal(conversion_error);
         return;
     }
+    update_phase_times();
+    planning_active = false;
     publish_feedback(25.0F, std::string(arm_name) + " arm " + planner_name +
         " 4 ms trajectory ready");
 
@@ -2653,6 +2778,8 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal("MovePose timed out during control-mode transition");
         return;
     }
+    motion_started_at = std::chrono::steady_clock::now();
+    motion_active = true;
     if (!streamSingleArmTrajectory(
         *sdk_command_gate_, goal_handle, channel, command_points, deadline,
         "MovePose",
@@ -2774,10 +2901,6 @@ bool DualArmModule::start_execution_control_gripper(
         return false;
     }
 
-    if (execution_thread_control_gripper_.joinable()) {
-        execution_thread_control_gripper_.join();
-    }
-
     if (need_left) {
         is_executing_left_tool_.store(true);
     }
@@ -2786,7 +2909,13 @@ bool DualArmModule::start_execution_control_gripper(
     }
 
     try {
-        execution_thread_control_gripper_ = std::thread(
+        const auto worker_slot = need_left && need_right ?
+            motion_control_pkg::execution::GripperWorkerSlot::kBoth :
+            (need_left ?
+                motion_control_pkg::execution::GripperWorkerSlot::kLeft :
+                motion_control_pkg::execution::GripperWorkerSlot::kRight);
+        gripper_worker_threads_.start(
+            worker_slot,
             &DualArmModule::execution_loop_control_gripper, this, goal_handle);
     } catch (const std::exception& exception) {
         if (need_left) {

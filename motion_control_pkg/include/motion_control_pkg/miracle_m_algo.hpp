@@ -40,6 +40,7 @@
 #include <array>
 #include <Eigen/Dense>
 #include <mutex>
+#include <limits>
 #include <optional>
 
 #include <pinocchio/multibody/model.hpp>
@@ -223,6 +224,12 @@ const std::vector<std::string> arm_collision_detect= {//手臂与目标点云碰
 class MiracleMAlgo {
 public:
 
+    enum class ToppraSolverMode
+    {
+        kSeidel,
+        kStableCartesian
+    };
+
     /**
      * @brief 构造函数
      * 
@@ -329,7 +336,8 @@ public:
     bool planSingleArmCartesianGoal(bool is_left,
                                     const std::vector<double>& start_q,
                                     const Eigen::Isometry3d& goal,
-                                    std::vector<std::vector<double>>& path);
+                                    std::vector<std::vector<double>>& path,
+                                    double* ik_time_seconds = nullptr);
 
     // Stage 7 只暴露现有 Pinocchio IK 与按名称建立的 q 索引适配器。
     // 业务层不得复制 IK、固定切片或直接访问内部全身状态。
@@ -388,7 +396,35 @@ public:
                                     const std::vector<double>& end_poseture,
                                     const double& dt,const double& v_max,
                                     const double& a_max, const double& j_max,
-                                    std::vector<std::vector<double>>& path);
+                                    std::vector<std::vector<double>>& path,
+                                    double* ik_time_seconds = nullptr);
+
+    // 为单臂直线运动生成较稀疏的连续 IK 关节路点。采样密度只约束
+    // 笛卡尔几何精度，不再与 4 ms 命令下发周期绑定；整条路径共用一次
+    // Pinocchio 锁和一套 IK 工作区，并以前一解作为后一解的种子。
+    bool planSingleArmCartesianIkWaypoints(
+        bool is_left,
+        const std::vector<double>& start_q,
+        const Eigen::Isometry3d& goal,
+        double max_translation_step_m,
+        double max_rotation_step_rad,
+        std::vector<std::vector<double>>& arm_waypoints,
+        Eigen::Isometry3d& actual_start_pose,
+        double* ik_time_seconds = nullptr);
+
+    // 对时间参数化后的 4 ms 关节样本重新做 FK，确保稀疏 IK + TOPPRA
+    // 没有破坏笛卡尔直线、姿态、进度单调性或精确终点。
+    bool validateSingleArmCartesianTrajectory(
+        bool is_left,
+        const std::vector<double>& reference_full_q,
+        const Eigen::Isometry3d& start_pose,
+        const Eigen::Isometry3d& goal_pose,
+        const std::vector<std::vector<double>>& arm_trajectory,
+        double position_tolerance_m,
+        double orientation_tolerance_rad,
+        double& max_position_error_m,
+        double& max_orientation_error_rad,
+        std::string& error_message);
 
     const pinocchio::Model& getModel() const { return model_; }
 
@@ -574,7 +610,11 @@ public:
     int computeMovePTrajectory(int module_id, const double plan_dt, const double max_velocity, const double max_acc, 
                               const double max_jerk, const std::vector<double> joint_cur_pos, const std::vector<double> joint_cur_vel,
                               const std::vector<double> joint_cur_acc, std::vector<double> tgt_pose, std::vector<std::vector<double>>& traj_pos_new,
-                              std::vector<std::vector<double>>& traj_vel_new, std::vector<std::vector<double>> &traj_acc_new) {   //, bool nearest=true
+                              std::vector<std::vector<double>>& traj_vel_new, std::vector<std::vector<double>> &traj_acc_new,
+                              double* ik_time_seconds = nullptr) {   //, bool nearest=true
+        if (ik_time_seconds != nullptr) {
+            *ik_time_seconds = 0.0;
+        }
     
         Eigen::VectorXd q_init = toEigenConfig(_m_full_joint_state_msg);
         Eigen::VectorXd q_res;
@@ -612,7 +652,13 @@ public:
         goal.linear() = q.toRotationMatrix();
         
         
-        if(!solveIK(q_init, goal, q_res, module_id)) {
+        const auto ik_started_at = std::chrono::steady_clock::now();
+        const bool ik_ok = solveIK(q_init, goal, q_res, module_id);
+        if (ik_time_seconds != nullptr) {
+            *ik_time_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - ik_started_at).count();
+        }
+        if (!ik_ok) {
             RCLCPP_ERROR(rclcpp::get_logger("computeMove PTrajectory"), "ik failed: module_id: %d", module_id);
             return -4;
         }
@@ -720,7 +766,10 @@ public:
         double dt,
         const std::vector<double>& max_velocity,
         const std::vector<double>& max_acc,
-        std::vector<std::vector<double>>& res_trajectory);
+        std::vector<std::vector<double>>& res_trajectory,
+        ToppraSolverMode solver_mode = ToppraSolverMode::kSeidel,
+        double maximum_duration_seconds =
+            std::numeric_limits<double>::infinity());
     
     // std::shared_ptr<GMCA::GMCA> robot; ///< 运动学，动力学底层类，封装为库
 
@@ -729,6 +778,19 @@ public:
 
 
 private:
+    struct SingleArmIkWorkspace
+    {
+        Eigen::MatrixXd jacobian;
+        Eigen::VectorXd error;
+        Eigen::MatrixXd jjt;
+        Eigen::VectorXd velocity;
+        Eigen::MatrixXd damped_pseudo_inverse;
+        Eigen::MatrixXd nullspace_projector;
+        Eigen::VectorXd centering_velocity;
+        Eigen::VectorXd candidate;
+        Eigen::MatrixXd identity6;
+    };
+
     bool solveWholeBodyIKOnce(
         const Eigen::VectorXd& q_init,
         const std::optional<Eigen::Isometry3d>& left_goal,
@@ -760,6 +822,12 @@ private:
                  const Eigen::Isometry3d& goal,
                  Eigen::VectorXd& q_res,
                  int mode);
+    bool solveIKWithLockedData(
+        const Eigen::VectorXd& q_init,
+        const Eigen::Isometry3d& goal,
+        Eigen::VectorXd& q_res,
+        int mode,
+        SingleArmIkWorkspace& workspace);
 
     bool solveDualIK(const Eigen::VectorXd& q_init,
                      const Eigen::Isometry3d& left_goal,

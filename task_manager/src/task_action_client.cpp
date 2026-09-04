@@ -66,6 +66,144 @@ ActionContext& TaskActionClient::get_ctx(const std::string& state_key)
     return action_contexts_[state_key];
 }
 
+void TaskActionClient::begin_task_timing()
+{
+  std::lock_guard<std::mutex> lock(action_timing_mutex_);
+  action_timing_records_.clear();
+  active_action_timing_index_.clear();
+  action_timing_active_ = true;
+}
+
+void TaskActionClient::start_action_timing(
+  const std::string& state_key, const std::string& action_type)
+{
+  std::lock_guard<std::mutex> lock(action_timing_mutex_);
+  if (!action_timing_active_)
+  {
+    return;
+  }
+
+  AtomicActionTimingRecord record;
+  record.sequence = action_timing_records_.size() + 1U;
+  record.state_key = state_key;
+  record.action_type = action_type;
+  record.started_at = std::chrono::steady_clock::now();
+  action_timing_records_.push_back(std::move(record));
+  active_action_timing_index_[state_key] = action_timing_records_.size() - 1U;
+}
+
+void TaskActionClient::finish_action_timing(
+  const std::string& state_key,
+  const std::string& result,
+  bool timing_breakdown_valid,
+  double ik_time,
+  double planning_time,
+  double motion_time,
+  bool use_client_total_as_motion)
+{
+  std::lock_guard<std::mutex> lock(action_timing_mutex_);
+  if (!action_timing_active_)
+  {
+    return;
+  }
+
+  const auto index_it = active_action_timing_index_.find(state_key);
+  if (index_it == active_action_timing_index_.end() ||
+      index_it->second >= action_timing_records_.size())
+  {
+    return;
+  }
+
+  auto& record = action_timing_records_[index_it->second];
+  if (record.completed)
+  {
+    return;
+  }
+
+  record.finished_at = std::chrono::steady_clock::now();
+  record.completed = true;
+  record.result = result;
+  const bool finite_breakdown =
+    std::isfinite(ik_time) && ik_time >= 0.0 &&
+    std::isfinite(planning_time) && planning_time >= 0.0 &&
+    std::isfinite(motion_time) && motion_time >= 0.0;
+  record.timing_breakdown_valid = timing_breakdown_valid && finite_breakdown;
+  if (record.timing_breakdown_valid)
+  {
+    record.ik_time = ik_time;
+    record.planning_time = planning_time;
+    record.motion_time = motion_time;
+  }
+  if (use_client_total_as_motion)
+  {
+    record.timing_breakdown_valid = true;
+    record.ik_time = 0.0;
+    record.planning_time = 0.0;
+    record.motion_time = std::chrono::duration<double>(
+      record.finished_at - record.started_at).count();
+  }
+  active_action_timing_index_.erase(index_it);
+}
+
+void TaskActionClient::log_task_timing_summary(
+  const std::string& task_name, const std::string& task_result)
+{
+  std::vector<AtomicActionTimingRecord> records;
+  const auto summary_time = std::chrono::steady_clock::now();
+  {
+    std::lock_guard<std::mutex> lock(action_timing_mutex_);
+    action_timing_active_ = false;
+    for (auto& record : action_timing_records_)
+    {
+      if (!record.completed)
+      {
+        record.finished_at = summary_time;
+        record.result = "INCOMPLETE";
+      }
+    }
+    records = action_timing_records_;
+    active_action_timing_index_.clear();
+  }
+
+  LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ACTION,
+    "===== Atomic Action Timing Summary: task=" << task_name
+    << ", result=" << task_result << ", count=" << records.size()
+    << " =====");
+
+  double summed_client_total = 0.0;
+  for (const auto& record : records)
+  {
+    const double client_total = std::max(
+      0.0, std::chrono::duration<double>(
+        record.finished_at - record.started_at).count());
+    summed_client_total += client_total;
+
+    std::ostringstream line;
+    line << "[" << std::setw(2) << std::setfill('0') << record.sequence << "]"
+         << " state_key=" << record.state_key
+         << ", action=" << record.action_type
+         << ", result=" << record.result
+         << std::fixed << std::setprecision(6)
+         << ", client_total=" << client_total << "s";
+    if (record.timing_breakdown_valid)
+    {
+      line << ", motion_time=" << record.motion_time << "s"
+           << ", ik_time=" << record.ik_time << "s"
+           << ", planning_time=" << record.planning_time << "s";
+    }
+    else
+    {
+      line << ", motion_time=N/A, ik_time=N/A, planning_time=N/A";
+    }
+    LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, line.str());
+  }
+
+  LOG_INFO_TITLE(node_->get_logger(), task_log::Tag::ACTION,
+    "===== Atomic Action Timing End: summed_client_total="
+    << std::fixed << std::setprecision(6) << summed_client_total
+    << "s (parallel actions may overlap) =====");
+}
+
 // ============================================================================
 // call_vision_detect
 // ============================================================================
@@ -145,6 +283,7 @@ TaskActionClient::call_vision_detect(
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Goal was rejected by server [" << state_key << "]");
+        finish_action_timing(state_key, "GOAL_REJECTED");
         auto& ctx = get_ctx(state_key);
         ctx.state = ActionRunState::FAILURE;
         ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -161,6 +300,18 @@ TaskActionClient::call_vision_detect(
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleVisionDetection::WrappedResult & result)
     {
+      const bool succeeded = result.result && result.result->success;
+      finish_action_timing(
+        state_key, succeeded ? "SUCCESS" : "FAILURE");
+      if (!result.result)
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::VISION,
+          "Vision detect returned an empty result [" << state_key << "]");
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GENERAL);
+        return;
+      }
       auto& ctx = get_ctx(state_key);
 
       if(result.result->success)
@@ -626,6 +777,7 @@ ActionCallResult TaskActionClient::call_move_pose(
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Goal was rejected by server [" << state_key << "]");
+        finish_action_timing(state_key, "GOAL_REJECTED");
         auto& ctx = get_ctx(state_key);
         ctx.state = ActionRunState::FAILURE;
         ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -640,7 +792,22 @@ ActionCallResult TaskActionClient::call_move_pose(
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleMovePose::WrappedResult & result)
     {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      const bool succeeded = result.result && result.result->success;
+      finish_action_timing(
+        state_key, succeeded ? "SUCCESS" : "FAILURE",
+        result.result && result.result->timing_breakdown_valid,
+        result.result ? result.result->ik_time : 0.0,
+        result.result ? result.result->planning_time : 0.0,
+        result.result ? result.result->motion_time : 0.0);
+      if (!result.result)
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+          "MovePose returned an empty result [" << state_key << "]");
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GENERAL);
+        return;
+      }
       if(result.result->success)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "MovePose succeeded [" << state_key << "]");
@@ -833,6 +1000,7 @@ ActionCallResult TaskActionClient::call_move_joints(
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal rejected by server [" << state_key << "]");
+        finish_action_timing(state_key, "GOAL_REJECTED");
         auto& ctx = get_ctx(state_key);
         ctx.state = ActionRunState::FAILURE;
         ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -847,6 +1015,22 @@ ActionCallResult TaskActionClient::call_move_joints(
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleMoveJoints::WrappedResult & result)
     {
+      const bool succeeded = result.result && result.result->success;
+      finish_action_timing(
+        state_key, succeeded ? "SUCCESS" : "FAILURE",
+        result.result && result.result->timing_breakdown_valid,
+        result.result ? result.result->ik_time : 0.0,
+        result.result ? result.result->planning_time : 0.0,
+        result.result ? result.result->motion_time : 0.0);
+      if (!result.result)
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+          "MoveJoints returned an empty result [" << state_key << "]");
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GENERAL);
+        return;
+      }
       auto& ctx = get_ctx(state_key);
       if(result.result->success)
       {
@@ -925,6 +1109,7 @@ ActionCallResult TaskActionClient::call_control_suck(
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck goal rejected by server [" << state_key << "]");
+        finish_action_timing(state_key, "GOAL_REJECTED");
         auto& ctx = get_ctx(state_key);
         ctx.state = ActionRunState::FAILURE;
         ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -936,7 +1121,20 @@ ActionCallResult TaskActionClient::call_control_suck(
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleCtrlSuck::WrappedResult & result)
     {
+      const bool succeeded = result.result && result.result->success;
+      finish_action_timing(
+        state_key, succeeded ? "SUCCESS" : "FAILURE",
+        false, 0.0, 0.0, 0.0, true);
       std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+      if (!result.result)
+      {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION,
+          "ControlSuck returned an empty result [" << state_key << "]");
+        complete_action_context(
+          state_key, ActionRunState::FAILURE,
+          ActionCallResult::FAIL_GENERAL);
+        return;
+      }
       if(result.result->success)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::ACTION, "ControlSuck succeeded [" << state_key << "]");
@@ -1211,6 +1409,7 @@ ActionCallResult TaskActionClient::call_gripper(
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER, "Goal was rejected by server [" << state_key << "]");
+        finish_action_timing(state_key, "GOAL_REJECTED");
         complete_action_context(
           state_key, ActionRunState::FAILURE,
           ActionCallResult::FAIL_GOAL_REJECTED);
@@ -1227,6 +1426,10 @@ ActionCallResult TaskActionClient::call_gripper(
   send_goal_options.result_callback =
     [this, state_key](const GoalHandleCtrlGripper::WrappedResult & result)
     {
+      const bool succeeded = result.result && result.result->success;
+      finish_action_timing(
+        state_key, succeeded ? "SUCCESS" : "FAILURE",
+        false, 0.0, 0.0, 0.0, true);
       if (!result.result)
       {
         LOG_ERROR(node_->get_logger(), task_log::Tag::GRIPPER,
@@ -1726,6 +1929,7 @@ ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act, 
     }
     ctx.acquired_resources = std::move(acquired_res);
     ctx.start_time = node_->now();
+    start_action_timing(state_key, act_type);
 
     // ========== 动作类型分发 ==========
     ActionCallResult ret = dispatch_action(act, current_task_id_, ctx, state_key);
@@ -1733,6 +1937,8 @@ ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act, 
     // 如果发送失败（非资源锁原因），释放已获取的资源
     if (!action_call_result_is_ok(ret))
     {
+        finish_action_timing(
+            state_key, action_call_result_to_str(ret));
         release_acquired_resources(ctx);
     }
 
@@ -1919,6 +2125,7 @@ ActionCallResult TaskActionClient::call_vision_check_self(
             if (!goal_handle)
             {
                 LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision CheckSelf goal rejected [" << state_key << "]");
+                finish_action_timing(state_key, "GOAL_REJECTED");
                 auto& ctx = get_ctx(state_key);
                 ctx.state = ActionRunState::FAILURE;
                 ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -1936,6 +2143,9 @@ ActionCallResult TaskActionClient::call_vision_check_self(
     send_goal_options.result_callback =
         [this, state_key](const GoalHandleHardWareCheck::WrappedResult& result)
         {
+            finish_action_timing(
+                state_key,
+                result.result && result.result->success ? "SUCCESS" : "FAILURE");
             if (result.result->success)
             {
                 LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION,
@@ -2022,6 +2232,7 @@ ActionCallResult TaskActionClient::call_control_check_self(
             if (!goal_handle)
             {
                 LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Control CheckSelf goal rejected [" << state_key << "]");
+                finish_action_timing(state_key, "GOAL_REJECTED");
                 auto& ctx = get_ctx(state_key);
                 ctx.state = ActionRunState::FAILURE;
                 ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -2045,6 +2256,9 @@ ActionCallResult TaskActionClient::call_control_check_self(
     send_goal_options.result_callback =
         [this, state_key](const GoalHandleHardWareCheck::WrappedResult& result)
         {
+            finish_action_timing(
+                state_key,
+                result.result && result.result->success ? "SUCCESS" : "FAILURE");
             if (result.result->success)
             {
                 LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM,
@@ -2123,6 +2337,7 @@ ActionCallResult TaskActionClient::call_vision_reset(
             if (!goal_handle)
             {
                 LOG_ERROR(node_->get_logger(), task_log::Tag::VISION, "Vision Reset goal rejected [" << state_key << "]");
+                finish_action_timing(state_key, "GOAL_REJECTED");
                 auto& ctx = get_ctx(state_key);
                 ctx.state = ActionRunState::FAILURE;
                 ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -2140,6 +2355,9 @@ ActionCallResult TaskActionClient::call_vision_reset(
     send_goal_options.result_callback =
         [this, state_key](const GoalHandleHardWareReset::WrappedResult& result)
         {
+            finish_action_timing(
+                state_key,
+                result.result && result.result->success ? "SUCCESS" : "FAILURE");
             if (result.result->success)
             {
                 LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION,
@@ -2219,6 +2437,7 @@ ActionCallResult TaskActionClient::call_control_reset(
             if (!goal_handle)
             {
                 LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Control Reset goal rejected [" << state_key << "]");
+                finish_action_timing(state_key, "GOAL_REJECTED");
                 auto& ctx = get_ctx(state_key);
                 ctx.state = ActionRunState::FAILURE;
                 ctx.call_result = ActionCallResult::FAIL_GOAL_REJECTED;
@@ -2242,6 +2461,9 @@ ActionCallResult TaskActionClient::call_control_reset(
     send_goal_options.result_callback =
         [this, state_key](const GoalHandleHardWareReset::WrappedResult& result)
         {
+            finish_action_timing(
+                state_key,
+                result.result && result.result->success ? "SUCCESS" : "FAILURE");
             if (result.result->success)
             {
                 LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM,

@@ -21,6 +21,7 @@
 // 双臂通信经统一 Adapter/Gate 访问，公共模块不再直接依赖 MarvinSDK.h。
 #include "motion_control_pkg/execution/action_terminal_guard.hpp"
 #include "motion_control_pkg/execution/execution_control.hpp"
+#include "motion_control_pkg/execution/gripper_worker_threads.hpp"
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
@@ -152,7 +153,7 @@ private:
     std::thread execution_thread_move_right_joint_;
     std::thread execution_thread_move_dual_joints_;
     std::thread execution_thread_move_dual_pose_;
-    std::thread execution_thread_control_gripper_;
+    motion_control_pkg::execution::GripperWorkerThreads gripper_worker_threads_;
     std::thread execution_thread_control_suck_;
     std::mutex control_tool_start_mutex_;
     std::mutex suck_gpio_mutex_;

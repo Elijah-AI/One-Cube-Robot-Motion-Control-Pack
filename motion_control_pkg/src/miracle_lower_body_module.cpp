@@ -346,10 +346,25 @@ namespace miracle {
 
     //此模板函数要不同 Action 文件（.action）中，下面用到的字段名称必须一模一样
     template <typename ActionT>
-    void MiracleLowerBodyModule::followTrajectoryHandle(std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> goal_handle) {
+    void MiracleLowerBodyModule::followTrajectoryHandle(
+        std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> goal_handle,
+        const std::chrono::steady_clock::time_point& action_started_at,
+        double ik_time_seconds,
+        double planning_time_seconds) {
 
         auto result = std::make_shared<typename ActionT::Result>();
         auto feedback = std::make_shared<typename ActionT::Feedback>();
+        const auto motion_started_at = std::chrono::steady_clock::now();
+        const auto update_timing = [&]() {
+            const auto now = std::chrono::steady_clock::now();
+            result->timing_breakdown_valid = true;
+            result->ik_time = std::max(0.0, ik_time_seconds);
+            result->planning_time = std::max(0.0, planning_time_seconds);
+            result->motion_time = std::chrono::duration<double>(
+                now - motion_started_at).count();
+            result->execution_time = std::chrono::duration<double>(
+                now - action_started_at).count();
+        };
 
         m_traj_point_index = 0;
         m_traj_point_cnt = m_traj_pos.size();
@@ -361,6 +376,7 @@ namespace miracle {
                 // ... 急停操作 ...
                 result->success = ACTION_FAIL;
                 result->error_message = " Goal canceled by client";
+                update_timing();
                 goal_handle->canceled(result);
                 RCLCPP_INFO(rclcpp::get_logger("leg_module"),"%s Goal canceled by client.", m_module_name);
                 // 结束执行前，释放繁忙标记
@@ -379,6 +395,7 @@ namespace miracle {
             if (!setMulJointPos(m_traj_buffer_pos, m_jointID)) {
                 result->success = ACTION_FAIL;
                 result->error_message = "leg motor command rejected";
+                update_timing();
                 goal_handle->abort(result);
                 is_executing_leg_.store(false);
                 return;
@@ -417,6 +434,7 @@ namespace miracle {
             }
         }
         result->final_distance_error = final_error;
+        update_timing();
         if (final_error > JOINT_REACH_THRESHOLD) {
             result->success = ACTION_FAIL;
             result->error_message = "legs failed to reach final position";
@@ -588,6 +606,7 @@ namespace miracle {
 
     void MiracleLowerBodyModule::execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
+        const auto action_started_at = std::chrono::steady_clock::now();
         const auto goal = goal_handle->get_goal();
         auto feedback = std::make_shared<MoveJoints::Feedback>();
         auto result = std::make_shared<MoveJoints::Result>();
@@ -688,8 +707,11 @@ namespace miracle {
             std::vector<std::vector<double>> traj_vel_new;
             std::vector<std::vector<double>> traj_acc_new;
 
+            const auto planning_started_at = std::chrono::steady_clock::now();
             int all_point_ok = m_galgo->computeMoveJTrajectory<LEG_JOINTNUM>(ID_LEG, plan_dt, max_velocity, max_acc, max_jerk, joint_cur_pos, joint_cur_vel,
                                                                joint_cur_acc, angles, traj_pos_new, traj_vel_new, traj_acc_new);
+            const double planning_time_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - planning_started_at).count();
 
             if (0 != all_point_ok) {
                 RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s Error %d for movej", m_module_name, __func__, all_point_ok);
@@ -703,7 +725,8 @@ namespace miracle {
             m_traj_pos = traj_pos_new;
             m_traj_vel = traj_vel_new;
             m_traj_acc = traj_acc_new;
-            followTrajectoryHandle(goal_handle);
+            followTrajectoryHandle(
+                goal_handle, action_started_at, 0.0, planning_time_seconds);
 
         } catch (const std::exception &e) {
             RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s format %s err:%s", m_module_name, __func__, e.what());
@@ -720,6 +743,7 @@ namespace miracle {
 
     void MiracleLowerBodyModule::execution_loop_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
     {
+        const auto action_started_at = std::chrono::steady_clock::now();
         const auto goal = goal_handle->get_goal();
         auto feedback = std::make_shared<MovePose::Feedback>();
         auto result = std::make_shared<MovePose::Result>();
@@ -794,8 +818,15 @@ namespace miracle {
             std::vector<std::vector<double>> traj_vel_new;
             std::vector<std::vector<double>> traj_acc_new;
 
+            double ik_time_seconds = 0.0;
+            const auto planning_started_at = std::chrono::steady_clock::now();
             int all_point_ok = m_galgo->computeMovePTrajectory<LEG_JOINTNUM>(ID_LEG, plan_dt, max_velocity, max_acc, max_jerk, joint_cur_pos, joint_cur_vel,
-                                                               joint_cur_acc, target_pose, traj_pos_new, traj_vel_new, traj_acc_new);
+                                                               joint_cur_acc, target_pose, traj_pos_new, traj_vel_new, traj_acc_new,
+                                                               &ik_time_seconds);
+            const double planning_and_ik_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - planning_started_at).count();
+            const double planning_time_seconds = std::max(
+                0.0, planning_and_ik_seconds - ik_time_seconds);
 
             if (0 != all_point_ok) {
                 RCLCPP_ERROR(rclcpp::get_logger("lower_body_module"),"%s %s Error %d for moveP", m_module_name, __func__, all_point_ok);
@@ -809,7 +840,9 @@ namespace miracle {
             m_traj_pos = traj_pos_new;
             m_traj_vel = traj_vel_new;
             m_traj_acc = traj_acc_new;
-            followTrajectoryHandle(goal_handle);
+            followTrajectoryHandle(
+                goal_handle, action_started_at, ik_time_seconds,
+                planning_time_seconds);
 
             //测试
             Eigen::Matrix4d T;
