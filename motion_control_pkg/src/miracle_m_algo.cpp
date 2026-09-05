@@ -432,8 +432,10 @@ void MiracleMAlgo::addExternalCollisionBox(const std::string& name,
 std::shared_ptr<coal::OcTree> MiracleMAlgo::buildOcTreeFromCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud,
                                                                         double resolution,
                                                                         Eigen::Vector3d& out_center) {
-  if (cloud->empty())
+  if (!cloud || cloud->empty())
     throw std::runtime_error("Input cloud is empty");
+  if (!std::isfinite(resolution) || resolution <= 0.0)
+    throw std::runtime_error("Octree resolution must be finite and positive");
 
   // 1. 计算 AABB 与中心
   double min_x = std::numeric_limits<double>::max();
@@ -460,7 +462,7 @@ std::shared_ptr<coal::OcTree> MiracleMAlgo::buildOcTreeFromCloud(pcl::PointCloud
   auto octree = std::make_shared<octomap::OcTree>(resolution);
   // 默认 occupancy 阈值 0.5,可以直接用 true 强制占据
   for (const auto& p : cloud->points) {
-    if (!std::isfinite(p.x)) continue;
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
     octree->updateNode(
         octomap::point3d((float)(p.x - center_x),
                          (float)(p.y - center_y),
@@ -492,14 +494,6 @@ void MiracleMAlgo::addExternalCollisionPointcloud(const std::string& name, pcl::
 
   std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
 
-  // 防重
-  if (std::find(external_objects_.begin(), external_objects_.end(), name)
-      != external_objects_.end()) {
-    removeExternalCollisionObject(name);
-    RCLCPP_WARN(rclcpp::get_logger("MiracleMAlgo"),
-                "External object '%s' already exists. Removing old one.", name.c_str());
-  }
-
   // 1cm 体素,与 MoveIt 默认一致
   const double resolution = 0.01;
 
@@ -507,12 +501,17 @@ void MiracleMAlgo::addExternalCollisionPointcloud(const std::string& name, pcl::
     // 1. 加载点云
     // auto cloud = loadPointCloud("/fusion/synced_robot_vision");
     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
-                "[PCD] loaded %zu points", cloud->size());
+                "[PCD] loaded %zu points", cloud ? cloud->size() : 0U);
 
     // 2. 构建 coal::OcTree
     auto start_time_bvh = std::chrono::high_resolution_clock::now();
     Eigen::Vector3d cloud_center;
     auto coal_octree = buildOcTreeFromCloud(cloud, resolution, cloud_center);
+    // Validate/build before replacing the previous scene. Failure must reach the caller.
+    if (std::find(external_objects_.begin(), external_objects_.end(), name)
+        != external_objects_.end()) {
+      removeExternalCollisionObject(name);
+    }
     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
                 "[OcTree] built, cloud_center=(%.3f,%.3f,%.3f)",
                 cloud_center.x(), cloud_center.y(), cloud_center.z());
@@ -522,7 +521,7 @@ void MiracleMAlgo::addExternalCollisionPointcloud(const std::string& name, pcl::
     std::cout<<"改进体素化+bvh耗时:"<<elapsed_ms_bvh.count()<<"ms"<<std::endl;
 
     // 4. placement = pose (OcTree 内部坐标已以原点为中心)
-    Eigen::Isometry3d pose;
+    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
     pose.translation() = cloud_center;
     Eigen::Quaterniond q(1.0, 0.0, 0.0, 0.0); 
     pose.linear() = q.toRotationMatrix(); 
@@ -565,7 +564,48 @@ void MiracleMAlgo::addExternalCollisionPointcloud(const std::string& name, pcl::
     RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
                  "Failed to add pointcloud collision '%s': %s",
                  name.c_str(), e.what());
+    throw;
   }
+}
+
+pcl::PointCloud<pcl::PointXYZ>::Ptr MiracleMAlgo::pointCloudToModelRoot(
+    const sensor_msgs::msg::PointCloud2& message,
+    const std::vector<double>& full_q)
+{
+    if (message.header.frame_id.empty() || message.width == 0U ||
+        message.height == 0U || message.point_step == 0U ||
+        message.is_bigendian ||
+        static_cast<std::uint64_t>(message.row_step) <
+            static_cast<std::uint64_t>(message.width) * message.point_step ||
+        message.data.size() < static_cast<std::uint64_t>(message.row_step) * message.height) {
+        throw std::runtime_error("Invalid point cloud frame, dimensions or byte layout");
+    }
+    for (const char* coordinate : {"x", "y", "z"}) {
+        const auto field = std::find_if(message.fields.begin(), message.fields.end(),
+            [coordinate](const auto& item) { return item.name == coordinate; });
+        if (field == message.fields.end() || field->count != 1U ||
+            field->datatype != sensor_msgs::msg::PointField::FLOAT32 ||
+            static_cast<std::uint64_t>(field->offset) + sizeof(float) > message.point_step) {
+            throw std::runtime_error("Point cloud requires valid float32 x/y/z fields");
+        }
+    }
+    Eigen::Isometry3d root_from_cloud = Eigen::Isometry3d::Identity();
+    if (!transformPoseToModelRoot(message.header.frame_id, full_q,
+            Eigen::Isometry3d::Identity(), root_from_cloud)) {
+        throw std::runtime_error("Unknown point cloud frame: " + message.header.frame_id);
+    }
+    pcl::PointCloud<pcl::PointXYZ> input;
+    pcl::fromROSMsg(message, input);
+    auto output = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+    output->reserve(input.size());
+    for (const auto& point : input) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+        const Eigen::Vector3d transformed = root_from_cloud * Eigen::Vector3d(point.x, point.y, point.z);
+        if (!transformed.allFinite()) throw std::runtime_error("Nonfinite point cloud transform");
+        output->push_back(pcl::PointXYZ(transformed.x(), transformed.y(), transformed.z()));
+    }
+    if (output->empty()) throw std::runtime_error("Point cloud contains no finite XYZ points");
+    return output;
 }
 
 void MiracleMAlgo::removeExternalCollisionObject(const std::string& name) {
@@ -605,7 +645,7 @@ Eigen::VectorXd MiracleMAlgo::toEigenConfig(const std::vector<double>& full_q) c
 
 bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
-    if (full_q.size() != model_.nq) {
+    if (full_q.size() != model_.nq || !full_q.allFinite()) {
         std::cerr << "[isFullQValid] Unsupported input size: " << full_q.size()
                   << ". Expected " << model_.nq << std::endl;
         return false;

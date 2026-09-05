@@ -70,8 +70,7 @@
 #include <octomap/OcTree.h>
 #include <coal/octree.h>  
 
-#include <pcl/io/pcd_io.h>       // 引入 PCL IO
-#include <pcl/io/ply_io.h>  
+#include <pcl/point_cloud.h>
 #include <pcl/point_types.h> 
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -310,6 +309,13 @@ public:
                                                                         Eigen::Vector3d& out_center);
              
     void addExternalCollisionPointcloud(const std::string& name, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr pointCloudToModelRoot(
+        const sensor_msgs::msg::PointCloud2& cloud,
+        const std::vector<double>& full_q);
+    // Hold across scene installation, planning and sampled trajectory validation.
+    std::unique_lock<std::recursive_mutex> lockCollisionScene() {
+        return std::unique_lock<std::recursive_mutex>(pinocchio_data_mutex_);
+    }
                                             
     void savePathToTxt(const std::vector<std::vector<double> >& out_path, const std::string& filename);
 

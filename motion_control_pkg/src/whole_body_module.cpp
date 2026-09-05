@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "motion_control_pkg/execution/control_period.hpp"
+#include "motion_control_pkg/execution/preplanned_dispatch.hpp"
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 
 namespace
@@ -182,47 +183,7 @@ bool makeWholeBodyActiveWaypoint(
     return !active_q.empty();
 }
 
-bool splitWholeBodyActiveTrajectory(
-    const std::vector<std::vector<double>>& active_trajectory,
-    bool use_left,
-    bool use_right,
-    std::vector<std::vector<double>>& left_path,
-    std::vector<std::vector<double>>& right_path,
-    std::vector<std::vector<double>>& leg_path,
-    std::string& error_message)
-{
-    left_path.clear();
-    right_path.clear();
-    leg_path.clear();
-    const std::size_t arm_dof = 7U;
-    const std::size_t leg_dof = 4U;
-    const std::size_t expected =
-        (use_left ? arm_dof : 0U) + (use_right ? arm_dof : 0U) + leg_dof;
-    if (active_trajectory.empty() || expected == 0U) {
-        error_message = "whole-body trajectory is empty";
-        return false;
-    }
-    for (const auto& sample : active_trajectory) {
-        if (sample.size() != expected) {
-            error_message = "whole-body trajectory sample dimensions do not match";
-            return false;
-        }
-        std::size_t offset = 0U;
-        if (use_left) {
-            left_path.emplace_back(sample.begin() + static_cast<std::ptrdiff_t>(offset),
-                                   sample.begin() + static_cast<std::ptrdiff_t>(offset + arm_dof));
-            offset += arm_dof;
-        }
-        if (use_right) {
-            right_path.emplace_back(sample.begin() + static_cast<std::ptrdiff_t>(offset),
-                                    sample.begin() + static_cast<std::ptrdiff_t>(offset + arm_dof));
-            offset += arm_dof;
-        }
-        leg_path.emplace_back(sample.begin() + static_cast<std::ptrdiff_t>(offset),
-                              sample.end());
-    }
-    return true;
-}
+using motion_control_pkg::execution::splitWholeBodyActiveTrajectory;
 
 }  // namespace
 
@@ -846,6 +807,15 @@ void WholeBodyModule::execution_loop(
         return;
     }
 
+    if (goal_handle->is_canceling() || (goal->timeout_ms > 0 &&
+        std::chrono::steady_clock::now() - started_at >= std::chrono::milliseconds(goal->timeout_ms))) {
+        result->error_message = "whole-body MovePose canceled or timed out during preparation";
+        finish_time();
+        if (goal_handle->is_canceling()) terminal.cancel(result);
+        else terminal.abort(result);
+        release_child_resources();
+        return;
+    }
     publish_feedback(30.0F, "dispatching synchronized arm and leg trajectories");
     auto cancel = std::make_shared<motion_control_pkg::execution::CancellationToken>();
     // 两路 prepare 已在主线程完成（电机使能、控制模式切换、单位转换），

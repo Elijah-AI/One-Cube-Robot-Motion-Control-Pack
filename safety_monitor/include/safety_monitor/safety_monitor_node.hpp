@@ -3,7 +3,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <com_interfaces/msg/node_status.hpp>
-#include <com_interfaces/msg/heartbeat.hpp>
+#include <com_interfaces/msg/heart_beat.hpp>
 #include <com_interfaces/srv/get_system_status.hpp>
 #include <std_msgs/msg/header.hpp>
 
@@ -112,7 +112,7 @@ private:
 
   // 话题回调
   void node_status_callback(const com_interfaces::msg::NodeStatus::SharedPtr msg);
-  void heartbeat_callback(const com_interfaces::msg::Heartbeat::SharedPtr msg);
+  void heartbeat_callback(const com_interfaces::msg::HeartBeat::SharedPtr msg);
 
   // 1Hz定时巡检
   void heartbeat_check_timer_callback();
@@ -146,7 +146,7 @@ private:
 
   // 通信接口
   rclcpp::Subscription<com_interfaces::msg::NodeStatus>::SharedPtr sub_node_status_;
-  rclcpp::Subscription<com_interfaces::msg::Heartbeat>::SharedPtr sub_heartbeat_;
+  rclcpp::Subscription<com_interfaces::msg::HeartBeat>::SharedPtr sub_heartbeat_;
   rclcpp::Service<com_interfaces::srv::GetSystemStatus>::SharedPtr srv_get_system_status_;
   rclcpp::TimerBase::SharedPtr heartbeat_check_timer_;
 

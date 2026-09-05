@@ -120,7 +120,7 @@ SafetyMonitorNode::SafetyMonitorNode(const rclcpp::NodeOptions & options)
     rclcpp::QoS(10),
     std::bind(&SafetyMonitorNode::node_status_callback, this, std::placeholders::_1));
 
-  sub_heartbeat_ = this->create_subscription<com_interfaces::msg::Heartbeat>(
+  sub_heartbeat_ = this->create_subscription<com_interfaces::msg::HeartBeat>(
     "/SafeNode/Heartbeat",
     rclcpp::QoS(10),
     std::bind(&SafetyMonitorNode::heartbeat_callback, this, std::placeholders::_1));
@@ -175,7 +175,7 @@ void SafetyMonitorNode::node_status_callback(const com_interfaces::msg::NodeStat
     nid, msg->status, msg->error_flag);
 }
 
-void SafetyMonitorNode::heartbeat_callback(const com_interfaces::msg::Heartbeat::SharedPtr msg)
+void SafetyMonitorNode::heartbeat_callback(const com_interfaces::msg::HeartBeat::SharedPtr msg)
 {
   int32_t nid = msg->node_id;
   if (node_info_map_.find(nid) == node_info_map_.end())

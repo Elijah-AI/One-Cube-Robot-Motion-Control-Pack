@@ -1,6 +1,8 @@
 # 全身逆解函数 `solveWholeBodyIKOnce` 方法详解
 
-> 对应源码：[`motion_control_pkg/src/miracle_m_algo.cpp`](../src/miracle_m_algo.cpp#L1375-L1901)
+> 对应源码：[`motion_control_pkg/src/miracle_m_algo.cpp`](../src/miracle_m_algo.cpp)。文中的历史行号仅作导读。
+>
+> `modify_whole_body` 已移除额外的 30° 躯干俯仰限制；`body_pitch_limit_rad` 参数为源码兼容保留，目前不施加约束。URDF 关节限位、CCS J6/J7 约束仍适用，碰撞检查由对应开关决定。此变化不代表完成稳定性或真机验收。
 
 ## 1. 概述
 

@@ -50,7 +50,7 @@ find_package(ruckig REQUIRED)
 # find_package(TinyXML REQUIRED)
 find_package(jsoncpp REQUIRED) 
 
-find_package(PCL 1.12 REQUIRED COMPONENTS common io surface filters kdtree features)
+find_package(PCL 1.12 REQUIRED COMPONENTS common)
 find_package(pcl_conversions REQUIRED)
 include_directories(${coal_INCLUDE_DIRS})
 
@@ -170,7 +170,6 @@ set(SOURCES
     src/miracle_module.cpp
     src/miracle_head_module.cpp
     src/miracle_lower_body_module.cpp
-    src/miracle_m_algo.cpp
     src/whole_body_module.cpp
     src/common/gripper/Modbus_Jodell.cpp
     # src/common/ctrl/PVT_ctrl.cpp
@@ -201,11 +200,17 @@ endif()
 # 创建可执行节点
 add_executable(motion_control_node ${SOURCES})
 
-set_target_properties(motion_control_node PROPERTIES
-    INSTALL_RPATH "/usr/local/lib;$ORIGIN"
-    BUILD_WITH_INSTALL_RPATH TRUE
-    SKIP_BUILD_RPATH FALSE
-)
+# Production algorithm and offline tests use the same object code, without hardware SDKs.
+add_library(motion_planning_core STATIC src/miracle_m_algo.cpp)
+target_include_directories(motion_planning_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg
+    ${PCL_INCLUDE_DIRS})
+target_compile_definitions(motion_planning_core PUBLIC BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS)
+ament_target_dependencies(motion_planning_core rclcpp sensor_msgs pcl_conversions)
+target_link_libraries(motion_planning_core
+    Eigen3::Eigen pinocchio::pinocchio coal::coal ompl::ompl ruckig::ruckig
+    toppra_lib ${sysCoreLibs} octomap octomath jsoncpp ${PCL_LIBRARIES})
 
 # Pinocchio 会把 Boost MPL 容器上限扩展到 30；必须同时禁用 Boost
 # 自带的 20 元素预生成头，否则 OMPL 引入 Boost.MultiIndex 时会模板展开失败。
@@ -272,6 +277,7 @@ ament_target_dependencies(motion_control_node
 
 # 2. 第三方库
 target_link_libraries(motion_control_node
+    motion_planning_core
     dual_arm_sdk_core
     marvin_sdk
     kine_lib
@@ -385,6 +391,14 @@ if(BUILD_TESTING)
     Eigen3::Eigen
   )
   set_tests_properties(test_toppra_stable_solver PROPERTIES TIMEOUT 15)
+  ament_add_gtest(test_merged_planning test/test_merged_planning.cpp TIMEOUT 90)
+  target_link_libraries(test_merged_planning motion_planning_core)
+  ament_target_dependencies(test_merged_planning com_interfaces)
+  target_compile_definitions(test_merged_planning PRIVATE
+    MERGE_MODEL_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+  ament_add_gtest(test_preplanned_dispatch test/test_preplanned_dispatch.cpp)
+  target_include_directories(test_preplanned_dispatch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(test_preplanned_dispatch Threads::Threads)
 endif()
 
 # 如果 MarvinSDK 或 Kine 依赖系统库（如 pthread, dl, rt 等），需在此补充

@@ -2,6 +2,7 @@
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
 #include "motion_control_pkg/execution/control_period.hpp"
+#include "motion_control_pkg/execution/preplanned_dispatch.hpp"
 #include "motion_control_pkg/execution/execution_control.hpp"
 #include "motion_control_pkg/execution/impedance_configuration.hpp"
 #include "motion_control_pkg/execution/joint_command.hpp"
@@ -24,6 +25,25 @@
 
 namespace
 {
+
+class ScopedPlanningScene
+{
+public:
+    ScopedPlanningScene(MiracleMAlgo& algorithm,
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud)
+        : algorithm_(algorithm), lock_(algorithm.lockCollisionScene()), has_cloud_(bool(cloud))
+    {
+        if (has_cloud_) algorithm_.addExternalCollisionPointcloud("move_pose_environment", cloud);
+    }
+    ~ScopedPlanningScene()
+    {
+        if (has_cloud_) algorithm_.removeExternalCollisionObject("move_pose_environment");
+    }
+private:
+    MiracleMAlgo& algorithm_;
+    std::unique_lock<std::recursive_mutex> lock_;
+    bool has_cloud_;
+};
 
 void addPeriodToTimespec(timespec& timestamp, std::chrono::nanoseconds period)
 {
@@ -397,6 +417,10 @@ DualArmModule::DualArmModule(
     head_status_msg_ = com_interfaces::msg::MotorStatus();
 
     sub_pointcloudNode_ = std::make_shared<rclcpp::Node>("pointcloud_sub_node");
+    if (!shared_node->has_parameter("collision_pointcloud_topic")) {
+        shared_node->declare_parameter<std::string>("collision_pointcloud_topic", "");
+    }
+    collision_pointcloud_topic_ = shared_node->get_parameter("collision_pointcloud_topic").as_string();
 }
 
 bool DualArmModule::initialize(std::string& error_message)
@@ -2440,15 +2464,10 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal("MovePose hand actions are not implemented before the tool stage");
         return;
     }
-    // const auto& point_cloud = goal->env_point_cloud;
-    // if (!point_cloud.data.empty() || point_cloud.width != 0U ||
-    //     point_cloud.height != 0U)
-    // {
-    //     abort_goal(
-    //         "MovePose environment point cloud was not loaded into the "
-    //         "MiracleMAlgo collision world");
-    //     return;
-    // }
+    if (!goal->enable_collision_check && !goal->env_point_cloud.data.empty()) {
+        abort_goal("MovePose environment point cloud requires enable_collision_check");
+        return;
+    }
 
     if (!l_init_arm_params_) {
         abort_goal("Robot kinematics parameters are not initialized");
@@ -2585,12 +2604,27 @@ void DualArmModule::execution_loop_move_pose_impl(
     const char* planner_name = "Unknown";
     planning_started_at = std::chrono::steady_clock::now();
     planning_active = true;
+    std::unique_ptr<ScopedPlanningScene> collision_scene;
+    if (goal->enable_collision_check) {
+        try {
+            pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+            auto message = goal->env_point_cloud;
+            if (message.data.empty() && !collision_pointcloud_topic_.empty()) {
+                message = loadPointCloud(collision_pointcloud_topic_);
+            }
+            if (!message.data.empty() || message.width != 0U || message.height != 0U) {
+                cloud = miracle_algo_->pointCloudToModelRoot(message, full_start_q);
+            }
+            collision_scene = std::make_unique<ScopedPlanningScene>(*miracle_algo_, cloud);
+        } catch (const std::exception& error) {
+            abort_goal(std::string("MovePose point cloud scene failed: ") + error.what());
+            return;
+        }
+    }
     if (!goal->enable_move_line) {
         if (goal->enable_collision_check) {
             // 复用 MiracleMAlgo 内部 Pinocchio IK、Coal 状态有效性与 OMPL
             // RRTConnect；旧的恒真 OMPLWrapper 不再进入 MovePose 主链。
-            auto cloud = this->loadPointCloud("/fusion/synced_robot_vision");  
-            miracle_algo_->addExternalCollisionPointcloud("box",cloud);
             std::vector<std::vector<double>> full_ompl_path;
             if (!miracle_algo_->planSingleArmCartesianGoal(
                 is_left, full_start_q, root_to_model_end, full_ompl_path,
@@ -2762,7 +2796,22 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal(trajectory_validation.error_message);
         return;
     }
-    // std::vector<motion_control_pkg::execution::JointCommand> command_points;
+    if (goal->enable_collision_check) {
+        // Validate the actual 4 ms samples, including MoveL and TOPPRA interpolation.
+        const auto& model = miracle_algo_->getModel();
+        for (const auto& arm_sample : planned_positions) {
+            Eigen::VectorXd full_sample = miracle_algo_->toEigenConfig(full_start_q);
+            for (std::size_t joint = 0; joint < arm_sample.size(); ++joint) {
+                const std::string name = "Joint" + std::to_string(joint + 1U) + (is_left ? "_L" : "_R");
+                full_sample[model.joints[model.getJointId(name)].idx_q()] = arm_sample[joint];
+            }
+            if (deadline.expired() || !miracle_algo_->isFullQValid(full_sample)) {
+                abort_goal("MovePose sampled collision validation failed or timed out");
+                return;
+            }
+        }
+    }
+    collision_scene.reset();
     if (!motion_control_pkg::motion::trajectoryToVendorDegrees(
         planned_positions, command_points, conversion_error))
     {
@@ -3019,22 +3068,20 @@ bool DualArmModule::dispatch_preplanned(
 {
     if (!prepared_dispatch_.valid) {
         error_message = "dispatch_preplanned called without successful prepare";
+        if (cancel) cancel->request();
         return false;
     }
+    prepared_dispatch_.valid = false;
     if (cancel && cancel->requested()) {
         error_message = "preplanned trajectory canceled before execution";
         return false;
     }
 
-    std::this_thread::sleep_until(start_time);
     const std::size_t sample_count = prepared_dispatch_.need_left
         ? prepared_dispatch_.left_commands.size()
         : prepared_dispatch_.right_commands.size();
-    for (std::size_t index = 0; index < sample_count; ++index) {
-        if (cancel && cancel->requested()) {
-            error_message = "preplanned arm trajectory canceled";
-            return false;
-        }
+    return motion_control_pkg::execution::dispatchPreplannedSamples(
+        sample_count, start_time, cancel, [&](std::size_t index) {
         const auto send_result = sdk_command_gate_->sendJointPositions(
             prepared_dispatch_.need_left
                 ? std::optional<motion_control_pkg::execution::JointCommand>(
@@ -3048,13 +3095,8 @@ bool DualArmModule::dispatch_preplanned(
             error_message = send_result.error_message;
             return false;
         }
-        if (index + 1U < sample_count) {
-            std::this_thread::sleep_until(
-                start_time + std::chrono::milliseconds(4) * static_cast<long long>(index + 1U));
-        }
-    }
-    error_message.clear();
-    return true;
+        return true;
+    }, error_message);
 }
 
 bool DualArmModule::execute_preplanned_trajectory(
@@ -3065,6 +3107,10 @@ bool DualArmModule::execute_preplanned_trajectory(
     const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
     std::string& error_message)
 {
+    if (cancel && cancel->requested()) {
+        error_message = "preplanned trajectory canceled before preparation";
+        return false;
+    }
     if (!prepare_preplanned_dispatch(
             left_positions, right_positions, control_mode, error_message)) {
         return false;
@@ -3666,22 +3712,22 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
     for(int i =0;i<arm_dof_;i++)
     {
 
-      l_q_lower_limits_[i] = pnva_[0][i][1]*DEG2RAD;
-      r_q_lower_limits_[i] = pnva_[1][i][1]*DEG2RAD;
+      l_q_lower_limits_[i] = pnva_[0][i][1]*motion_control_pkg::kinematics::kDegreesToRadians;
+      r_q_lower_limits_[i] = pnva_[1][i][1]*motion_control_pkg::kinematics::kDegreesToRadians;
 
-      l_q_upper_limits_[i] = pnva_[0][i][0]*DEG2RAD;
-      r_q_upper_limits_[i] = pnva_[1][i][0]*DEG2RAD;
+      l_q_upper_limits_[i] = pnva_[0][i][0]*motion_control_pkg::kinematics::kDegreesToRadians;
+      r_q_upper_limits_[i] = pnva_[1][i][0]*motion_control_pkg::kinematics::kDegreesToRadians;
 
     //   std::cout<<"i:="<<i<<","<<"l:="<< l_q_lower_limits_[i]<<","<<l_q_upper_limits_[i]<<std::endl;
     //   std::cout<<"i:="<<i<<","<<"r:="<< r_q_lower_limits_[i]<<","<<r_q_upper_limits_[i]<<std::endl;
 
-      l_v_limit_[i] = pnva_[0][i][2]*DEG2RAD;
-      r_v_limit_[i] = pnva_[1][i][2]*DEG2RAD;
+      l_v_limit_[i] = pnva_[0][i][2]*motion_control_pkg::kinematics::kDegreesToRadians;
+      r_v_limit_[i] = pnva_[1][i][2]*motion_control_pkg::kinematics::kDegreesToRadians;
 
     //   std::cout<<"i:="<<i<<","<<"v:="<< l_v_limit_[i]<<","<<r_v_limit_[i]<<std::endl;
       
-      l_a_limit_[i] = pnva_[0][i][3]*DEG2RAD;
-      r_a_limit_[i] = pnva_[1][i][3]*DEG2RAD;
+      l_a_limit_[i] = pnva_[0][i][3]*motion_control_pkg::kinematics::kDegreesToRadians;
+      r_a_limit_[i] = pnva_[1][i][3]*motion_control_pkg::kinematics::kDegreesToRadians;
 
     //   std::cout<<"i:="<<i<<","<<"a:="<< l_a_limit_[i]<<","<<r_a_limit_[i]<<std::endl;
       
@@ -4170,10 +4216,11 @@ void DualArmModule::head_status_cb()
       head_status_pub_->publish(head_status_msg_);
       return;
     }
-    Eigen::Matrix4d T_source_target;
+    Eigen::Matrix4d T_source_target = Eigen::Matrix4d::Identity();
     if (!miracle_algo_->getForwardKinematics(planning_frame_, model_end_frame, T_source_target))
     {
         RCLCPP_ERROR(node->get_logger(), "Failed to get forward kinematics");
+        return;
     }
 
     Eigen::Matrix3d rotation_matrix = T_source_target.block<3,3>(0,0);
@@ -4188,21 +4235,24 @@ void DualArmModule::head_status_cb()
     identity_pose.position.y = translation.y();
     identity_pose.position.z = translation.z();
     head_status_msg_.end_effector_pose.push_back(identity_pose);
+    head_status_msg_.header.stamp = node->get_clock()->now();
     head_status_pub_->publish(head_status_msg_);
 
 }
 
-pcl::PointCloud<pcl::PointXYZ>::Ptr DualArmModule::loadPointCloud(const std::string& topic_name) {
+sensor_msgs::msg::PointCloud2 DualArmModule::loadPointCloud(const std::string& topic_name) {
+  // Both arm workers share this temporary executor; never spin it concurrently.
+  std::lock_guard<std::mutex> subscription_lock(pointcloud_subscription_mutex_);
   // path 在此处语义为“话题名”，例如 "/fusion/synced_robot_vision"
   const std::string& topic = topic_name;
 
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+  sensor_msgs::msg::PointCloud2 cloud;
   std::atomic<bool> got{false};
 
   // 1. 临时订阅，仅本次调用有效
   // 使用完整的命名空间 com_interfaces::msg::SyncedRobotVision
   auto sub = sub_pointcloudNode_->create_subscription<RobotVision>(
-      topic, 10,
+      topic, rclcpp::SensorDataQoS(),
       [&](const RobotVision::SharedPtr msg) {
         if (got.exchange(true)) return;   // 只取第一帧
         
@@ -4219,7 +4269,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DualArmModule::loadPointCloud(const std::str
 
         try {
             // 将 ROS2 PointCloud2 消息转换为 PCL 点云
-            pcl::fromROSMsg(pc2_msg, *cloud);
+            cloud = pc2_msg;
         } catch (const std::exception& e) {
             RCLCPP_ERROR(sub_pointcloudNode_->get_logger(), "Failed to convert ROS msg to PCL: %s", e.what());
             got.store(false);
@@ -4242,12 +4292,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr DualArmModule::loadPointCloud(const std::str
   }
 
   // 3. sub 离开作用域自动销毁，不再读取后续消息
-  if (cloud->empty()) {
-      RCLCPP_WARN(sub_pointcloudNode_->get_logger(), "Got empty point cloud from %s", topic.c_str());
-  } else {
-      RCLCPP_INFO(sub_pointcloudNode_->get_logger(), "Got %lu points from %s",
-                cloud->size(), topic.c_str());
-  }
+  if (cloud.data.empty()) throw std::runtime_error("Point cloud acquisition interrupted: " + topic);
   
   return cloud;
 }

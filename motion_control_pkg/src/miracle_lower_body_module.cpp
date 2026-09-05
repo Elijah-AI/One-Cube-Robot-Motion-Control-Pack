@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #include "miracle_lower_body_module.hpp"
+#include "motion_control_pkg/execution/preplanned_dispatch.hpp"
 #include <algorithm>
 
 // using json = Json;
@@ -522,6 +523,7 @@ namespace miracle {
         const std::vector<std::vector<double>>& positions,
         std::string& error_message)
     {
+        prepared_dispatch_valid_ = false;
         if (positions.empty()) {
             error_message = "preplanned leg trajectory is empty";
             return false;
@@ -546,6 +548,8 @@ namespace miracle {
             error_message = "leg motor enable safety check failed";
             return false;
         }
+        prepared_positions_ = positions;
+        prepared_dispatch_valid_ = true;
         error_message.clear();
         return true;
     }
@@ -556,20 +560,21 @@ namespace miracle {
         const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
         std::string& error_message)
     {
+        if (!prepared_dispatch_valid_ || positions != prepared_positions_) {
+            error_message = "leg dispatch requires the successfully prepared trajectory";
+            if (cancel) cancel->request();
+            return false;
+        }
+        prepared_dispatch_valid_ = false;
         if (cancel && cancel->requested()) {
             error_message = "preplanned leg trajectory canceled before execution";
             return false;
         }
         m_traj_run = true;
-        std::this_thread::sleep_until(start_time);
-        for (std::size_t index = 0; index < positions.size(); ++index) {
-            if (cancel && cancel->requested()) {
-                error_message = "preplanned leg trajectory canceled";
-                m_traj_run = false;
-                return false;
-            }
+        const bool success = motion_control_pkg::execution::dispatchPreplannedSamples(
+            positions.size(), start_time, cancel, [&](std::size_t index) {
             m_traj_buffer_pos = positions[index];
-            RCLCPP_INFO(
+            RCLCPP_DEBUG(
                 rclcpp::get_logger("leg_module"),
                 "%s preplanned command %zu/%zu: joint1=%.9f, joint2=%.9f, "
                 "joint3=%.9f, body_joint=%.9f",
@@ -581,15 +586,10 @@ namespace miracle {
                 m_traj_run = false;
                 return false;
             }
-            if (index + 1U < positions.size()) {
-                std::this_thread::sleep_until(
-                    start_time + std::chrono::milliseconds(4) *
-                    static_cast<long long>(index + 1U));
-            }
-        }
+            return true;
+        }, error_message);
         m_traj_run = false;
-        error_message.clear();
-        return true;
+        return success;
     }
 
     bool MiracleLowerBodyModule::execute_preplanned_trajectory(
@@ -598,6 +598,10 @@ namespace miracle {
         const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
         std::string& error_message)
     {
+        if (cancel && cancel->requested()) {
+            error_message = "preplanned leg trajectory canceled before preparation";
+            return false;
+        }
         if (!prepare_preplanned_dispatch(positions, error_message)) {
             return false;
         }

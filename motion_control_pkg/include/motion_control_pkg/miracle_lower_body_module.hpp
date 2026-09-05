@@ -246,6 +246,8 @@ namespace miracle {
         std::thread execution_thread_move_pose_;
         std::thread execution_thread_move_joints_;
         std::atomic<bool> is_executing_leg_;
+        std::vector<std::vector<double>> prepared_positions_;
+        bool prepared_dispatch_valid_ = false;
         rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
         sensor_msgs::msg::JointState joint_state_msg_;
         

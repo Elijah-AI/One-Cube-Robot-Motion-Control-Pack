@@ -18,6 +18,9 @@
   
   <!-- 关键：添加对 com_interfaces 的依赖 -->
   <depend>com_interfaces</depend>
+  <depend>libmodbus-dev</depend>
+  <depend>yaml-cpp</depend>
+  <depend>uuid</depend>
   
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>

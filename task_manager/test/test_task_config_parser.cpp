@@ -32,7 +32,7 @@ TEST(TaskConfigParserTest, LoadsLocalParallelGroupAndMoveLine)
   EXPECT_TRUE(move_pose.arm_param.enable_move_line);
 }
 
-TEST(TaskConfigParserTest, LoadsExternalFourPositionConfigWhenProvided)
+TEST(TaskConfigParserTest, PreservesExternalTaskActionsAndParallelGroups)
 {
   const char* config_path = std::getenv("TASK_MANAGER_REAL_CONFIG_PATH");
   if (config_path == nullptr)
@@ -45,17 +45,38 @@ TEST(TaskConfigParserTest, LoadsExternalFourPositionConfigWhenProvided)
   ASSERT_TRUE(parser.load_config(config_path, config));
 
   const auto& steps = config.task_dict.at("move_box").action_seq.front();
-  size_t parallel_group_count = 0U;
-  for (const auto& step : steps)
-  {
-    if (!step.is_parallel_group)
-    {
-      continue;
+  const auto source_steps = YAML::LoadFile(config_path)["tasks"]["move_box"]["action_sequence1"];
+  ASSERT_EQ(steps.size(), source_steps.size());
+  const auto check_action = [](const task_cfg::AtomicAction& action, const YAML::Node& source) {
+    EXPECT_EQ(action.action_type, source["action_type"].as<std::string>());
+    const auto params = source["params"];
+    if (action.action_type == "move_joints") {
+      EXPECT_EQ(action.move_joints_param.arm_id, params["arm_id"].as<unsigned>());
+      EXPECT_EQ(action.move_joints_param.position, params["position"].as<std::vector<double>>());
+    } else if (action.action_type == "move_pose") {
+      EXPECT_EQ(action.arm_param.arm_id, params["arm_id"].as<unsigned>());
+      EXPECT_EQ(action.arm_param.config_pose, params["target_pose"].as<std::vector<float>>());
+      EXPECT_EQ(action.arm_param.enable_move_line, params["enable_move_line"].as<bool>(false));
+    } else if (action.action_type == "gripper_ctrl") {
+      EXPECT_EQ(action.gripper_param.gripper_id, params["gripper_id"].as<unsigned>());
+      EXPECT_EQ(action.gripper_param.position, params["position"].as<std::vector<uint8_t>>());
     }
-    ++parallel_group_count;
-    ASSERT_EQ(step.parallel_actions.size(), 2U);
-    EXPECT_EQ(step.parallel_actions.at(0).move_joints_param.arm_id, 4U);
-    EXPECT_EQ(step.parallel_actions.at(1).move_joints_param.arm_id, 0U);
+  };
+  size_t parallel_group_count = 0U;
+  for (size_t index = 0; index < steps.size(); ++index)
+  {
+    const auto& step = steps[index];
+    const auto source_group = source_steps[index]["parallel_actions"];
+    EXPECT_EQ(step.is_parallel_group, source_group.IsDefined());
+    if (source_group.IsDefined()) {
+      ++parallel_group_count;
+      ASSERT_EQ(step.parallel_actions.size(), source_group.size());
+      for (size_t child = 0; child < source_group.size(); ++child) {
+        check_action(step.parallel_actions[child], source_group[child]);
+      }
+    } else {
+      check_action(step, source_steps[index]);
+    }
   }
-  EXPECT_EQ(parallel_group_count, 3U);
+  EXPECT_GT(parallel_group_count, 0U);
 }

@@ -6,11 +6,6 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 
-#include <pcl/io/pcd_io.h>       // 引入 PCL IO
-#include <pcl/io/ply_io.h>  
-#include <pcl/point_types.h> 
-#include "rclcpp/rclcpp.hpp"
-
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -31,9 +26,6 @@
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
-
-#define DEG2RAD M_PI/180.0
-#define RAD2DEG 180.0/M_PI
 
 using namespace std::chrono_literals;
 using Matrix4 = double[4][4];
@@ -99,7 +91,7 @@ public:
 
     // 预规划轨迹下发拆分为两阶段：
     // 1) prepare_preplanned_dispatch 同步完成单位转换与控制模式配置，
-    //    产出的命令缓存在 prepared_dispatch_ 中，不与硬件交互；
+    //    产出的命令缓存在 prepared_dispatch_ 中；控制模式配置会访问硬件；
     // 2) dispatch_preplanned 在 start_time 到来后按 4ms 节拍循环下发。
     // 调用者应在两路 prepare 均成功后再统一设定 start_time，避免准备阶段
     // 耗时吃掉启动预算导致首帧失同步（曾用 now+100ms 硬编码预算不可靠）。
@@ -269,7 +261,7 @@ private:
     void head_status_cb();
     void init_motor_status();
 
-    pcl::PointCloud<pcl::PointXYZ>::Ptr loadPointCloud(const std::string& topic_name);
+    sensor_msgs::msg::PointCloud2 loadPointCloud(const std::string& topic_name);
     // 将一次 SDK 状态快照转换为弧度，并按现有左右臂链名更新 Pinocchio。
     bool updateArmModelState(
         const motion_control_pkg::sdk::DualArmDeviceState& state,
@@ -369,6 +361,8 @@ private:
     bool l_init_arm_params_ = false;
 
     rclcpp::Node::SharedPtr sub_pointcloudNode_;
+    std::mutex pointcloud_subscription_mutex_;
+    std::string collision_pointcloud_topic_;
 };
 
 #endif // DUAL_ARM_MODULE_HPP

@@ -22,9 +22,13 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 endif()
 
-# libmodbus /usr/include/modbus 适配
-include_directories("/usr/include")
-set(MODBUS_LIB modbus)
+# Discover both system installs and isolated offline dependency prefixes.
+find_path(MODBUS_INCLUDE_DIR NAMES modbus/modbus.h)
+find_library(MODBUS_LIB NAMES modbus)
+if(NOT MODBUS_INCLUDE_DIR OR NOT MODBUS_LIB)
+  message(FATAL_ERROR "libmodbus development files are required; install libmodbus-dev or set CMAKE_PREFIX_PATH")
+endif()
+include_directories(${MODBUS_INCLUDE_DIR})
 
 # 项目头文件目录
 include_directories(include)
