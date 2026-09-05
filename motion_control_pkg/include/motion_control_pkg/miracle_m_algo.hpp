@@ -50,6 +50,9 @@
 #include <ompl/base/State.h>
 #include <ompl/base/SpaceInformation.h>
 #include <ompl/geometric/SimpleSetup.h>
+#include <ompl/base/spaces/RealVectorStateSpace.h>
+#include <ompl/base/StateValidityChecker.h>
+#include <ompl/geometric/planners/rrt/RRTConnect.h>
 
 #include "jsoncpp/json/json.h"
 #include "rclcpp/rclcpp.hpp"
@@ -60,6 +63,22 @@
 // #include "pinocchio/spatial/se3.hpp"
 // #include <chrono>
 // #include "toppra/toppra.hpp"
+
+#include "coal/BVH/BVH_model.h"      // 提供 coal::BVHModel
+#include "coal/BV/BV.h" 
+#include <octomap/octomap.h>
+#include <octomap/OcTree.h>
+#include <coal/octree.h>  
+
+#include <pcl/io/pcd_io.h>       // 引入 PCL IO
+#include <pcl/io/ply_io.h>  
+#include <pcl/point_types.h> 
+
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/common/common.h>
+#include <atomic>
+#include <chrono>
 
 #define JOINTS_THRESHOLD 0.002
 #define CARTES_V_MAX 1.8
@@ -283,7 +302,17 @@ public:
     void addExternalCollisionBox(const std::string& name, 
                                  const Eigen::Vector3d& size, 
                                  const Eigen::Isometry3d& pose);
-                                 
+
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr loadPointCloud(const std::string& topic_name);
+
+    std::shared_ptr<coal::OcTree> buildOcTreeFromCloud(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud,
+                                                                        double resolution,
+                                                                        Eigen::Vector3d& out_center);
+             
+    void addExternalCollisionPointcloud(const std::string& name, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud);
+                                            
+    void savePathToTxt(const std::vector<std::vector<double> >& out_path, const std::string& filename);
+
     // Remove an external collision object by name
     void removeExternalCollisionObject(const std::string& name);
                                  
@@ -883,7 +912,7 @@ private:
     std::vector<double>  _m_lower_body_joint_state_msg;
     std::vector<double>  _m_head_joint_state_msg;
 
-
+    // rclcpp::Node::SharedPtr node_;
 };
 
 #endif

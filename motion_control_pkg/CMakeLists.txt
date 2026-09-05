@@ -50,6 +50,9 @@ find_package(ruckig REQUIRED)
 # find_package(TinyXML REQUIRED)
 find_package(jsoncpp REQUIRED) 
 
+find_package(PCL 1.12 REQUIRED COMPONENTS common io surface filters kdtree features)
+find_package(pcl_conversions REQUIRED)
+include_directories(${coal_INCLUDE_DIRS})
 
 
 # 如果其他模块需要，在此添加更多 find_package，例如:
@@ -198,10 +201,17 @@ endif()
 # 创建可执行节点
 add_executable(motion_control_node ${SOURCES})
 
+set_target_properties(motion_control_node PROPERTIES
+    INSTALL_RPATH "/usr/local/lib;$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH TRUE
+    SKIP_BUILD_RPATH FALSE
+)
+
 # Pinocchio 会把 Boost MPL 容器上限扩展到 30；必须同时禁用 Boost
 # 自带的 20 元素预生成头，否则 OMPL 引入 Boost.MultiIndex 时会模板展开失败。
 target_compile_definitions(motion_control_node PRIVATE
     BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS
+    ${PCL_DEFINITIONS}
 )
 
 # 设置包含目录
@@ -227,6 +237,8 @@ target_include_directories(motion_control_node PRIVATE
     ${pinocchio_INCLUDE_DIRS}
     ${ruckig_INCLUDE_DIRS}
     ${JSONCPP_INCLUDE_DIRS}
+    ${PCL_INCLUDE_DIRS}
+    ${coal_INCLUDE_DIRS}
 )
 
 target_link_options(motion_control_node PRIVATE "-Wl,--disable-new-dtags")
@@ -254,6 +266,7 @@ ament_target_dependencies(motion_control_node
     tf2
     tf2_ros
     tf2_geometry_msgs
+    pcl_conversions
 )
 
 
@@ -280,6 +293,8 @@ target_link_libraries(motion_control_node
     coal::coal
     ruckig::ruckig
     jsoncpp
+    ${PCL_LIBRARIES}
+    ${coal_LIBRARIES}
 )
 
 if(NOT NEED_PSEUDO_DRIVER_SDK)

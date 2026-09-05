@@ -6,6 +6,11 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 
+#include <pcl/io/pcd_io.h>       // 引入 PCL IO
+#include <pcl/io/ply_io.h>  
+#include <pcl/point_types.h> 
+#include "rclcpp/rclcpp.hpp"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -244,7 +249,10 @@ private:
 
     void heart_beat_cb();
     void motor_statu_cb();
+    void head_status_cb();
     void init_motor_status();
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr loadPointCloud(const std::string& topic_name);
     // 将一次 SDK 状态快照转换为弧度，并按现有左右臂链名更新 Pinocchio。
     bool updateArmModelState(
         const motion_control_pkg::sdk::DualArmDeviceState& state,
@@ -281,9 +289,12 @@ private:
     rclcpp::Publisher<HeartBeat>::SharedPtr heart_beat_pub_;
     rclcpp::Publisher<NodeStatus>::SharedPtr device_status_pub_;
     rclcpp::Publisher<MotorStatus>::SharedPtr motor_status_pub_;
+    rclcpp::Publisher<MotorStatus>::SharedPtr head_status_pub_;
     MotorStatus motor_status_msg_;
+    MotorStatus head_status_msg_;
     rclcpp::TimerBase::SharedPtr hear_beat_timer_;
     rclcpp::TimerBase::SharedPtr joint_feedback_timer_;
+    rclcpp::TimerBase::SharedPtr head_feedback_timer_;
     //rclcpp::TimerBase::SharedPtr joint_command_timer_; 中心控制节点 RobotControlNode.cpp
     //天机Dural Arm data strcture
     FX_INT32L type_[2];
@@ -328,6 +339,8 @@ private:
     std::vector<double> r_a_limit_,l_a_limit_; 
     std::vector<double> r_jerk_limit_,l_jerk_limit_;
     bool l_init_arm_params_ = false;
+
+    rclcpp::Node::SharedPtr sub_pointcloudNode_;
 };
 
 #endif // DUAL_ARM_MODULE_HPP
