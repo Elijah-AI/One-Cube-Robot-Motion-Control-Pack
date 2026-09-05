@@ -623,17 +623,17 @@ bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
     // The mobile base must not pitch beyond the configured 30 degree safety
     // limit.  Keep this check in the common full-state validator so that
     // sampled OMPL and time-parameterized states use the same constraint.
-    if (model_.existFrame("body_link")) {
-        pinocchio::forwardKinematics(model_, *data_, full_q);
-        pinocchio::updateFramePlacements(model_, *data_);
-        const Eigen::Matrix3d& rotation =
-            data_->oMf[model_.getFrameId("body_link")].rotation();
-        const double pitch = std::atan2(
-            -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
-        if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
-            return false;
-        }
-    }
+    // if (model_.existFrame("body_link")) {
+    //     pinocchio::forwardKinematics(model_, *data_, full_q);
+    //     pinocchio::updateFramePlacements(model_, *data_);
+    //     const Eigen::Matrix3d& rotation =
+    //         data_->oMf[model_.getFrameId("body_link")].rotation();
+    //     const double pitch = std::atan2(
+    //         -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
+    //     if (pitch > 30.0 * 0.017453292519943295) {   // 只关注正方向
+    //         return false;
+    //     }
+    // }
 
     pinocchio::updateGeometryPlacements(model_, *data_, geom_model_, *geom_data_, full_q);
     if (pinocchio::computeCollisions(geom_model_, *geom_data_, false)) {
@@ -709,15 +709,15 @@ bool MiracleMAlgo::isStateValid(const ompl::base::State* state,
     // Clean up all debug prints from isStateValid and single arm planning
     if (collision) {
         // debug print
-        /*
         for(size_t k = 0; k < geom_model_.collisionPairs.size(); ++k) {
             if(geom_data_->collisionResults[k].isCollision()) {
-                std::cout << "Collision during planning: "
-                          << geom_model_.geometryObjects[geom_model_.collisionPairs[k].first].name << " <--> "
-                          << geom_model_.geometryObjects[geom_model_.collisionPairs[k].second].name << std::endl;
+                RCLCPP_WARN(rclcpp::get_logger("MiracleMAlgo"),
+                    "Collision during planning: %s <--> %s",
+                    geom_model_.geometryObjects[geom_model_.collisionPairs[k].first].name.c_str(),
+                    geom_model_.geometryObjects[geom_model_.collisionPairs[k].second].name.c_str());
             }
         }
-        */
+        
     }
     
     // Check joint limits
@@ -735,17 +735,17 @@ bool MiracleMAlgo::isStateValid(const ompl::base::State* state,
         }
     }
 
-    if (model_.existFrame("body_link")) {
-        pinocchio::forwardKinematics(model_, *data_, q);
-        pinocchio::updateFramePlacements(model_, *data_);
-        const Eigen::Matrix3d& rotation =
-            data_->oMf[model_.getFrameId("body_link")].rotation();
-        const double pitch = std::atan2(
-            -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
-        if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
-            return false;
-        }
-    }
+    // if (model_.existFrame("body_link")) {
+    //     pinocchio::forwardKinematics(model_, *data_, q);
+    //     pinocchio::updateFramePlacements(model_, *data_);
+    //     const Eigen::Matrix3d& rotation =
+    //         data_->oMf[model_.getFrameId("body_link")].rotation();
+    //     const double pitch = std::atan2(
+    //         -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
+    //     if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
+    //         return false;
+    //     }
+    // }
     
     return !collision;
 }
@@ -1891,19 +1891,19 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             lb[j] = lo; ub[j] = up;
         }
         // body_joint 俯仰限位：将躯干关节角度限制在 [-body_pitch_limit, +body_pitch_limit]
-        if (body_q_idx >= 0) {
-            for (int j = 0; j < n_active; ++j) {
-                if (active_q[j] != body_q_idx) continue;
-                const double qj = q[body_q_idx];
-                double lo = std::max(-body_pitch_limit_rad, lower_pos[j]) - qj;
-                double up = std::min( body_pitch_limit_rad, upper_pos[j]) - qj;
-                lo = std::max(lo, lb[j]);
-                up = std::min(up, ub[j]);
-                if (lo > up) { const double mid = 0.5 * (lo + up); lo = mid; up = mid; }
-                lb[j] = lo; ub[j] = up;
-                break;
-            }
-        }
+        // if (body_q_idx >= 0) {
+        //     for (int j = 0; j < n_active; ++j) {
+        //         if (active_q[j] != body_q_idx) continue;
+        //         const double qj = q[body_q_idx];
+        //         double lo = std::max(-body_pitch_limit_rad, lower_pos[j]) - qj;
+        //         double up = std::min( body_pitch_limit_rad, upper_pos[j]) - qj;
+        //         lo = std::max(lo, lb[j]);
+        //         up = std::min(up, ub[j]);
+        //         if (lo > up) { const double mid = 0.5 * (lo + up); lo = mid; up = mid; }
+        //         lb[j] = lo; ub[j] = up;
+        //         break;
+        //     }
+        // }
 
         // 6) 求解 QP(qpOASES)。激活的碰撞对数随位形动态变化，逐次重建 QP。
         Eigen::VectorXd dq = Eigen::VectorXd::Zero(n_active);
@@ -2022,19 +2022,19 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
         q = q_next;
 
         // 8) 躯干俯仰安全检查：若 FK 俯仰超限，将 body_joint 回退(保守)
-        if (body_q_idx >= 0 && model_.existFrame("body_link")) {
-            pinocchio::forwardKinematics(model_, *data_, q);
-            pinocchio::updateFramePlacements(model_, *data_);
-            const Eigen::Matrix3d& R =
-                data_->oMf[model_.getFrameId("body_link")].rotation();
-            const double pitch = std::atan2(-R(2, 0),
-                                            std::hypot(R(0, 0), R(1, 0)));
-            if (std::abs(pitch) > body_pitch_limit_rad) {
-                q[body_q_idx] = std::clamp(q[body_q_idx],
-                                           -body_pitch_limit_rad,
-                                            body_pitch_limit_rad);
-            }
-        }
+        // if (body_q_idx >= 0 && model_.existFrame("body_link")) {
+        //     pinocchio::forwardKinematics(model_, *data_, q);
+        //     pinocchio::updateFramePlacements(model_, *data_);
+        //     const Eigen::Matrix3d& R =
+        //         data_->oMf[model_.getFrameId("body_link")].rotation();
+        //     const double pitch = std::atan2(-R(2, 0),
+        //                                     std::hypot(R(0, 0), R(1, 0)));
+        //     if (std::abs(pitch) > body_pitch_limit_rad) {
+        //         q[body_q_idx] = std::clamp(q[body_q_idx],
+        //                                    -body_pitch_limit_rad,
+        //                                     body_pitch_limit_rad);
+        //     }
+        // }
     }
 
     q_res = q;

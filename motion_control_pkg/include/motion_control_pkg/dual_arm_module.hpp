@@ -27,6 +27,7 @@
 #include "motion_control_pkg/execution/action_terminal_guard.hpp"
 #include "motion_control_pkg/execution/execution_control.hpp"
 #include "motion_control_pkg/execution/gripper_worker_threads.hpp"
+#include "motion_control_pkg/execution/joint_command.hpp"
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
@@ -92,6 +93,22 @@ public:
         const std::vector<std::vector<double>>& left_positions,
         const std::vector<std::vector<double>>& right_positions,
         std::uint8_t control_mode,
+        const std::chrono::steady_clock::time_point& start_time,
+        const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+        std::string& error_message);
+
+    // 预规划轨迹下发拆分为两阶段：
+    // 1) prepare_preplanned_dispatch 同步完成单位转换与控制模式配置，
+    //    产出的命令缓存在 prepared_dispatch_ 中，不与硬件交互；
+    // 2) dispatch_preplanned 在 start_time 到来后按 4ms 节拍循环下发。
+    // 调用者应在两路 prepare 均成功后再统一设定 start_time，避免准备阶段
+    // 耗时吃掉启动预算导致首帧失同步（曾用 now+100ms 硬编码预算不可靠）。
+    bool prepare_preplanned_dispatch(
+        const std::vector<std::vector<double>>& left_positions,
+        const std::vector<std::vector<double>>& right_positions,
+        std::uint8_t control_mode,
+        std::string& error_message);
+    bool dispatch_preplanned(
         const std::chrono::steady_clock::time_point& start_time,
         const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
         std::string& error_message);
@@ -307,6 +324,17 @@ private:
     FX_DOUBLE i_[2][7][6];
     std::shared_ptr<motion_control_pkg::sdk::DualArmDeviceInterface> arm_device_;
     std::unique_ptr<motion_control_pkg::sdk::SdkCommandGate> sdk_command_gate_;
+    // prepare_preplanned_dispatch 产出、dispatch_preplanned 消费的命令缓存。
+    // prepare 在主线程同步写入，dispatch 在 async 线程读取；async 启动点
+    // 提供 happens-before，无需额外加锁。每次 prepare 清空重填。
+    struct PreparedDispatch {
+        std::vector<motion_control_pkg::execution::JointCommand> left_commands;
+        std::vector<motion_control_pkg::execution::JointCommand> right_commands;
+        std::vector<motion_control_pkg::sdk::ArmChannel> channels;
+        bool need_left = false;
+        bool need_right = false;
+        bool valid = false;
+    } prepared_dispatch_;
     std::shared_ptr<MiracleMAlgo> miracle_algo_;
     motion_control_pkg::sdk::ActiveArmConfiguration arm_configuration_;
     std::string sdk_config_path_;

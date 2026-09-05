@@ -91,6 +91,49 @@ ros2 action send_goal --feedback \
     timeout_ms: 3000}" \
   --feedback
 
+1.56, -1.6, -1.45, -2.8  较深位置
+1.56, -1.58, -1.43, -2.83 实际拿左边电池位置1
+1.56, -1.58, -1.43, -2.79 实际拿左边电池位置2
+- 1.5598695278167725
+- -1.5821542739868164
+- -1.4348089694976807
+- -2.7936010360717773
+
+
+对称位置
+0.2757, -0.6856, -0.2353, -1.8553, -0.0531, 0.9812, 0.1034
+-0.2447, -0.807, 0.2257, -1.7738, 0.0136, 0.9405, -0.0666
+左边电池预抠位置
+1.55, -1.43, -1.28, -2.81
+
+-0.498, -1.135, 0.722, -1.515, -1.389, 0.839, 0.75
+-0.045, -1.22, 0.084, -0.97, 0.09, 0.3, 0.051
+
+  ros2 action send_goal /Control/move_joints \
+  com_interfaces/action/MoveJoints \
+  "{header: {frame_id: 'base_link'},
+    task_id: 'MANUAL_DUAL_JOINT_01',
+    arm_id: 2,
+    left_joint_name: [
+      'Joint1_L','Joint2_L','Joint3_L','Joint4_L',
+      'Joint5_L','Joint6_L','Joint7_L'
+    ],
+    left_position: [
+      -0.498, -1.135, 0.722, -1.515, -1.389, 0.839, 0.75
+    ],
+    right_joint_name: [
+      'Joint1_R','Joint2_R','Joint3_R','Joint4_R',
+      'Joint5_R','Joint6_R','Joint7_R'
+    ],
+    right_position: [
+      -0.045, -1.22, 0.084, -0.97, 0.09, 0.3, 0.051
+    ],  
+    synchronization_mode: 0,
+    enable_collision_check: false,
+    speed: 0.2,
+    timeout_ms: 30000}" \
+  --feedback
+
 ***************************************双臂模块测试************************************
   ros2 action send_goal /Control/move_pose \
   com_interfaces/action/MovePose \
@@ -118,6 +161,36 @@ ros2 action send_goal --feedback \
     enable_move_line: false,
     use_force_control: false,
     speed: 0.2,
+    timeout_ms: 45000}" \
+  --feedback
+
+  
+  ros2 action send_goal /Control/move_pose \
+  com_interfaces/action/MovePose \
+  "{header: {frame_id: base_link},
+    task_id: 'MANUAL_LEFT_POSE_01',
+    arm_id: 1,
+    target_pose: {
+      header: {frame_id: base_link},
+      pose: {
+        position: {
+          x: -0.03,
+          y: 0.22,
+          z: 0.31
+        },
+        orientation: {
+          x: -0.707,
+          y: 0.707,
+          z: 0.0,
+          w: 0.0
+        }
+      }
+    },
+    bound_size: [0.0, 0.0, 0.0],
+    enable_collision_check: false,
+    enable_move_line: true,
+    use_force_control: false,
+    speed: 0.1,
     timeout_ms: 45000}" \
   --feedback
   
@@ -160,7 +233,7 @@ ros2 action send_goal --feedback \
 
 *****************双臂同时动作*********************************
 
-  ros2 action send_goal /Control/move_joints \
+ ros2 action send_goal /Control/move_joints \
   com_interfaces/action/MoveJoints \
   "{header: {frame_id: 'base_link'},
     task_id: 'MANUAL_DUAL_JOINT_01',

@@ -2958,14 +2958,13 @@ bool DualArmModule::start_execution_control_gripper(
     return true;
 }
 
-bool DualArmModule::execute_preplanned_trajectory(
+bool DualArmModule::prepare_preplanned_dispatch(
     const std::vector<std::vector<double>>& left_positions,
     const std::vector<std::vector<double>>& right_positions,
     std::uint8_t control_mode,
-    const std::chrono::steady_clock::time_point& start_time,
-    const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
     std::string& error_message)
 {
+    prepared_dispatch_ = PreparedDispatch{};
     const bool need_left = !left_positions.empty();
     const bool need_right = !right_positions.empty();
     if (!need_left && !need_right) {
@@ -2983,50 +2982,68 @@ bool DualArmModule::execute_preplanned_trajectory(
         return false;
     }
 
+    if (need_left && !motion_control_pkg::motion::trajectoryToVendorDegrees(
+        left_positions, prepared_dispatch_.left_commands, error_message)) {
+        return false;
+    }
+    if (need_right && !motion_control_pkg::motion::trajectoryToVendorDegrees(
+        right_positions, prepared_dispatch_.right_commands, error_message)) {
+        return false;
+    }
+
+    prepared_dispatch_.need_left = need_left;
+    prepared_dispatch_.need_right = need_right;
+    if (need_left) {
+        prepared_dispatch_.channels.push_back(motion_control_pkg::sdk::ArmChannel::kLeft);
+    }
+    if (need_right) {
+        prepared_dispatch_.channels.push_back(motion_control_pkg::sdk::ArmChannel::kRight);
+    }
+    const auto mode_result = configureGoalControlMode(
+        control_mode,
+        motion_control_pkg::sdk::ArmControlMode::kCartesianImpedance,
+        prepared_dispatch_.channels);
+    if (!mode_result) {
+        error_message = mode_result.error_message;
+        return false;
+    }
+    prepared_dispatch_.valid = true;
+    error_message.clear();
+    return true;
+}
+
+bool DualArmModule::dispatch_preplanned(
+    const std::chrono::steady_clock::time_point& start_time,
+    const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+    std::string& error_message)
+{
+    if (!prepared_dispatch_.valid) {
+        error_message = "dispatch_preplanned called without successful prepare";
+        return false;
+    }
     if (cancel && cancel->requested()) {
         error_message = "preplanned trajectory canceled before execution";
         return false;
     }
 
-    std::vector<motion_control_pkg::execution::JointCommand> left_commands;
-    std::vector<motion_control_pkg::execution::JointCommand> right_commands;
-    if (need_left && !motion_control_pkg::motion::trajectoryToVendorDegrees(
-        left_positions, left_commands, error_message)) {
-        return false;
-    }
-    if (need_right && !motion_control_pkg::motion::trajectoryToVendorDegrees(
-        right_positions, right_commands, error_message)) {
-        return false;
-    }
-
-    std::vector<motion_control_pkg::sdk::ArmChannel> channels;
-    if (need_left) {
-        channels.push_back(motion_control_pkg::sdk::ArmChannel::kLeft);
-    }
-    if (need_right) {
-        channels.push_back(motion_control_pkg::sdk::ArmChannel::kRight);
-    }
-    const auto mode_result = configureGoalControlMode(
-        control_mode,
-        motion_control_pkg::sdk::ArmControlMode::kCartesianImpedance,
-        channels);
-    if (!mode_result) {
-        error_message = mode_result.error_message;
-        return false;
-    }
-
     std::this_thread::sleep_until(start_time);
-    const std::size_t sample_count = need_left ? left_commands.size() : right_commands.size();
+    const std::size_t sample_count = prepared_dispatch_.need_left
+        ? prepared_dispatch_.left_commands.size()
+        : prepared_dispatch_.right_commands.size();
     for (std::size_t index = 0; index < sample_count; ++index) {
         if (cancel && cancel->requested()) {
             error_message = "preplanned arm trajectory canceled";
             return false;
         }
         const auto send_result = sdk_command_gate_->sendJointPositions(
-            need_left ? std::optional<motion_control_pkg::execution::JointCommand>(left_commands[index]) :
-                        std::nullopt,
-            need_right ? std::optional<motion_control_pkg::execution::JointCommand>(right_commands[index]) :
-                         std::nullopt);
+            prepared_dispatch_.need_left
+                ? std::optional<motion_control_pkg::execution::JointCommand>(
+                      prepared_dispatch_.left_commands[index])
+                : std::nullopt,
+            prepared_dispatch_.need_right
+                ? std::optional<motion_control_pkg::execution::JointCommand>(
+                      prepared_dispatch_.right_commands[index])
+                : std::nullopt);
         if (!send_result) {
             error_message = send_result.error_message;
             return false;
@@ -3038,6 +3055,21 @@ bool DualArmModule::execute_preplanned_trajectory(
     }
     error_message.clear();
     return true;
+}
+
+bool DualArmModule::execute_preplanned_trajectory(
+    const std::vector<std::vector<double>>& left_positions,
+    const std::vector<std::vector<double>>& right_positions,
+    std::uint8_t control_mode,
+    const std::chrono::steady_clock::time_point& start_time,
+    const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+    std::string& error_message)
+{
+    if (!prepare_preplanned_dispatch(
+            left_positions, right_positions, control_mode, error_message)) {
+        return false;
+    }
+    return dispatch_preplanned(start_time, cancel, error_message);
 }
 
 bool DualArmModule::reserve_preplanned_trajectory_resources(

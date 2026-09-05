@@ -518,10 +518,8 @@ namespace miracle {
         execution_thread_move_pose_ = std::thread(&MiracleLowerBodyModule::execution_loop_move_pose, this, goal_handle);
     }
 
-    bool MiracleLowerBodyModule::execute_preplanned_trajectory(
+    bool MiracleLowerBodyModule::prepare_preplanned_dispatch(
         const std::vector<std::vector<double>>& positions,
-        const std::chrono::steady_clock::time_point& start_time,
-        const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
         std::string& error_message)
     {
         if (positions.empty()) {
@@ -538,11 +536,6 @@ namespace miracle {
                 return false;
             }
         }
-        if (cancel && cancel->requested()) {
-            error_message = "preplanned leg trajectory canceled before execution";
-            return false;
-        }
-
         for (const auto& point : positions) {
             if (!checkJointsAngleOk(point)) {
                 error_message = "preplanned leg trajectory violates joint limits";
@@ -553,7 +546,20 @@ namespace miracle {
             error_message = "leg motor enable safety check failed";
             return false;
         }
+        error_message.clear();
+        return true;
+    }
 
+    bool MiracleLowerBodyModule::dispatch_preplanned(
+        const std::vector<std::vector<double>>& positions,
+        const std::chrono::steady_clock::time_point& start_time,
+        const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+        std::string& error_message)
+    {
+        if (cancel && cancel->requested()) {
+            error_message = "preplanned leg trajectory canceled before execution";
+            return false;
+        }
         m_traj_run = true;
         std::this_thread::sleep_until(start_time);
         for (std::size_t index = 0; index < positions.size(); ++index) {
@@ -584,6 +590,18 @@ namespace miracle {
         m_traj_run = false;
         error_message.clear();
         return true;
+    }
+
+    bool MiracleLowerBodyModule::execute_preplanned_trajectory(
+        const std::vector<std::vector<double>>& positions,
+        const std::chrono::steady_clock::time_point& start_time,
+        const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
+        std::string& error_message)
+    {
+        if (!prepare_preplanned_dispatch(positions, error_message)) {
+            return false;
+        }
+        return dispatch_preplanned(positions, start_time, cancel, error_message);
     }
 
     bool MiracleLowerBodyModule::reserve_preplanned_trajectory_resource(
