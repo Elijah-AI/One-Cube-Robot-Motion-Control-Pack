@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "apt": [
+    "build-essential",
+    "cmake",
+    "pkg-config",
+    "libeigen3-dev",
+    "liburdfdom-dev",
+    "libfcl-dev",
+    "libccd-dev",
+    "liboctomap-dev",
+    "libompl-dev",
+    "libjsoncpp-dev",
+    "libyaml-cpp-dev",
+    "libmodbus-dev",
+    "uuid-dev",
+    "libopencv-dev",
+    "libusb-1.0-0-dev",
+    "libssl-dev",
+    "libgflags-dev",
+    "libgoogle-glog-dev",
+    "nlohmann-json3-dev",
+    "python3-numpy",
+    "python3-scipy",
+    "python3-opencv",
+    "python3-open3d",
+    "ros-{ros_distro}-pinocchio",
+    "ros-{ros_distro}-coal",
+    "ros-{ros_distro}-ruckig",
+    "ros-{ros_distro}-camera-calibration-parsers",
+    "ros-{ros_distro}-robot-state-publisher",
+    "ros-{ros_distro}-joint-state-publisher-gui",
+    "ros-{ros_distro}-rviz2",
+    "libpcl-dev",
+    "ros-{ros_distro}-pcl-conversions",
+    "ros-{ros_distro}-pcl-ros"
+  ],
+  "pip": [],
+  "rosdep": [],
+  "skip_rosdep": {
+    "rclpy-action": "当前 vision_py_node 的历史错误声明，rclpy.action 由 rclpy 提供。",
+    "ros2_vision_action": "当前视觉源码实际导入 com_interfaces.action.VisionDetection，工作区已有 com_interfaces；后续源码改用该包时需移除此跳过项。"
+  },
+  "manual": [
+    "RKNNLite: 视觉源码导入 rknnlite.api；须为实际 Rockchip 板卡、Python ABI、NPU 驱动取得匹配的 rknn_toolkit_lite2 wheel，通过 add pip /绝对路径/文件.whl 添加。x86 主机安装公共依赖并不能运行 RKNN 推理。",
+    "ARM64 真机驱动: motion_control_pkg 链接 /opt/onecube/driver_sdk 下的厂家库及 EtherCAT；从厂家取得匹配 SDK 并按项目路径部署，本程序不替换这些文件。",
+    "仓库自带二进制: MarvinSDK、TOPPRA、quill、qpOASES、Orbbec SDK 由源码目录提供，必须随源码保留，并核对 x64 / aarch64 / arm64 目录及 ABI。",
+    "可选 Orbbec Rockchip 解码依赖 rockchip_mpp / librga 仅在开启 USE_RK_HW_DECODER 时需要，必须与板端系统匹配。",
+    "bringup.launch.py 引用的 miracle_driver / miracle_motion_middleware 不在当前源码包列表中；使用该入口前需补齐对应厂家 ROS 包。"
+  ]
+}
