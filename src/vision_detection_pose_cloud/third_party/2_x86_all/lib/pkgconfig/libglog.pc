@@ -1,0 +1,10 @@
+prefix=/home/levy/1_third_party/0_origin_code/glog/build/glog
+exec_prefix=/home/levy/1_third_party/0_origin_code/glog/build/glog/bin
+libdir=/home/levy/1_third_party/0_origin_code/glog/build/glog/lib
+includedir=/home/levy/1_third_party/0_origin_code/glog/build/glog/include
+
+Name: libglog
+Description: Google Log (glog) C++ logging framework
+Version: 0.5.0
+Libs: -L${libdir} -lglog
+Cflags: -I${includedir}

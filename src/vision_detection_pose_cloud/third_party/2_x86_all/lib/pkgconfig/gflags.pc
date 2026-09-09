@@ -1,0 +1,14 @@
+prefix=/home/levy/2_lidar_driver_ws/1_qlog&gflag/gflags-2.2.1/build/2_x86
+exec_prefix=${prefix}
+bindir=${prefix}/bin
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: gflags
+Version: 2.2.1
+Description: A commandline flags library that allows for distributed flags.
+URL: http://gflags.github.io/gflags
+Requires:
+Libs: -L${libdir} -lgflags
+Libs.private: -lpthread 
+Cflags: -I${includedir}

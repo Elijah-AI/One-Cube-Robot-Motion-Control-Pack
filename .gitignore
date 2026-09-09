@@ -36,3 +36,11 @@ __pycache__/
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
+
+# Editor / OS temporary files (won't be pushed to server)
+*.swp
+*.swo
+*~
+*.tmp
+*.orig
+.DS_Store

@@ -1,0 +1,12 @@
+prefix=/home/levy/1_third_party/0_origin_code/zeromq-4.3.2/build/zmq
+exec_prefix=/home/levy/1_third_party/0_origin_code/zeromq-4.3.2/build/zmq
+libdir=/home/levy/1_third_party/0_origin_code/zeromq-4.3.2/build/zmq/lib
+includedir=/home/levy/1_third_party/0_origin_code/zeromq-4.3.2/build/zmq/include
+
+Name: libzmq
+Description: 0MQ c++ library
+Version: 4.3.2
+Libs: -L${libdir} -lzmq
+Libs.private: -lstdc++  -lrt
+Requires.private: 
+Cflags: -I${includedir} 

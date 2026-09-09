@@ -1,0 +1,12 @@
+prefix=/home/quicktron/catkin_ws/2_x86_glog
+exec_prefix=/home/quicktron/catkin_ws/2_x86_glog
+libdir=/home/quicktron/catkin_ws/2_x86_glog/lib
+includedir=/home/quicktron/catkin_ws/2_x86_glog/include
+
+Name: libzmq
+Description: 0MQ c++ library
+Version: 4.3.2
+Libs: -L${libdir} -lzmq
+Libs.private: -lstdc++  -lrt
+Requires.private: 
+Cflags: -I${includedir} 

@@ -1,0 +1,295 @@
+@startuml
+' ============================================================
+' 双机械臂移动机器人 ROS2 系统 · 数据流架构图（基于节点代码）
+' 标注: ① 模块间数据流向（包级箭头 · 实线=代码已确认接口）
+'       ② 模块内子模块数据交互流向（包内箭头）
+'       红色虚线=接口未定位 / 未接入 / 待定
+' 依据: task_manager / safety_monitor / motion_control /
+'       camera_sync / vision_py / ros2_vision_action 节点源码
+'       + com_interfaces（10 Action · 6 Msg · 1 Srv）
+' 本文件为独立新增，不覆盖 system_architecture.puml
+' ============================================================
+title 双机械臂移动机器人 ROS2 系统数据流架构图
+caption 依据各节点源码与 com_interfaces 接口定义绘制（独立新增，不覆盖模块总览图）
+
+' ---------- 全局样式 ----------
+hide circle
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Microsoft YaHei"
+skinparam defaultFontSize 12
+skinparam nodesep 12
+skinparam ranksep 16
+skinparam componentPadding 2
+skinparam component {
+  BackgroundColor #FBFCFD
+  BorderColor #2C3E50
+  FontColor #2C3E50
+  FontSize 11
+}
+skinparam package {
+  BackgroundColor #F4F8FB
+  BorderColor #34495E
+  FontColor #1F618D
+  FontSize 12
+}
+skinparam arrow {
+  Color #1F618D
+  FontColor #1F618D
+  FontSize 10
+}
+skinparam component<<planned>> {
+  BackgroundColor #F8F9F9
+  BorderColor #95A5A6
+  FontColor #7F8C8D
+  FontStyle italic
+}
+skinparam component<<missing>> {
+  BackgroundColor #FDF2F2
+  BorderColor #E74C3C
+  FontColor #C0392B
+  FontStyle italic
+}
+skinparam legend {
+  BackgroundColor #FEF9E7
+  BorderColor #F1C40F
+  FontColor #7D6608
+  FontSize 11
+}
+
+legend right
+  【图例】
+  ─实线→ 代码已确认的接口数据流
+  ┄红虚线→ 未定位 / 未接入 / 待定
+  [红框] 差异点：接口未在源码中定位
+endlegend
+
+' ============================================================
+' 第 0 行 · 外部 / 业务层
+' ============================================================
+package "外部 / 业务层" as EXT {
+  component "WMS\n仓储管理系统\n订单业务源" as WMS
+  component "MES\n制造执行系统\n订单业务源" as MES
+  component "协议转换模块\nHTTP/MQTT 服务端\n订单分解 → 任务" as PT
+  component "M4 调度平台\n[ 仙工 ]\n任务下发 · 调度" as M4
+  component "SRC-1000\n导航控制盒" as SRC
+  component "PLC 外设\nModbus TCP 外部从站" as PLC
+}
+
+' ============================================================
+' 第 1 行 · 安全监控（左） + 任务决策层（右）
+' ============================================================
+package "安全监控模块\n[ safety_monitor ]\n顶层安全监管" as SAFE {
+  component "心跳/状态订阅\n/SafeNode/*" as SAFE_SUB
+  component "SafetyStateMachine\n整机安全 FSM" as SAFE_FSM
+  component "GetSystemStatus\n服务端" as SAFE_SRV
+}
+package "任务管理模块\n[ task_manager ]\n任务决策层" as TASK {
+  component "ModbusTCP 从站\n:12000 · FC03/FC06" as TASK_MB
+  component "TaskConfigParser\n任务 YAML 配置" as TASK_CFG
+  component "TaskManagerNode\nFSM · 状态 · 心跳" as TASK_NODE
+  component "BehaviorTreeEngine\n任务编排" as TASK_BT
+  component "TaskActionClient\n动作客户端 ×9" as TASK_AC
+}
+
+' ============================================================
+' 第 2 行 · 功能执行与感知层
+' ============================================================
+package "功能执行与感知层" as L3 {
+  package "运动控制模块\n[ motion_control ]" as MOT {
+    component "Action 服务端\nmove_pose/joints\ngripper/suck · Checkself/Reset" as MOT_AS
+    component "防碰撞规划\n指令位姿避障" as MOT_PLAN
+    component "DualArmModule\n双臂执行引擎" as MOT_ARM
+    component "全身控制\n腰部 · 头部" as MOT_WB
+    component "EtherCAT 总线\n250Hz" as MOT_ECAT
+    component "状态发布\n/Control/MotorInfo\n/SafeNode/*" as MOT_MS
+  }
+  package "感知同步模块\n[ camera_sync ]" as CAM {
+    component "相机采集\nOrbbec SDK" as CAM_CAP
+    component "D2C/时间同步\n相机·电机融合" as CAM_FUS
+    component "融合发布\n/fusion/synced_robot_vision" as CAM_PUB
+    component "Action 服务端\n/vision/Check_self·Reset" as CAM_AS
+  }
+  component "相机话题源\n/camera/*" as SRC_CAM <<missing>>
+  component "末端位姿源\n/end_effector_pose" as SRC_EEP <<missing>>
+  package "视觉检测模块\n[ vision_py ]" as VIS {
+    component "话题订阅原始数据\n/camera/* · /end_effector_pose" as VIS_SUB
+    component "数据对齐与预处理\n剔除无效图像" as VIS_PRE
+    component "YOLO 目标检测" as VIS_DET
+    component "目标分割" as VIS_SEG
+    component "特征提取 · 6D 位姿\nBox6DPoseEstimator" as VIS_FEA
+    component "检测发布\n/detection/pointcloud·result_image\nfinal_pose" as VIS_PUB
+    component "Action 服务端\n/vision/detection_pose_cloud" as VIS_AS
+  }
+  package "人机交互模块\n[ hmi ]" as HMI {
+    component "安全状态订阅\n/Safety/device_safety_state" as HMI_SUB
+    component "屏幕图像控制" as HMI_DISP
+    component "485 灯光控制" as HMI_LED
+    component "声音输出" as HMI_AUD
+  }
+}
+
+' ============================================================
+' 第 3 行 · 硬件 / 外设层
+' ============================================================
+package "硬件 / 外设层" as L4 {
+  component "EtherCAT 伺服驱动" as HW_ECAT
+  component "夹爪 ×2\nRS485 Jodell" as HW_GRIP
+  component "吸盘\nGPIO Neardi47" as HW_SUCK
+  component "Orbbec RGB-D\n相机" as HW_CAM
+  component "屏幕\n图像显示" as HW_DISP
+  component "灯光\nRS485" as HW_LED
+  component "音响\n音频输出" as HW_AUD
+}
+
+' ============================================================
+' ① 模块间数据流（包级箭头 · 实线=代码已确认）
+' ============================================================
+' --- 外部：WMS/MES → 协议转换 → M4 → SRC-1000 → 任务管理（Modbus TCP 主站→从站） ---
+WMS -right-> PT : "HTTP/MQTT 订单业务"
+MES -right-> PT : "HTTP/MQTT 订单业务"
+PT -right-> M4 : "HTTP 创建猎鹰任务"
+M4 -right-> SRC : "导航任务 → SRC-1000"
+SRC -down-> TASK_MB : "Modbus TCP 主站→从站 :12000\n任务指令 / 状态读写"
+SRC -right-> PLC : "Modbus TCP 读写外部从站\nFC03 读 · FC06 写"
+
+' --- 任务管理 → 执行/感知（Action） ---
+TASK -down-> MOT : "/Control/move_pose (MovePose)\n/Control/move_joints (MoveJoints)\n/Control/control_gripper (ControlGripper)\n/Control/control_suck (ControlSuck)\n/Control/Checkself·Reset (HardwareCheck/Reset)"
+TASK -down-> VIS : "/vision/detection_pose_cloud\n(VisionDetection)"
+TASK -down-> CAM : "/vision/Check_self (VisionCheckSelf)\n/vision/Reset (HardwareReset)"
+
+' --- 运动控制 → 感知同步（话题） ---
+MOT -right-> CAM : "/Control/MotorInfo (MotorStatus)"
+
+' --- 各节点 → 安全监控（心跳/状态 · 自下而上） ---
+TASK -right-> SAFE : "/SafeNode/Heartbeat (HeartBeat)\n/SafeNode/status (NodeStatus)\n/Safety/get_system_status (GetSystemStatus)"
+MOT -up-> SAFE : "/SafeNode/heartbeat (HeartBeat)\n/SafeNode/status (NodeStatus)"
+CAM -up-> SAFE : "/SafeNode/Heartbeat\n/SafeNode/status"
+
+' --- 安全监控 → 任务管理（安全状态） ---
+SAFE -left-> TASK : "/Safety/device_safety_state (SafetyState)"
+
+' --- 安全监控 → 人机交互（安全状态订阅） ---
+SAFE -down-> HMI : "/Safety/device_safety_state (SafetyState)"
+
+' ============================================================
+' ② 模块内子模块数据交互流向
+' ============================================================
+' --- 任务管理内部 ---
+TASK_MB -right-> TASK_NODE : "任务指令/寄存器"
+TASK_CFG -right-> TASK_NODE : "任务 YAML 配置"
+TASK_NODE -right-> TASK_BT : "任务编排"
+TASK_BT -right-> TASK_AC : "原子动作调用"
+
+' --- 安全监控内部 ---
+SAFE_SUB -right-> SAFE_FSM : "心跳/状态 → 安全判定"
+
+' --- 运动控制内部（指令 → 防碰撞规划 → 双臂 + 腰/头全身控制） ---
+MOT_AS -right-> MOT_PLAN : "goal → 防碰撞规划"
+MOT_PLAN -right-> MOT_ARM : "安全轨迹 → 双臂执行"
+MOT_PLAN -right-> MOT_WB : "全身协调 · 腰/头"
+MOT_ARM -right-> MOT_ECAT : "关节指令"
+MOT_WB -right-> MOT_ECAT : "腰/头指令"
+MOT_ARM -right-> MOT_MS : "正运动学 FK → 状态"
+
+' --- 感知同步内部 ---
+CAM_CAP -right-> CAM_FUS : "RGB-D 帧"
+CAM_FUS -right-> CAM_PUB : "融合结果"
+
+' --- 视觉检测内部（订阅 → 对齐预处理 → 检测 → 分割 → 特征提取 → 发布） ---
+VIS_SUB -right-> VIS_PRE : "原始图像/深度"
+VIS_PRE -right-> VIS_DET : "有效数据"
+VIS_DET -right-> VIS_SEG : "检测框"
+VIS_SEG -right-> VIS_FEA : "分割结果"
+VIS_FEA -right-> VIS_PUB : "6D 位姿"
+VIS_AS -up-> VIS_DET : "检测请求"
+
+' --- 人机交互内部（安全状态 → 屏幕/灯光/声音） ---
+HMI_SUB -down-> HMI_DISP : "安全状态 → 屏幕"
+HMI_SUB -down-> HMI_LED : "安全状态 → 灯光"
+HMI_SUB -down-> HMI_AUD : "安全状态 → 声音"
+
+' ============================================================
+' ③ 未定位 / 未接入 / 待定（红色虚线差异点）
+' ============================================================
+' 安全状态广播到执行层
+SAFE -down[#E74C3C,dashed]-> MOT : "/Safety/device_safety_state"
+' 感知融合输出（vision_py 未订阅）
+CAM -right[#E74C3C,dashed]-> VIS : "/fusion/synced_robot_vision (SyncedRobotVision)"
+' 视觉辅助输出（消费者未定位，结果经 Action 回传）
+VIS -up[#E74C3C,dashed]-> TASK : "/detection/pointcloud·result_image·final_pose"
+' 相机话题源（当前代码未发布 /camera/*）
+SRC_CAM -right[#E74C3C,dashed]-> VIS : "/camera/color/image_raw\n/camera/depth/image_raw\n/camera/color/camera_info"
+' 末端位姿话题源（发布器未定位）
+SRC_EEP -right[#E74C3C,dashed]-> VIS : "/end_effector_pose"
+
+' ============================================================
+' 硬件数据流
+' ============================================================
+MOT_ECAT -down-> HW_ECAT : "关节指令 250Hz"
+MOT_ARM -down-> HW_GRIP : "夹爪指令 RS485"
+MOT_ARM -down-> HW_SUCK : "吸盘指令 GPIO"
+CAM_CAP -down-> HW_CAM : "RGB-D 帧采集"
+HMI_DISP -down-> HW_DISP : "画面输出"
+HMI_LED -down-> HW_LED : "485 灯光"
+HMI_AUD -down-> HW_AUD : "音频输出"
+
+' ============================================================
+' 布局控制（hidden 连线 · 显式行列锚点）
+' ============================================================
+' --- 第 0 行：EXT（全宽） ---
+WMS -[hidden]right- MES
+MES -[hidden]right- PT
+PT -[hidden]right- M4
+M4 -[hidden]right- SRC
+SRC -[hidden]right- PLC
+' --- 第 1 行：TASK（左） | SAFE（右） ---
+TASK_MB -[hidden]right- TASK_CFG
+TASK_CFG -[hidden]right- TASK_NODE
+TASK_NODE -[hidden]right- TASK_BT
+TASK_BT -[hidden]right- TASK_AC
+TASK_AC -[hidden]right- SAFE_SUB
+SAFE_SUB -[hidden]right- SAFE_FSM
+SAFE_FSM -[hidden]right- SAFE_SRV
+' --- MOT 内部 ---
+MOT_AS -[hidden]right- MOT_PLAN
+MOT_PLAN -[hidden]right- MOT_ARM
+MOT_ARM -[hidden]right- MOT_WB
+MOT_WB -[hidden]right- MOT_ECAT
+MOT_ECAT -[hidden]right- MOT_MS
+' --- CAM 内部 ---
+CAM_CAP -[hidden]right- CAM_FUS
+CAM_FUS -[hidden]right- CAM_PUB
+CAM_PUB -[hidden]right- CAM_AS
+' --- VIS 内部 ---
+VIS_SUB -[hidden]right- VIS_PRE
+VIS_PRE -[hidden]right- VIS_DET
+VIS_DET -[hidden]right- VIS_SEG
+VIS_SEG -[hidden]right- VIS_FEA
+VIS_FEA -[hidden]right- VIS_PUB
+VIS_PUB -[hidden]right- VIS_AS
+' --- HMI 内部 ---
+HMI_SUB -[hidden]down- HMI_DISP
+HMI_DISP -[hidden]right- HMI_LED
+HMI_LED -[hidden]right- HMI_AUD
+' --- 第 2 行内部：MOT | CAM | 差异源 | VIS | HMI ---
+MOT_MS -[hidden]right- CAM_CAP
+CAM_AS -[hidden]right- SRC_CAM
+SRC_CAM -[hidden]right- SRC_EEP
+SRC_EEP -[hidden]right- VIS_SUB
+VIS_PUB -[hidden]right- HMI_SUB
+' --- L4 内部（硬件与 L3 各列下方，由真实硬件箭头牵引） ---
+HW_GRIP -[hidden]right- HW_SUCK
+HW_SUCK -[hidden]right- HW_ECAT
+HW_ECAT -[hidden]right- HW_CAM
+HW_CAM -[hidden]right- HW_DISP
+HW_DISP -[hidden]right- HW_LED
+HW_LED -[hidden]right- HW_AUD
+' --- 层间脊柱（EXT -> TASK -> L3 -> L4） ---
+EXT -[hidden]down- TASK
+TASK -[hidden]down- L3
+L3 -[hidden]down- L4
+
+@enduml

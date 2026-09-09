@@ -1,0 +1,68 @@
+# 单臂和双臂共用同一个 MovePose Action。
+uint8 ARM_LEFT=0
+uint8 ARM_RIGHT=1
+uint8 ARM_BOTH=2
+uint8 HEAD=3
+uint8 LEG=4
+uint8 WHOLE_BODY_LEFT=5
+uint8 WHOLE_BODY_RIGHT=6
+uint8 WHOLE_BODY_BOTH=7
+
+uint8 SYNC_START_AND_FINISH=0
+uint8 SYNC_START_ONLY=1
+
+# 控制模式：默认位置模式；阻抗模式对应厂商 SDK 的笛卡尔阻抗。
+uint8 CONTROL_POSITION=0
+uint8 CONTROL_IMPEDANCE=1
+
+std_msgs/Header header
+string task_id
+uint8 arm_id
+uint8 control_mode
+
+# ARM_LEFT/ARM_RIGHT 使用 target_pose/bound_size。
+geometry_msgs/PoseStamped target_pose    # 目标 6D 位姿，位置单位：米
+float32[] bound_size                     # 工具/负载包络 [x,y,z]，单位：米
+
+# ARM_BOTH 使用下列显式左右目标，不使用 target_pose/bound_size。
+geometry_msgs/PoseStamped left_target_pose
+geometry_msgs/PoseStamped right_target_pose
+float32[3] left_bound_size
+float32[3] right_bound_size
+uint8 synchronization_mode
+
+bool enable_collision_check
+bool enable_point_cloud_check            #开启自碰撞检测基础上添加点云检测
+bool use_force_control                   # 开启力控
+bool enable_move_line                    # 开启直线运动
+float32 speed                            # 控制速度比例，范围：(0, 1]
+uint8[] hand_action_type                 # 灵巧手动作类型，未安装时留空
+sensor_msgs/PointCloud2 env_point_cloud
+string point_cloud_frame_id
+int64 timeout_ms                         # 操作超时时间，毫秒
+---
+bool success
+string error_message
+float64 execution_time
+bool timing_breakdown_valid           # true 时下列三个阶段耗时有效
+float64 ik_time                       # IK 计算耗时，单位：秒
+float64 planning_time                 # 路径/轨迹规划与校验耗时（不含 IK），单位：秒
+float64 motion_time                   # 轨迹下发及到位等待耗时，单位：秒
+float64 final_distance_error             # 单臂 TCP 误差，ARM_BOTH 时为左右最大值
+float64 left_final_distance_error_m
+float64 right_final_distance_error_m
+float64 completion_time_skew_sec
+---
+uint8 STATUS_QUEUED=0
+uint8 STATUS_PLANNING=1
+uint8 STATUS_EXECUTING=2
+uint8 STATUS_WAITING_FOR_COMPLETION=3
+uint8 STATUS_STOPPING=4
+
+string task_status
+float32 progress_rate
+string current_step_info
+std_msgs/Header header
+uint8 dual_task_status
+float32 left_progress_rate
+float32 right_progress_rate

@@ -1,0 +1,10 @@
+%YAML:1.0
+tcp_translation: [ 0.8903177802, -0.1577448474, 1.371138512 ]
+tcp_quaternion_xyzw: [ 0.5288687609, 0.5798599453, 0.4555316812, 0.4201799197 ]
+target2cam_translation: [ 0., 0., 0. ]
+target2cam_quaternion_xyzw: [ 0., 0., 0., 1. ]
+tcp_pose_msg:
+   header_stamp_sec: 1788508116.
+   header_stamp_nanosec: 755342000.
+   position: [ 0.8903177802, -0.1577448474, 1.371138512 ]
+   orientation_xyzw: [ 0.5288687609, 0.5798599453, 0.4555316812, 0.4201799197 ]

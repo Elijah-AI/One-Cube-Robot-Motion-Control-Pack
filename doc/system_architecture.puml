@@ -1,0 +1,261 @@
+@startuml
+' ============================================================
+' 双机械臂移动机器人 ROS2 系统架构图（按模块 · 总览版）
+' 布局: 业务层(WMS/MES -> 协议转化 -> M4) -> 任务决策 -> 功能执行与感知 -> 硬件
+' 说明: 模块间通信不连线，统一经 ROS2 Action/话题/服务，
+'       接口由 com_interfaces 定义；各模块子功能以小方块写全
+' ============================================================
+title 双机械臂移动机器人 ROS2 系统架构图（按模块）
+
+' ---------- 全局样式 ----------
+hide circle
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Microsoft YaHei"
+skinparam defaultFontSize 12
+skinparam nodesep 10
+skinparam ranksep 15
+skinparam componentPadding 2
+skinparam component {
+  BackgroundColor #FBFCFD
+  BorderColor #2C3E50
+  FontColor #2C3E50
+  FontSize 12
+}
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #2C3E50
+  FontColor #2C3E50
+  FontSize 12
+}
+skinparam rectangle<<pad>> {
+  BackgroundColor #Transparent
+  BorderColor #Transparent
+  FontColor #Transparent
+}
+skinparam component<<planned>> {
+  BackgroundColor #F8F9F9
+  BorderColor #95A5A6
+  FontColor #7F8C8D
+  FontStyle italic
+}
+skinparam package {
+  BackgroundColor #FFFFFF
+  BorderColor #BDC3C7
+  FontColor #34495E
+  FontSize 13
+}
+skinparam arrow {
+  Color #5D6D7E
+  FontColor #85929E
+  FontSize 10
+}
+skinparam legend {
+  BackgroundColor #FEF9E7
+  BorderColor #F1C40F
+  FontColor #7D6608
+  FontSize 11
+}
+
+legend right
+  【图例】[模块]功能模块 · [小方块]真实子功能 · [灰斜小方块]规划中/演示
+  ==
+  模块间通信不连线，经 ROS2 Action/话题/服务
+  ==
+  共享话题：/SafeNode/Heartbeat /SafeNode/status
+  /Control/MotorInfo /fusion/synced_robot_vision
+  /Safety/device_safety_state
+endlegend
+
+' ============================================================
+' 第 1 层: 业务层（WMS/MES 上位业务 → 协议转化 → M4 调度）
+' ============================================================
+package "第 1 层 · 业务层" as L1 {
+  rectangle "WMS 仓储管理系统\n[ 上位对接系统 ]" as WMS
+  rectangle "MES 生产执行系统\n[ 上位对接系统 ]" as MES
+  rectangle "协议转化模块\n[ 待定 ]\nWMS/MES 任务 → HTTP → M4 猎鹰任务" as PT {
+    component "MQTT 服务/客户端\n消息订阅 · 发布" as PT_MQTT
+    component "HTTP 服务\n接口接收" as PT_HTTP_SRV
+    component "HTTP 客户端\n接口调用" as PT_HTTP_CLI
+    component "协议转化\nHTTP 转发 · 猎鹰任务" as PT_CONV
+  }
+  rectangle "M4 调度平台\n[ 仙工 M4 调度系统 ]\n多车调度 · 全局规划 · 运单管理" as M4 {
+    component "交通管制" as M4_DISP
+    component "全局规划" as M4_GLOB
+    component "全局看板" as M4_BOARD
+    component "运单管理" as M4_WAY
+    component "控制 SRC-1000\n指令下发" as M4_CTRL
+    component "猎鹰任务\n管理" as M4_FALCON
+    component "任务编排" as M4_ORCH
+    component "任务调度" as M4_TASK
+  }
+}
+
+' ============================================================
+' 第 2 层: 任务决策层
+' ============================================================
+package "第 2 层 · 任务决策层" as L2 {
+  rectangle "安全监控模块\n[ safety_monitor_node ]\n核心算法: 安全FSM · 心跳看门狗" as SAFE {
+    component "心跳 / 状态\n监控" as SAFE_HB
+    component "整机安全\nFSM" as SAFE_FSM
+    component "节点状态\n监控" as SAFE_NODE
+    component "故障检测\n节点重启" as SAFE_FAULT
+    component "GetSystemStatus\n服务" as SAFE_SRV
+    component "日志管理" as SAFE_LOG
+    component "监控配置\n节点列表 YAML" as SAFE_THRESH
+  }
+  rectangle "任务管理模块\n[ task_manager_node · ID=1 ]\n核心算法: FSM · 行为树 · 任务编排" as TASK {
+    component "任务解析\nYAML 任务定义" as TASK_PARSE
+    component "任务拆分\n[ 规划中 ] 动作序列→原子动作" as TASK_SPLIT <<planned>>
+    component "任务编排\n动作下发" as TASK_ORCH
+    component "FSM\n状态机" as TASK_FSM
+    component "行为树\n引擎" as TASK_BT
+    component "Modbus TCP\n从站 (:12000)" as TASK_MB
+    component "日志\n功能" as TASK_LOG
+  }
+}
+
+' ============================================================
+' 第 3 层: 功能执行与感知层
+' ============================================================
+package "第 3 层 · 功能执行与感知层" as L3 {
+  rectangle "感知模块\n[ camera_sync·ID=8 / vision_py·ID=7 / vision_action ]\n核心算法: YOLO · RANSAC · PCA\n6D位姿估计 · 手眼标定 · D2C" as SENSE {
+    component "相机采集\nOrbbec RGB-D" as SENSE_CAP
+    component "D2C 对齐\n深度↔彩色" as SENSE_D2C
+    component "时间同步\n相机·电机融合" as SENSE_SYNC
+    component "YOLO 检测+分割\n掩码输出" as SENSE_YOLO
+    component "点云生成+滤波\n统计滤波去噪" as SENSE_PCD
+    component "RANSAC 平面分割\n平面提取" as SENSE_RANSAC
+    component "尺寸模型+PCA\n6D 位姿估计" as SENSE_6D
+    component "手眼标定\n相机→末端→基座" as SENSE_HEC
+    component "融合发布\nSyncedRobotVision" as SENSE_FUS
+    component "视觉检测 Action 服务\n[ 演示 ] /vision/detection_pose_cloud" as SENSE_ACT <<planned>>
+  }
+  rectangle "运动控制模块\n[ motion_control_node · ID=3 ]\n核心算法: Pinocchio/Ruckig/TOPPRA/OMPL/Coal\n预留: 头部/腿部控制" as MOTION {
+    component "双臂执行引擎\nDualArmModule\n8线程执行 · 状态机" as MOTION_ARM
+    component "算法中间层\nMiracleMAlgo\nPinocchio FK/IK" as MOTION_ALGO
+    component "轨迹规划+防碰撞\nRuckig/TOPPRA\nOMPL采样·RRTConnect\nFCL 碰撞检测" as MOTION_TRAJ
+    component "SDK 适配层\n设备抽象 · 事务门" as MOTION_SDK
+    component "EtherCAT 总线\n250Hz" as MOTION_ECAT
+    component "夹爪控制\nJodell RS485" as MOTION_GRIP
+    component "吸盘控制\nNeardi47 GPIO" as MOTION_SUCK
+  }
+  rectangle "导航模块\n[ 仙工 SRC-1000 控制盒 ]\nSLAM建图 · 定位 · 导航 · 底盘驱动" as NAV {
+    component "底盘控制驱动\n激光/舵轮/里程计/IMU" as NAV_DRV
+    component "SLAM 激光建图\n扫图 · 地图构建" as NAV_SLAM
+    component "定位\n激光匹配 · 位姿跟踪" as NAV_LOC
+    component "导航\n路径规划 · 避障" as NAV_NAV
+    component "电池电量\n管理" as NAV_BAT
+    component "避障\n动态障碍规避" as NAV_OBST
+    component "碰撞检测\n防撞" as NAV_COL
+    component "地图管理\n多地图存储" as NAV_MAP
+  }
+  rectangle "人机交互模块\n[ HMI ]\n485灯光 · 屏幕 · 声音" as HMI {
+    component "485 灯光控制\nRS485 灯光外设" as HMI_LIGHT
+    component "屏幕显示\n状态信息 · 提示" as HMI_SCREEN
+    component "声音播报\n蜂鸣 · 语音提示" as HMI_SOUND
+  }
+}
+
+' ============================================================
+' 第 4 层: 硬件 / 外部接口层
+' ============================================================
+package "第 4 层 · 硬件 / 外部接口层" as L4 {
+  component "Orbbec RGB-D\n相机" as CAMHW
+  component "PLC\nModbus TCP 外设从站" as PLC
+  component "EtherCAT\n伺服驱动" as ETH
+  component "夹爪 ×2\n(RS485)" as GRIP
+  component "吸盘\n(GPIO)" as SUCK
+  component "SRC-1000 导航控制盒\n激光雷达 · 舵轮 · 里程计 · IMU · 电池" as SRC1000
+  component "HMI 外设\n485 灯光 · 屏幕 · 声音" as HMIHW
+}
+
+' ============================================================
+' 布局控制（仅 hidden 连线，无业务连线）
+' ============================================================
+' --- L1 两行: WMS/MES 上行 · PT/M4 下行 ---
+WMS -[hidden]right- MES
+WMS -[hidden]down- PT
+MES -[hidden]down- M4
+PT -[hidden]right- M4
+' --- PT 网格 (1x4) ---
+PT_MQTT -[hidden]right- PT_HTTP_SRV
+PT_HTTP_SRV -[hidden]right- PT_HTTP_CLI
+PT_HTTP_CLI -[hidden]right- PT_CONV
+' --- M4 网格 (4+4) ---
+M4_DISP -[hidden]right- M4_GLOB
+M4_GLOB -[hidden]right- M4_BOARD
+M4_BOARD -[hidden]right- M4_WAY
+M4_DISP -[hidden]down- M4_CTRL
+M4_CTRL -[hidden]right- M4_FALCON
+M4_FALCON -[hidden]right- M4_ORCH
+M4_ORCH -[hidden]right- M4_TASK
+' --- SAFE 网格 (3+2) ---
+SAFE_HB -[hidden]right- SAFE_FSM
+SAFE_FSM -[hidden]right- SAFE_NODE
+SAFE_NODE -[hidden]down- SAFE_FAULT
+SAFE_FAULT -[hidden]right- SAFE_SRV
+SAFE_SRV -[hidden]down- SAFE_LOG
+SAFE_LOG -[hidden]right- SAFE_THRESH
+' --- TASK 网格 (4+3, 两行) ---
+TASK_PARSE -[hidden]right- TASK_SPLIT
+TASK_SPLIT -[hidden]right- TASK_ORCH
+TASK_ORCH -[hidden]right- TASK_FSM
+TASK_FSM -[hidden]down- TASK_BT
+TASK_BT -[hidden]right- TASK_MB
+TASK_MB -[hidden]right- TASK_LOG
+' --- SENSE 网格 (3x3) ---
+SENSE_CAP -[hidden]right- SENSE_D2C
+SENSE_D2C -[hidden]right- SENSE_SYNC
+SENSE_SYNC -[hidden]down- SENSE_YOLO
+SENSE_YOLO -[hidden]right- SENSE_PCD
+SENSE_PCD -[hidden]right- SENSE_RANSAC
+SENSE_RANSAC -[hidden]down- SENSE_6D
+SENSE_6D -[hidden]right- SENSE_HEC
+SENSE_HEC -[hidden]right- SENSE_FUS
+SENSE_FUS -[hidden]right- SENSE_ACT
+' --- MOTION 网格 (3x3) ---
+MOTION_ARM -[hidden]right- MOTION_ALGO
+MOTION_ALGO -[hidden]right- MOTION_TRAJ
+MOTION_TRAJ -[hidden]down- MOTION_SDK
+MOTION_SDK -[hidden]right- MOTION_ECAT
+MOTION_ECAT -[hidden]down- MOTION_GRIP
+MOTION_GRIP -[hidden]right- MOTION_SUCK
+' --- NAV 网格 (3+3+2) ---
+NAV_DRV -[hidden]right- NAV_SLAM
+NAV_SLAM -[hidden]right- NAV_LOC
+NAV_DRV -[hidden]down- NAV_NAV
+NAV_NAV -[hidden]right- NAV_BAT
+NAV_BAT -[hidden]right- NAV_OBST
+NAV_NAV -[hidden]down- NAV_COL
+NAV_COL -[hidden]right- NAV_MAP
+' --- HMI 网格 (2+1) ---
+HMI_LIGHT -[hidden]right- HMI_SCREEN
+HMI_LIGHT -[hidden]down- HMI_SOUND
+' --- L2 横向（TASK 左 / SAFE 右，与 M4→TASK 锚点列对齐） ---
+TASK_PARSE -[hidden]right- SAFE_HB
+' --- L3 横向（NAV 左 / MOTION / SENSE / HMI 最右） ---
+NAV_DRV -[hidden]right- MOTION_ARM
+MOTION_ARM -[hidden]right- SENSE_CAP
+SENSE_CAP -[hidden]right- HMI_LIGHT
+' --- L1 -> L2 层间（M4_CTRL 锚定 TASK_PARSE：使 L1 中心贴近 L3 中心 957） ---
+M4_CTRL -[hidden]down- TASK_PARSE
+' --- L2 -> L3 层间（锚点源取各模块底行节点，保证垂直堆叠） ---
+TASK_LOG -[hidden]down- MOTION_ARM
+SAFE_LOG -[hidden]down- SENSE_CAP
+' --- L3 -> L4 层间（锚点源取各模块最底行节点，保证 L4 硬件对齐在模块下方） ---
+MOTION_ECAT -[hidden]down- ETH
+MOTION_GRIP -[hidden]down- GRIP
+MOTION_SUCK -[hidden]down- SUCK
+MOTION_SUCK -[hidden]down- PLC
+SENSE_6D -[hidden]down- CAMHW
+NAV_COL -[hidden]down- SRC1000
+HMI_SOUND -[hidden]down- HMIHW
+' --- 层间垂直脊柱（强制 L1/L2/L3/L4 上下堆叠对齐） ---
+L1 -[hidden]down- L2
+L2 -[hidden]down- L3
+L3 -[hidden]down- L4
+
+@enduml

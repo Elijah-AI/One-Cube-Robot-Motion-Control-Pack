@@ -1,0 +1,10 @@
+prefix=/home/quicktron/quicktron/glog/build/glog
+exec_prefix=/home/quicktron/quicktron/glog/build/glog/bin
+libdir=/home/quicktron/quicktron/glog/build/glog/lib
+includedir=/home/quicktron/quicktron/glog/build/glog/include
+
+Name: libglog
+Description: Google Log (glog) C++ logging framework
+Version: 0.5.0
+Libs: -L${libdir} -lglog
+Cflags: -I${includedir}
