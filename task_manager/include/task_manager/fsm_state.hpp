@@ -41,7 +41,8 @@ enum ErrorBitMask : uint64_t
   ERR_GRIPPER_FAULT      = 1ULL << 4,  ///< 夹爪故障
   ERR_CONFIG_PARSE_FAIL  = 1ULL << 5,  ///< 配置文件解析失败
   ERR_BT_EXEC_ERROR      = 1ULL << 6,  ///< 行为树执行错误
-  ERR_SERVICE_TIMEOUT    = 1ULL << 7   ///< 服务调用超时
+  ERR_SERVICE_TIMEOUT    = 1ULL << 7,  ///< 服务调用超时
+  ERR_PRECONDITION_FAIL  = 1ULL << 8   ///< 前置条件不满足（检测失败/超时）
 };
 
 /// @brief 将状态枚举转换为可读字符串

@@ -25,8 +25,9 @@ using AddTaskAction   = com_interfaces::action::AddTask;
 using GoalHandleAddTask = rclcpp_action::ServerGoalHandle<AddTaskAction>;
 
 // ==================== 安全控制任务优先级常量 ====================
-constexpr int32_t SAFETY_TASK_PRIORITY_MAX      = 25;  ///< 最高优先级（紧急停止）
-constexpr int32_t SAFETY_TASK_PRIORITY_EMERGENCY = 20;  ///< 紧急任务优先级阈值
+constexpr int32_t SAFETY_TASK_EMERGENCY_STOP      = 25;  ///< 最高优先级（紧急停止）
+constexpr int32_t SAFETY_TASK_HALT = 22;                 ///< 紧急任务优先级阈值
+constexpr int32_t SAFETY_TASK_HALT = 22;                 ///< 紧急任务优先级阈值
 
 /// @brief 优先级任务队列项
 /// 封装从 Action 接收的安全控制任务，按优先级排序

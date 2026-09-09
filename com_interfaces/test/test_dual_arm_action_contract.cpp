@@ -90,6 +90,30 @@ TEST(MergedArmActionContractTest, ResultsExposePerArmErrorsAndTimeSkew)
   EXPECT_DOUBLE_EQ(result.completion_time_skew_sec, 0.004);
 }
 
+TEST(MergedArmActionContractTest, ResultsExposeValidatedPhaseTimings)
+{
+  MoveJoints::Result joint_result;
+  joint_result.timing_breakdown_valid = true;
+  joint_result.ik_time = 0.0;
+  joint_result.planning_time = 0.012;
+  joint_result.motion_time = 1.25;
+
+  MovePose::Result pose_result;
+  pose_result.timing_breakdown_valid = true;
+  pose_result.ik_time = 0.034;
+  pose_result.planning_time = 0.056;
+  pose_result.motion_time = 1.75;
+
+  EXPECT_TRUE(joint_result.timing_breakdown_valid);
+  EXPECT_DOUBLE_EQ(joint_result.ik_time, 0.0);
+  EXPECT_DOUBLE_EQ(joint_result.planning_time, 0.012);
+  EXPECT_DOUBLE_EQ(joint_result.motion_time, 1.25);
+  EXPECT_TRUE(pose_result.timing_breakdown_valid);
+  EXPECT_DOUBLE_EQ(pose_result.ik_time, 0.034);
+  EXPECT_DOUBLE_EQ(pose_result.planning_time, 0.056);
+  EXPECT_DOUBLE_EQ(pose_result.motion_time, 1.75);
+}
+
 TEST(MergedArmActionContractTest, DualPoseRequiresTwoExplicitTargets)
 {
   MovePose::Goal goal;

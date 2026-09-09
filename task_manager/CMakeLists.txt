@@ -29,14 +29,23 @@ set(MODBUS_LIB modbus)
 # 项目头文件目录
 include_directories(include)
 
-# 源码列表
+# 源码列表（按功能模块拆分，每文件尽量 ~800 行）
 set(SRC_LIST
   src/fsm_state.cpp
   src/task_config_parser.cpp
-  src/arm_action_adapter.cpp
   src/modbus_slave.cpp
+  # TaskActionClient 按功能模块拆分
   src/task_action_client.cpp
+  src/task_action_client_vision.cpp
+  src/task_action_client_arm.cpp
+  src/task_action_client_gripper.cpp
+  src/task_action_client_selfcheck.cpp
+  src/task_action_client_calibration.cpp
+  src/task_action_client_compound.cpp
+  # 行为树拆分为节点实现 + 引擎
+  src/behavior_tree_nodes.cpp
   src/behavior_tree_engine.cpp
+  src/precondition_manager.cpp
   src/task_manager_node.cpp
 )
 
@@ -92,56 +101,19 @@ if(BUILD_TESTING)
     com_interfaces
   )
 
-  # ----- test_prioritized_task -----
-  ament_add_gtest(test_prioritized_task
-    test/test_prioritized_task.cpp
-  )
-  target_include_directories(test_prioritized_task PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
-  ament_target_dependencies(test_prioritized_task
-    rclcpp
-    rclcpp_action
-    std_msgs
-    com_interfaces
-  )
-
-  # ----- test_add_task_action -----
-  ament_add_gtest(test_add_task_action
-    test/test_add_task_action.cpp
-  )
-  target_include_directories(test_add_task_action PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
-  ament_target_dependencies(test_add_task_action
-    rclcpp
-    rclcpp_action
-    std_msgs
-    com_interfaces
-  )
-
-  # ----- test_arm_action_adapter -----
-  ament_add_gtest(test_arm_action_adapter
-    test/test_arm_action_adapter.cpp
-    src/arm_action_adapter.cpp
-  )
-  target_include_directories(test_arm_action_adapter PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
-  ament_target_dependencies(test_arm_action_adapter
-    rclcpp
-    rclcpp_action
-    std_msgs
-    geometry_msgs
-    sensor_msgs
-    com_interfaces
-  )
-
-  # ----- test_task_config_parser -----
+  # ----- test_task_config_parser：验证主级+次级配置分级加载 -----
   ament_add_gtest(test_task_config_parser
     test/test_task_config_parser.cpp
     src/task_config_parser.cpp
   )
   target_include_directories(test_task_config_parser PRIVATE include)
-  target_compile_definitions(test_task_config_parser PRIVATE
-    TASK_MANAGER_TEST_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/dual_arm_task_config.yaml"
-  )
+  target_compile_definitions(test_task_config_parser PRIVATE SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(test_task_config_parser yaml-cpp)
-  ament_target_dependencies(test_task_config_parser rclcpp)
+  ament_target_dependencies(test_task_config_parser
+    rclcpp
+    com_interfaces
+  )
+
 endif()
 
 ament_package()

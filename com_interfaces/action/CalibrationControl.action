@@ -1,0 +1,20 @@
+# 目标
+std_msgs/Header header      # 时间戳
+# 相机ID：0=头部相机，1=腰部相机，2+预留
+uint8 camera_id
+# 机械臂ID：0=左臂(end_effector_pose[0]), 1=右臂(end_effector_pose[1])
+uint8 arm_id
+string command              # 命令类型: "CHECK_STATUS", "TRIGGER_CAPTURE", "EXECUTE_CALIBRATION"
+bool auto_execute           # 采集完成后自动执行标定（仅TRIGGER_CAPTURE时有效）
+string mode                 # 标定模式: "TO_HAND", "IN_HAND"
+---
+# 结果
+bool success
+string error_message        # 详细错误描述 (e.g., "Goal blocked by dynamic obstacle")
+int32 total_captures        # 已采集总数
+string calibration_result   # 标定结果（JSON格式）
+---
+# 反馈
+string status               # 任务状态：DETECTING/ESTIMATING_POSE/GENERATING_CLOUD/FINISHED
+int32 progress              # 进度百分比 (0-100)
+std_msgs/Header header      # 时间戳

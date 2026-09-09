@@ -9,47 +9,38 @@
 // 系统核心节点，负责初始化配置、启动 Modbus 从站、
 // 管理有限状态机（FSM）、调度行为树执行任务、
 // 发布心跳和状态信息，以及处理 Modbus 寄存器触发任务。
-// 新增 /Task_manager/add_task Action Server，接收 safety_monitor 的安全控制任务。
+// 订阅 /Safety/device_safety_state 获取设备安全状态，响应急停/停止/恢复指令。
 
 #include "task_manager/task_manager_node.hpp"
 #include "task_manager/log_helper.hpp"
 #include <sstream>
 #include <uuid/uuid.h>
-#include <thread>
 
 namespace task_mgr
 {
 TaskManagerNode::TaskManagerNode()
 : Node("task_manager_node"), current_state_(task_fsm::SystemState::UNKNOWN), error_flag_(0)
 {
-  hb_pub_ = this->create_publisher<HeartbeatMsg>("/SafeNode/Heartbeat", 10);
+  hb_pub_ = this->create_publisher<HeartbeatMsg>("/SafeNode/Heartbeat",
+    rclcpp::QoS(1).best_effort().durability_volatile());
   state_pub_ = this->create_publisher<NodeStatusMsg>("/SafeNode/status", 10);
   sys_state_client_ = this->create_client<GetSystemStatusSrv>("/Safety/get_system_status");
 
-  // ==================== 初始化 AddTask Action Server ====================
-  // 服务名称: /Task_manager/add_task，接收 safety_monitor 下发的安全控制任务
-  add_task_action_server_ = rclcpp_action::create_server<AddTaskAction>(
-    this,
-    "/Task_manager/add_task",
-    std::bind(&TaskManagerNode::handle_add_task_goal, this,
-      std::placeholders::_1, std::placeholders::_2),
-    std::bind(&TaskManagerNode::handle_add_task_cancel, this,
-      std::placeholders::_1),
-    std::bind(&TaskManagerNode::handle_add_task_accepted, this,
-      std::placeholders::_1));
+  // ==================== 订阅设备安全状态 ====================
+  // 话题: /Safety/device_safety_state，消息类型: com_interfaces/msg/SafetyState
+  // QoS 与 /SafeNode/status 状态话题保持一致（RELIABLE | TRANSIENT_LOCAL | KEEP_LAST / 1），
+  // 采用 /SafeNode/Heartbeat 的链式 QoS 写法
+  safety_state_sub_ = this->create_subscription<SafetyStateMsg>(
+    "/Safety/device_safety_state",
+    rclcpp::QoS(1).reliable().transient_local(),
+    std::bind(&TaskManagerNode::safety_state_callback, this, std::placeholders::_1));
 
   LOG_INFO(this->get_logger(), task_log::Tag::SYSTEM,
-    "AddTask Action Server created at /Task_manager/add_task");
+    "Subscribed to /Safety/device_safety_state (SafetyState)");
 }
 
 TaskManagerNode::~TaskManagerNode()
 {
-  // 等待安全任务线程结束
-  safety_task_running_.store(false);
-  if (safety_task_thread_.joinable())
-  {
-    safety_task_thread_.join();
-  }
   if(modbus_slave_) modbus_slave_->stop();
 }
 
@@ -58,6 +49,13 @@ void TaskManagerNode::run()
   LOG_DEBUG(this->get_logger(), task_log::Tag::SYSTEM, "Task manager node starting...");
   action_client_ = std::make_unique<task_act::TaskActionClient>(shared_from_this());
   bt_engine_ = std::make_unique<BehaviorTreeEngine>(this->get_logger());
+  precondition_mgr_.init(shared_from_this());
+  // 注入前置条件管理器供前置条件门评估；条件判定失败/中止时置 ERR_PRECONDITION_FAIL 错误位
+  bt_engine_->setPreconditionManager(&precondition_mgr_);
+  bt_engine_->setPreconditionFailCb([this]()
+  {
+    set_error_flag(task_fsm::ERR_PRECONDITION_FAIL);
+  });
 
   if(!init_config())
   {
@@ -255,21 +253,34 @@ void TaskManagerNode::on_modbus_reg_write(uint32_t addr, uint16_t old_val, uint1
 
 void TaskManagerNode::handle_trigger_task(uint32_t trigger_addr)
 {
-  // 紧急状态或安全任务执行中，拒绝常规任务触发
-  if (current_state_ == task_fsm::SystemState::EMERGENCY || safety_task_running_.load())
+  // 紧急状态时拒绝常规任务触发（不缓存，紧急态恢复后应由操作员明确触发）
+  if (current_state_ == task_fsm::SystemState::EMERGENCY)
   {
-    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "System in EMERGENCY/safety task mode, ignore normal task reg " << trigger_addr);
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "System in EMERGENCY mode, ignore normal task reg " << trigger_addr);
     return;
   }
 
-  // 只在 IDLE 状态才能触发新任务，防止任务重叠导致状态混乱
+  // 只在 IDLE 状态才能触发新任务，防止任务重叠导致状态混乱。
+  // 系统忙时先将触发地址缓存到待执行队列，当前任务完成后自动执行（FIFO 顺序）。
   if(current_state_ != task_fsm::SystemState::IDLE)
   {
+    if (current_state_ == task_fsm::SystemState::RUNNING)
+    {
+      std::lock_guard<std::mutex> lock(pending_trigger_mutex_);
+      pending_trigger_regs_.push_back(trigger_addr);
+    }
+
     LOG_WARN(this->get_logger(), task_log::Tag::FSM, "System busy (state="
-      << task_fsm::state_to_str(current_state_) << "), ignore task reg " << trigger_addr);
+      << task_fsm::state_to_str(current_state_) << "), cache pending task reg " << trigger_addr
+      << ", pending=" << pending_trigger_regs_.size());
     return;
   }
 
+  start_task_by_reg(trigger_addr);
+}
+
+void TaskManagerNode::start_task_by_reg(uint32_t trigger_addr)
+{
   for(auto& [name, item] : cfg_.task_dict)
   {
     if(item.trigger_reg == trigger_addr)
@@ -286,6 +297,39 @@ void TaskManagerNode::handle_trigger_task(uint32_t trigger_addr)
       bt_engine_->start();
     }
   }
+}
+
+void TaskManagerNode::try_process_pending_trigger()
+{
+  uint32_t trigger_addr = 0;
+  {
+    std::lock_guard<std::mutex> lock(pending_trigger_mutex_);
+    if (pending_trigger_regs_.empty())
+    {
+      return;
+    }
+    trigger_addr = pending_trigger_regs_.front();
+    pending_trigger_regs_.pop_front();
+  }
+
+  // 仅在安全状态下才执行缓存的触发（防止紧急态下自动执行普通任务）；
+  // 若状态不允许，重新放回队首等待下一次机会。
+  if (current_state_ != task_fsm::SystemState::IDLE)
+  {
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM,
+      "Skip pending task reg " << trigger_addr
+      << " (state=" << task_fsm::state_to_str(current_state_) << "), re-queue");
+    {
+      std::lock_guard<std::mutex> lock(pending_trigger_mutex_);
+      pending_trigger_regs_.push_front(trigger_addr);
+    }
+    return;
+  }
+
+  LOG_INFO(this->get_logger(), task_log::Tag::FSM,
+    "Execute pending trigger reg " << trigger_addr
+    << ", remaining=" << pending_trigger_regs_.size());
+  start_task_by_reg(trigger_addr);
 }
 
 void TaskManagerNode::write_task_status_reg(uint32_t status_addr, uint16_t result)
@@ -312,456 +356,113 @@ void TaskManagerNode::set_error_flag(uint64_t mask)
 }
 
 // ============================================================================
-// AddTask Action Server 实现
+// 设备安全状态处理（替代原 AddTask Action Server）
 // ============================================================================
 
-rclcpp_action::GoalResponse TaskManagerNode::handle_add_task_goal(
-  const rclcpp_action::GoalUUID& uuid,
-  std::shared_ptr<const AddTaskAction::Goal> goal)
+void TaskManagerNode::safety_state_callback(const SafetyStateMsg::SharedPtr msg)
 {
-  (void)uuid; // 未直接使用 UUID，但可用于日志追踪
-
-  LOG_INFO_TITLE(this->get_logger(), task_log::Tag::SYSTEM,
-    "===== AddTask Goal Received =====");
-  LOG_INFO(this->get_logger(), task_log::Tag::SYSTEM,
-    "task_id: " << goal->task_id
-    << ", task_type: " << goal->task_type
-    << ", target_node: " << goal->target_node
-    << ", priority: " << goal->priority
-    << ", timeout_ms: " << goal->timeout_ms);
-
-  // ========== 参数校验 ==========
-  if (goal->task_id.empty())
+  if (!msg)
   {
-    LOG_ERROR(this->get_logger(), task_log::Tag::SYSTEM, "AddTask: task_id is empty, rejecting");
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-
-  if (goal->task_type.empty())
-  {
-    LOG_ERROR(this->get_logger(), task_log::Tag::SYSTEM, "AddTask: task_type is empty, rejecting");
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-
-  if (goal->priority < 1 || goal->priority > SAFETY_TASK_PRIORITY_MAX)
-  {
-    LOG_ERROR(this->get_logger(), task_log::Tag::SYSTEM,
-      "AddTask: invalid priority " << goal->priority << " (valid: 1-" << SAFETY_TASK_PRIORITY_MAX << "), rejecting");
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-
-  // ========== 优先级与状态检查 ==========
-  // 紧急任务（priority >= 20）始终接受，可抢占当前任务
-  if (goal->priority >= SAFETY_TASK_PRIORITY_EMERGENCY)
-  {
-    LOG_WARN(this->get_logger(), task_log::Tag::SYSTEM,
-      "AddTask: EMERGENCY task received! task_id=" << goal->task_id
-      << ", priority=" << goal->priority << ", will preempt current task");
-    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-  }
-
-  // 非紧急任务：如果当前正在执行安全任务或处于紧急状态，拒绝
-  if (current_state_ == task_fsm::SystemState::EMERGENCY)
-  {
-    LOG_WARN(this->get_logger(), task_log::Tag::SYSTEM,
-      "AddTask: system in EMERGENCY state, rejecting non-emergency task " << goal->task_id);
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-
-  if (safety_task_running_.load())
-  {
-    LOG_WARN(this->get_logger(), task_log::Tag::SYSTEM,
-      "AddTask: safety task already running, rejecting task " << goal->task_id);
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-
-  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-}
-
-rclcpp_action::CancelResponse TaskManagerNode::handle_add_task_cancel(
-  const std::shared_ptr<GoalHandleAddTask> goal_handle)
-{
-  (void)goal_handle;
-  LOG_INFO(this->get_logger(), task_log::Tag::SYSTEM, "AddTask: cancel request received");
-  // 安全任务一旦接受通常不允许取消，但这里返回 ACCEPT 以符合协议
-  // 实际取消逻辑在 execute 线程中通过 safety_task_running_ 标志处理
-  return rclcpp_action::CancelResponse::ACCEPT;
-}
-
-void TaskManagerNode::handle_add_task_accepted(
-  const std::shared_ptr<GoalHandleAddTask> goal_handle)
-{
-  auto goal = goal_handle->get_goal();
-
-  // 构建优先级任务结构体
-  PrioritizedTask task;
-  task.task_id = goal->task_id;
-  task.task_type = goal->task_type;
-  task.target_node = goal->target_node;
-  task.parameters_json = goal->parameters_json;
-  task.priority = goal->priority;
-  task.timeout_ms = goal->timeout_ms > 0 ? goal->timeout_ms : 5000;
-  task.arrival_time = this->now();
-  task.goal_handle = goal_handle;
-
-  LOG_INFO_FLOW(this->get_logger(), task_log::Tag::SYSTEM,
-    "AddTask: task accepted, task_id=" << task.task_id
-    << ", priority=" << task.priority
-    << ", pushing to priority queue");
-
-  // ========== 紧急任务：立刻抢占 ==========
-  if (task.priority >= SAFETY_TASK_PRIORITY_EMERGENCY)
-  {
-    // 立即中止当前行为树
-    if (bt_engine_ && bt_engine_->isTaskRunning())
-    {
-      LOG_WARN(this->get_logger(), task_log::Tag::SYSTEM,
-        "AddTask: EMERGENCY preemption - aborting current behavior tree");
-      bt_engine_->abort();
-    }
-
-    // 如果已有安全任务线程在运行，先停止
-    if (safety_task_running_.load())
-    {
-      LOG_WARN(this->get_logger(), task_log::Tag::SYSTEM,
-        "AddTask: previous safety task is being interrupted by higher priority task");
-      safety_task_running_.store(false);
-      if (safety_task_thread_.joinable())
-      {
-        safety_task_thread_.join();
-      }
-    }
-
-    // 进入紧急停止状态
-    switch_state(task_fsm::SystemState::EMERGENCY, task_fsm::ERR_EMERGENCY);
-
-    // 立即在新线程中执行紧急任务
-    safety_task_running_.store(true);
-    safety_task_thread_ = std::thread(
-      &TaskManagerNode::safety_task_execution_thread,
-      this, goal_handle);
-  }
-  else
-  {
-    // ========== 普通安全任务：加入优先级队列 ==========
-    {
-      std::lock_guard<std::mutex> lock(task_queue_mutex_);
-      safety_task_queue_.push(task);
-    }
-
-    LOG_INFO(this->get_logger(), task_log::Tag::SYSTEM,
-      "AddTask: task queued, queue size=" << safety_task_queue_.size());
-
-    // 如果当前没有安全任务在执行，启动队列处理
-    if (!safety_task_running_.load())
-    {
-      safety_task_running_.store(true);
-      safety_task_thread_ = std::thread(
-        &TaskManagerNode::safety_task_execution_thread,
-        this, nullptr);  // nullptr 表示从队列取任务
-    }
-  }
-}
-
-void TaskManagerNode::execute_safety_task(
-  const PrioritizedTask& task,
-  std::shared_ptr<GoalHandleAddTask> goal_handle)
-{
-  auto logger = this->get_logger();
-
-  LOG_INFO_TITLE(logger, task_log::Tag::SYSTEM,
-    "===== Execute Safety Task: " << task.task_type << " (id=" << task.task_id << ") =====");
-
-  // ========== 发送初始反馈 ==========
-  auto feedback = std::make_shared<AddTaskAction::Feedback>();
-  feedback->current_phase = "task_received";
-  feedback->progress_percent = 0.0f;
-  feedback->active_node = this->get_name();
-  feedback->header.stamp = this->now();
-  goal_handle->publish_feedback(feedback);
-
-  safety_task_start_time_ = this->now();
-
-  // ========== 根据 task_type 分发执行 ==========
-  bool success = false;
-  uint8_t status_code = 0;
-  std::string error_message;
-
-  if (task.task_type == "emergency_stop")
-  {
-    // ========== 紧急停止任务 ==========
-    LOG_WARN(logger, task_log::Tag::SYSTEM,
-      "EMERGENCY STOP: immediately halting all operations");
-
-    feedback->current_phase = "emergency_stop_executing";
-    feedback->progress_percent = 30.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-
-    // 1. 中止行为树
-    if (bt_engine_ && bt_engine_->isTaskRunning())
-    {
-      bt_engine_->abort();
-      LOG_WARN(logger, task_log::Tag::SYSTEM, "EMERGENCY STOP: behavior tree aborted");
-    }
-
-    // 2. 重置所有 Action 客户端状态
-    if (action_client_)
-    {
-      action_client_->reset_all_states();
-    }
-
-    // 3. 写入紧急停止标志到 Modbus（如果有特殊寄存器）
-    // 通知 PLC 紧急状态
-
-    // 4. 切换到紧急状态
-    switch_state(task_fsm::SystemState::EMERGENCY, task_fsm::ERR_EMERGENCY);
-
-    feedback->current_phase = "emergency_stop_complete";
-    feedback->progress_percent = 100.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-
-    success = true;
-    status_code = 0;
-    LOG_SUCCESS(logger, task_log::Tag::SYSTEM,
-      "EMERGENCY STOP: completed successfully");
-  }
-  else if (task.task_type == "safety_halt")
-  {
-    // ========== 安全暂停任务 ==========
-    LOG_WARN(logger, task_log::Tag::SYSTEM,
-      "SAFETY HALT: pausing current operations");
-
-    feedback->current_phase = "safety_halt_executing";
-    feedback->progress_percent = 30.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-
-    // 中止行为树但不改变状态为 EMERGENCY，允许后续恢复
-    if (bt_engine_ && bt_engine_->isTaskRunning())
-    {
-      bt_engine_->abort();
-    }
-
-    if (action_client_)
-    {
-      action_client_->reset_all_states();
-    }
-
-    // 回到 IDLE 状态，等待后续指令
-    switch_state(task_fsm::SystemState::IDLE);
-
-    feedback->current_phase = "safety_halt_complete";
-    feedback->progress_percent = 100.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-
-    success = true;
-    status_code = 0;
-    LOG_SUCCESS(logger, task_log::Tag::SYSTEM,
-      "SAFETY HALT: completed successfully");
-  }
-  else if (task.task_type == "resume")
-  {
-    // ========== 恢复任务 ==========
-    LOG_INFO(logger, task_log::Tag::SYSTEM,
-      "RESUME: attempting to resume from previous state");
-
-    feedback->current_phase = "resume_executing";
-    feedback->progress_percent = 30.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-
-    // 清除紧急标志，恢复到 IDLE
-    clear_error_flag(task_fsm::ERR_EMERGENCY);
-    if (current_state_ == task_fsm::SystemState::EMERGENCY)
-    {
-      switch_state(task_fsm::SystemState::IDLE);
-    }
-
-    feedback->current_phase = "resume_complete";
-    feedback->progress_percent = 100.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-
-    success = true;
-    status_code = 0;
-    LOG_SUCCESS(logger, task_log::Tag::SYSTEM,
-      "RESUME: completed successfully");
-  }
-  else if (task.task_type == "hardware_reset")
-  {
-    // ========== 硬件复位任务 ==========
-    LOG_INFO(logger, task_log::Tag::SYSTEM,
-      "HARDWARE RESET: executing hardware reset sequence");
-
-    feedback->current_phase = "hardware_reset_executing";
-    feedback->progress_percent = 30.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-
-    // 执行开机复位序列
-    if (!cfg_.boot_tasks.reset_seq.empty())
-    {
-      action_client_->reset_all_states();
-      bt_engine_->load_action_group(cfg_.boot_tasks.reset_seq, *action_client_);
-      bt_engine_->start();
-
-      // 轮询等待复位完成（带超时）
-      auto start_wait = this->now();
-      rclcpp::Duration timeout(std::chrono::milliseconds(task.timeout_ms));
-      bool timed_out = false;
-
-      while (rclcpp::ok() && bt_engine_->isTaskRunning())
-      {
-        if ((this->now() - start_wait) > timeout)
-        {
-          timed_out = true;
-          bt_engine_->abort();
-          break;
-        }
-        bt_engine_->tick_once();
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-        // 更新反馈
-        auto elapsed = this->now() - start_wait;
-        float progress = std::min(95.0f,
-          static_cast<float>(elapsed.nanoseconds()) /
-          static_cast<float>(timeout.nanoseconds()) * 100.0f);
-        feedback->current_phase = "hardware_reset_in_progress";
-        feedback->progress_percent = 30.0f + progress * 0.65f;
-        feedback->header.stamp = this->now();
-        goal_handle->publish_feedback(feedback);
-      }
-
-      if (timed_out)
-      {
-        success = false;
-        status_code = 2;  // TIMEOUT
-        error_message = "Hardware reset timed out after " + std::to_string(task.timeout_ms) + "ms";
-      }
-      else if (bt_engine_->isTaskSuccess())
-      {
-        success = true;
-        status_code = 0;
-      }
-      else
-      {
-        success = false;
-        status_code = 1;  // FAILED
-        error_message = "Hardware reset sequence failed";
-      }
-    }
-    else
-    {
-      success = false;
-      status_code = 1;  // FAILED
-      error_message = "No hardware reset tasks configured";
-    }
-
-    feedback->current_phase = success ? "hardware_reset_complete" : "hardware_reset_failed";
-    feedback->progress_percent = 100.0f;
-    feedback->header.stamp = this->now();
-    goal_handle->publish_feedback(feedback);
-  }
-  else
-  {
-    // ========== 未知任务类型 ==========
-    LOG_ERROR(logger, task_log::Tag::SYSTEM,
-      "Unknown safety task type: " << task.task_type);
-    success = false;
-    status_code = 4;  // INVALID_PARAM
-    error_message = "Unknown task type: " + task.task_type;
-  }
-
-  // ========== 计算执行时间 ==========
-  auto end_time = this->now();
-  double execution_time = (end_time - safety_task_start_time_).seconds();
-
-  // ========== 返回最终结果 ==========
-  auto result = std::make_shared<AddTaskAction::Result>();
-  result->success = success;
-  result->status_code = status_code;
-  result->error_message = error_message;
-  result->execution_time = execution_time;
-
-  if (success)
-  {
-    goal_handle->succeed(result);
-  }
-  else
-  {
-    goal_handle->abort(result);
-  }
-
-  LOG_INFO_TITLE(logger, task_log::Tag::SYSTEM,
-    "===== Safety Task Complete: " << task.task_type
-    << " (id=" << task.task_id << ") success=" << (success ? "true" : "false")
-    << ", time=" << execution_time << "s =====");
-}
-
-void TaskManagerNode::safety_task_execution_thread(
-  std::shared_ptr<GoalHandleAddTask> goal_handle)
-{
-  // 如果传入了 goal_handle，直接处理该紧急任务
-  if (goal_handle)
-  {
-    auto goal = goal_handle->get_goal();
-    PrioritizedTask task;
-    task.task_id = goal->task_id;
-    task.task_type = goal->task_type;
-    task.target_node = goal->target_node;
-    task.parameters_json = goal->parameters_json;
-    task.priority = goal->priority;
-    task.timeout_ms = goal->timeout_ms > 0 ? goal->timeout_ms : 5000;
-    task.arrival_time = this->now();
-    task.goal_handle = goal_handle;
-
-    execute_safety_task(task, goal_handle);
-
-    // 检查队列中是否还有待处理任务
-    process_queued_tasks();
     return;
   }
 
-  // 否则从优先级队列中取任务处理
-  process_queued_tasks();
-}
+  // 转发到前置条件管理器（缓存机器人状态/安全状态/电池电量，供 preconditions 检测）
+  precondition_mgr_.safety_state_cb(msg);
 
-void TaskManagerNode::process_queued_tasks()
-{
-  while (rclcpp::ok() && safety_task_running_.load())
+  const int8_t status = msg->status;
+
+  // 状态码含义（com_interfaces/msg/SafetyState）:
+  //   SAFETY_STATE_NORMAL    (0) -> 恢复正常，task_manager 切换为 IDLE
+  //   SAFETY_STATE_HALT      (1) -> 功能受限/停止当前任务，task_manager 切换为 ERROR
+  //   SAFETY_STATE_EMERGENCY (2) -> 急停，task_manager 立即停止任务并进入 EMERGENCY
+  switch (status)
   {
-    PrioritizedTask task;
-    bool has_task = false;
-
+    case SAFETY_STATE_EMERGENCY:
     {
-      std::lock_guard<std::mutex> lock(task_queue_mutex_);
-      if (!safety_task_queue_.empty())
+      // 已在急停状态则跳过，避免周期消息重复处理
+      if (current_state_ == task_fsm::SystemState::EMERGENCY)
       {
-        task = safety_task_queue_.top();
-        safety_task_queue_.pop();
-        has_task = true;
+        break;
       }
-    }
 
-    if (!has_task)
-    {
-      // 队列为空，退出安全任务模式
+      LOG_ERROR(this->get_logger(), task_log::Tag::SYSTEM,
+        "Safety state = EMERGENCY (2), halting current modbus task immediately"
+        << (msg->error_msg.empty() ? "" : ", error_msg=" + msg->error_msg));
+
+      // 1. 立刻停止当前执行的 modbus 任务并发送取消指令
+      halt_current_modbus_task();
+
+      // 2. task_manager 进入急停状态
+      switch_state(task_fsm::SystemState::EMERGENCY, task_fsm::ERR_EMERGENCY);
       break;
     }
 
-    LOG_INFO(this->get_logger(), task_log::Tag::SYSTEM,
-      "Processing queued safety task: " << task.task_id
-      << " (priority=" << task.priority << "), remaining=" << safety_task_queue_.size());
+    case SAFETY_STATE_HALT:
+    {
+      // 已在异常状态则跳过，避免周期消息重复处理
+      if (current_state_ == task_fsm::SystemState::ERROR)
+      {
+        break;
+      }
 
-    execute_safety_task(task, task.goal_handle);
+      LOG_ERROR(this->get_logger(), task_log::Tag::SYSTEM,
+        "Safety state = HALT (1), halting current modbus task immediately"
+        << (msg->error_msg.empty() ? "" : ", error_msg=" + msg->error_msg));
+
+      // 1. 立刻停止当前执行的 modbus 任务并发送取消指令
+      halt_current_modbus_task();
+
+      // 2. task_manager 进入异常状态
+      switch_state(task_fsm::SystemState::ERROR);
+      break;
+    }
+
+    case SAFETY_STATE_NORMAL:
+    default:
+    {
+      // 恢复正常：仅从 EMERGENCY/ERROR 状态切换为 IDLE（不影响正在运行的任务）
+      if (current_state_ == task_fsm::SystemState::EMERGENCY ||
+          current_state_ == task_fsm::SystemState::ERROR)
+      {
+        LOG_INFO(this->get_logger(), task_log::Tag::SYSTEM,
+          "Safety state = NORMAL (0), switching task_manager to IDLE");
+        // 清除全部错误标志（急停/故障等），恢复正常运行
+        clear_error_flag(task_fsm::ERR_EMERGENCY | task_fsm::ERR_MODBUS_FAULT |
+                         task_fsm::ERR_VISION_TIMEOUT | task_fsm::ERR_ARM_PLAN_FAIL |
+                         task_fsm::ERR_GRIPPER_FAULT | task_fsm::ERR_CONFIG_PARSE_FAIL |
+                         task_fsm::ERR_BT_EXEC_ERROR | task_fsm::ERR_SERVICE_TIMEOUT);
+        switch_state(task_fsm::SystemState::IDLE);
+      }
+      break;
+    }
+  }
+}
+
+void TaskManagerNode::halt_current_modbus_task()
+{
+  // 1. 中止行为树，停止当前正在执行的 modbus 任务
+  if (bt_engine_ && bt_engine_->isTaskRunning())
+  {
+    LOG_WARN(this->get_logger(), task_log::Tag::SYSTEM,
+      "Halting current task: aborting behavior tree");
+    bt_engine_->abort();
   }
 
-  safety_task_running_.store(false);
-  LOG_INFO(this->get_logger(), task_log::Tag::SYSTEM,
-    "Safety task execution thread finished");
+  // 2. 取消所有远端 Action（机械臂/夹爪/吸盘/视觉等），并重置客户端状态
+  if (action_client_)
+  {
+    action_client_->cancel_all_actions();
+    action_client_->reset_all_states();
+  }
+
+  // 3. 复位 Modbus 触发/状态寄存器
+  if (modbus_slave_)
+  {
+    // 触发寄存器清 0，防止重复触发
+    modbus_slave_->set_reg(modbus_slave_->get_regaddr(), 0);
+    // 任务状态寄存器置为 FAILED，通知 PLC 当前任务已被中止
+    modbus_slave_->set_reg(modbus_slave_->get_regaddr() + MODBUS_STATUS_OFFSET, TASK_STATUS_FAILED);
+  }
 }
 
 void TaskManagerNode::bt_tick_cb()
@@ -876,6 +577,9 @@ void TaskManagerNode::bt_tick_cb()
       // 无论成功还是失败，都重置所有 action 客户端状态并释放所有资源锁，确保下次任务从干净状态开始
       action_client_->reset_all_states();
       switch_state(task_fsm::SystemState::IDLE);
+
+      // 任务已完成，检查是否有缓存的待执行触发，按 FIFO 顺序自动执行
+      try_process_pending_trigger();
     }
   break;
 
@@ -887,14 +591,7 @@ void TaskManagerNode::bt_tick_cb()
 
   case task_fsm::SystemState::EMERGENCY:
   {
-    // 紧急状态：等待安全任务执行完成，不做任何行为树调度
-    // 安全任务执行线程会在完成后切换状态
-    if (!safety_task_running_.load())
-    {
-      // 安全任务已完成，检查是否可以恢复到 IDLE
-      LOG_INFO(this->get_logger(), task_log::Tag::FSM,
-        "Safety task completed, staying in EMERGENCY until explicit resume");
-    }
+    // 紧急状态：不做任何行为树调度，等待 safety_state_callback 收到恢复状态后切回 IDLE
     break;
   }
   

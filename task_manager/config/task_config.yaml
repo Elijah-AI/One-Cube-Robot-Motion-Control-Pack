@@ -1,71 +1,108 @@
+# ============================================================================
+# task_manager 主配置文件（唯一启动入口）
+#
+# 【配置分级：主配置（本文件）+ 次级任务动作配置】
+# - 本文件只承载"运行环境与接口映射"：node_id、modbus_slave 运行参数，以及
+#   "寄存器地址 → 次级动作配置文件"（tasks.*.config_file / boot_task.config_file），不含任何动作列表。
+# - 次级文件路径相对本文件所在目录解析（config/ 目录下）：
+#     tasks/move_box.yaml / go_pick_pose.yaml / go_idle_pose.yaml —— 各任务动作列表
+#     boot_task.yaml                                          —— 启动任务（自检 / 复位）
+# - 兼容旧格式：任务条目也可内联 action_sequencenum / action_sequenceN（无 config_file 时），完全向后兼容。
+#
+# 【新增可选 schema：动作前置条件 preconditions 与结果分支 on_success / on_failure】
+# 挂载在任意原子动作节点下（action_sequence1/2/...、并行分组、boot 动作均可），见次级动作配置文件。
+# 未配置时完全兼容原有行为（行为树引擎仅在前置条件/结果分支存在时才包装为 GuardedActionNode）。
+# 可运行示例见 config/tasks/move_box.yaml 中的注释演示。
+#
+# preconditions（可选）——动作执行前需满足的条件：
+#   logical_op: "and" | "or"              # 条件组合逻辑，默认 and
+#   policy: "wait" | "fail_fast" | "skip" # 不满足时处理策略，默认 wait
+#   max_wait_ms: 5000                     # wait 模式最长等待（毫秒），0=无限等待
+#   check_interval_ms: 100                # wait 模式重查周期（毫秒），默认 100
+#   conditions:                           # 条件列表（共 10 类）
+#     - type: battery_level               # 数值类：电池电量（百分比或电压）
+#       enable: true
+#       field: "percentage"               # percentage / voltage
+#       operator: ">="                    # >=, >, <=, <, ==, !=
+#       threshold: 20.0
+#       on_timeout: "fail"                # wait 超时后：fail / pass / abort
+#     - type: robot_status                # 状态集合类：整机 FSM（SystemFsmState 口径）
+#       expected: ["IDLE", "RUN"]         # 数值或枚举名均可，如 ["IDLE", "RUN"] 或 [5, 6]
+#     - type: safety_status               # 状态集合类：设备安全状态 0=正常 1=受限 2=急停
+#       expected: [0]
+#     - type: arm_idle                    # 部件空闲类：机械臂（本地资源锁）
+#       part: "left"                      # left / right / both
+#       expected: true                    # true=期望空闲 / false=期望占用
+#     - type: head_idle                   # 部件空闲类：头部（单部件）
+#       expected: true
+#     - type: waist_idle                  # 部件空闲类：腰部（单部件，与 LEG 资源等价）
+#       expected: true
+#     - type: gripper_idle                # 部件空闲类：夹爪（分左右）
+#       part: "both"
+#       expected: true
+#     - type: suck_idle                   # 部件空闲类：吸气泵（分左右）
+#       part: "both"
+#       expected: true
+#     - type: dexterous_hand_idle         # 部件空闲类：灵巧手（分左右）
+#       part: "both"
+#       expected: true
+#
+# on_success（可选）——主动作成功后依次执行的附加动作：
+#   branch_policy: "continue" | "override"
+#                                   # continue = 分支成功后本动作仍算成功（默认）；
+#                                   #           分支失败则本动作失败
+#                                   # override = 分支的最终结果作为本动作结果
+#   actions: [ ... ]               # 分支动作列表（全部现有动作类型，可递归嵌套）
+#
+# on_failure（可选）——主动作失败后执行的补偿/恢复动作：
+#   branch_policy: "fail" | "recover"
+#                                   # fail = 分支执行后本动作仍判失败（默认，任务终止）
+#                                   # recover = 分支全部成功则本动作转为成功，主序列继续
+#   actions: [ ... ]
+#
+# 说明：
+# - 条件数据源：/Safety/device_safety_state（battery / robot_status / safety_status）与
+#   本地资源锁（arm / head / waist / gripper / suck / dexterous_hand_idle 忙闲，task_manager 内部维护）。
+# - 分支动作允许递归嵌套 preconditions / 结果分支（递归深度上限 5 层）。
+# ============================================================================
 node_id: 1
 modbus_slave:
+  slave_id: 1                # Modbus 从站 ID
   listen_ip: "0.0.0.0"
   listen_port: 12000
 tasks:
   move_box:
-    trigger_reg: 40001
-    status_reg: 50001
-    action_sequencenum: 2
-    action_sequence1:
-      - action_type: move_joints
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "0"                # 0=左臂, 1=右臂, 2=双臂
-          joint_name: ["Joint1_L", "Joint2_L", "Joint3_L", "Joint4_L", "Joint5_L", "Joint6_L", "Joint7_L"]
-          position: [0.8, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]  # 真机验收目标 (rad)
-          enable_collision_check: false
-          speed: 0.2
-          timeout_ms: 10000
-    action_sequence2:
-      - action_type: move_joints
-        condition:                   # 新增执行条件
-          left_arm_state: "idle"     # 检查机械臂左臂状态
-          power_level: "15"          # 检查电量是否充足
-          right_arm_state: "false"   # 确认机械臂右臂状态
-          body_waist_state: "false"  # 确认身体腰部状态
-          Vision_state: "false"      # 确认视觉状态
-        params:
-          arm_id: "1"                # 0=左臂, 1=右臂, 2=双臂
-          joint_name: ["Joint1_R", "Joint2_R", "Joint3_R", "Joint4_R", "Joint5_R", "Joint6_R", "Joint7_R"]
-          position: [0.8, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]  # 真机验收目标 (rad)
-          enable_collision_check: false
-          speed: 0.2
-          timeout_ms: 10000
-  
-  # 吸盘控制示例任务
-  control_suck_example:
+    trigger_reg: 40001       # 触发寄存器（逻辑地址）
+    status_reg: 50001        # 状态返回寄存器
+    config_file: "tasks/move_box.yaml"
+  go_pick_pose:
     trigger_reg: 40002
     status_reg: 50002
-    action_sequencenum: 1
-    action_sequence1:
-      - action_type: control_suck
-        params:
-          suck_id: "0"           # 部件编号：0：左吸盘，1：右吸盘，2：双吸盘
-          active: [true, false]  # 打开/关闭
-          timeout_ms: 5000       # 操作超时时间 (毫秒)
-   
+    config_file: "tasks/go_pick_pose.yaml"
+  go_idle_pose:
+    trigger_reg: 40003
+    status_reg: 50003
+    config_file: "tasks/go_idle_pose.yaml"
+  auto_calibrate:
+    trigger_reg: 40004       # 触发寄存器（逻辑地址）
+    status_reg: 50004        # 状态返回寄存器
+    config_file: "tasks/auto_calibrate.yaml"
+  # ---- 码垛 ↔ 货架搬运场景任务（对应 scenario_palletizing_rack_transfer 方案）----
+  depalletize_pick:          # A1 吸码垛取箱（码垛 → 转运）
+    trigger_reg: 40101
+    status_reg: 50101
+    config_file: "tasks/depalletize_pick.yaml"
+  rack_place:                # B1 放置到货架（转运 → 货架）
+    trigger_reg: 40102
+    status_reg: 50102
+    config_file: "tasks/rack_place.yaml"
+  rack_pick:                 # B2 货架吸箱子（货架 → 转运）
+    trigger_reg: 40103
+    status_reg: 50103
+    config_file: "tasks/rack_pick.yaml"
+  pallet_place:              # A2 放置到码垛回填（转运 → 码垛空缺格）
+    trigger_reg: 40104
+    status_reg: 50104
+    config_file: "tasks/pallet_place.yaml"
 boot_task:
-  self_check:
-    action_sequence:
-      - action_type: vision_check_self
-        params:
-          timeout_ms: 15000
-      - action_type: control_check_self
-        params:
-          comport: [2, 2]
-          timeout_ms: 15000
-
-  reset:
-    action_sequence:
-      - action_type: vision_reset
-        params:
-          timeout_ms: 15000
-      - action_type: control_reset
-        params:
-          timeout_ms: 15000
+  config_file: "boot_task.yaml"

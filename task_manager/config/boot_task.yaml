@@ -1,0 +1,23 @@
+# 启动任务动作配置（自检 + 复位）
+# 本文件由主配置 boot_task.config_file 外链加载（相对主配置目录解析）
+self_check:
+  action_sequence:
+    - action_type: vision_check_self
+      delay_ms: 0                    # 执行前延迟时间（毫秒），0 表示不延迟
+      params:
+        timeout_ms: 15000
+    - action_type: control_check_self
+      delay_ms: 0                    # 执行前延迟时间（毫秒），0 表示不延迟
+      params:
+        comport: [2, 2]
+        timeout_ms: 15000
+reset:
+  action_sequence:
+    - action_type: vision_reset
+      delay_ms: 0                    # 执行前延迟时间（毫秒），0 表示不延迟
+      params:
+        timeout_ms: 15000
+    - action_type: control_reset
+      delay_ms: 0                    # 执行前延迟时间（毫秒），0 表示不延迟
+      params:
+        timeout_ms: 15000
