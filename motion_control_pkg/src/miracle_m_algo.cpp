@@ -77,7 +77,7 @@ namespace
         180.0 / 3.141592653589793238462643383279502884;
     constexpr double kDegreesToRadians = 1.0 / kRadiansToDegrees;
     constexpr double kCcsJoint6ActivationDeg = 20.0;
-    constexpr double kCcsJoint67OffsetDeg = 110.5;
+    constexpr double kCcsJoint67OffsetDeg = 109.5;
     constexpr double kCcsJoint67Slope = 1.025;
     constexpr double kCcsComparisonToleranceDeg = 1.0e-9;
     constexpr double kCcsNullspaceGain = 0.05;

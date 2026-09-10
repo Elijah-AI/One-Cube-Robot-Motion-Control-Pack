@@ -574,13 +574,15 @@ namespace miracle {
         const bool success = motion_control_pkg::execution::dispatchPreplannedSamples(
             positions.size(), start_time, cancel, [&](std::size_t index) {
             m_traj_buffer_pos = positions[index];
-            RCLCPP_DEBUG(
-                rclcpp::get_logger("leg_module"),
-                "%s preplanned command %zu/%zu: joint1=%.9f, joint2=%.9f, "
-                "joint3=%.9f, body_joint=%.9f",
-                m_module_name, index + 1U, positions.size(),
-                m_traj_buffer_pos[0], m_traj_buffer_pos[1],
-                m_traj_buffer_pos[2], m_traj_buffer_pos[3]);
+            if (index + 1U == positions.size()) {
+                RCLCPP_INFO(
+                    rclcpp::get_logger("leg_module"),
+                    "%s preplanned command %zu/%zu: joint1=%.9f, joint2=%.9f, "
+                    "joint3=%.9f, body_joint=%.9f",
+                    m_module_name, index + 1U, positions.size(),
+                    m_traj_buffer_pos[0], m_traj_buffer_pos[1],
+                    m_traj_buffer_pos[2], m_traj_buffer_pos[3]);
+            }
             if (!setMulJointPos(m_traj_buffer_pos, m_jointID)) {
                 error_message = "leg motor command rejected";
                 m_traj_run = false;
