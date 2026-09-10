@@ -14,6 +14,8 @@
 #include "task_manager/log_helper.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <utility>
+#include <cmath>
+#include <stdexcept>
 
 namespace task_cfg
 {
@@ -89,6 +91,13 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
   auto p = action_node["params"];
   auto c = action_node["condition"];
 
+  const auto scale = [&](const char* key) {
+    const float value = p[key] ? p[key].as<float>() : 0.0f;
+    if (!std::isfinite(value) || value < 0 || value > 1) {
+      throw std::invalid_argument(std::string(key) + " must be in [0,1]");
+    }
+    return value;
+  };
   // 根据动作类型分别解析对应参数
   if(act.action_type == "vision_detect")
   {
@@ -122,6 +131,23 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
     act.arm_param.use_force_control = p["use_force_control"].as<bool>();
     act.arm_param.enable_move_line = p["enable_move_line"] ?
       p["enable_move_line"].as<bool>() : false;
+    act.arm_param.acceleration_scale = scale("acceleration_scale");
+    act.arm_param.jerk_scale = scale("jerk_scale");
+    act.arm_param.via_poses.clear();
+    if (p["via_poses"]) {
+      act.arm_param.via_poses = p["via_poses"].as<std::vector<std::vector<double>>>();
+      if (act.arm_param.arm_id > 1 || act.arm_param.enable_move_line ||
+          act.arm_param.via_poses.size() > 64 || !act.arm_param.use_config_pose) {
+        throw std::invalid_argument("via_poses requires single-arm configured MoveP, at most 64 poses");
+      }
+      for (const auto& pose : act.arm_param.via_poses) {
+        if (pose.size() != 7) {throw std::invalid_argument("via_poses needs seven values per pose");}
+        for (double v : pose) {if (!std::isfinite(v)) {throw std::invalid_argument("non-finite via pose");}}
+        double norm = 0;
+        for (std::size_t i = 3; i < 7; ++i) {norm += pose[i]*pose[i];}
+        if (norm < 1e-12) {throw std::invalid_argument("zero via quaternion");}
+      }
+    }
     act.arm_param.speed = p["speed"] ? p["speed"].as<float>() : 0.5f;
     act.arm_param.hand_action_type = p["hand_action_type"] ?
       p["hand_action_type"].as<std::vector<uint8_t>>() : std::vector<uint8_t>{};
@@ -208,6 +234,8 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act)
     // 关节空间移动参数
     act.move_joints_param.arm_id = p["arm_id"].as<uint8_t>();
     act.move_joints_param.enable_collision_check = p["enable_collision_check"].as<bool>();
+    act.move_joints_param.acceleration_scale = scale("acceleration_scale");
+    act.move_joints_param.jerk_scale = scale("jerk_scale");
     act.move_joints_param.speed = p["speed"].as<float>();
     act.move_joints_param.timeout_ms = p["timeout_ms"].as<int64_t>();
 

@@ -30,6 +30,10 @@ uint8 synchronization_mode
 
 bool enable_collision_check
 float32 speed                    # 控制速度比例，范围：(0, 1]
+# Additional factors on speed-scaled acceleration/jerk; 0 keeps legacy factor 1.
+# Arm goals only. Velocity limit is unchanged. Valid values: [0, 1].
+float32 acceleration_scale
+float32 jerk_scale
 int64 timeout_ms
 ---
 bool success

@@ -662,9 +662,19 @@ ActionCallResult TaskActionClient::call_move_pose(
       }
     }
   }
+  for (const auto& values : param.via_poses) {
+    geometry_msgs::msg::PoseStamped via;
+    via.header = goal.target_pose.header;
+    via.pose.position.x = values.at(0); via.pose.position.y = values.at(1); via.pose.position.z = values.at(2);
+    via.pose.orientation.x = values.at(3); via.pose.orientation.y = values.at(4);
+    via.pose.orientation.z = values.at(5); via.pose.orientation.w = values.at(6);
+    goal.via_poses.push_back(via);
+  }
   goal.use_force_control = param.use_force_control;
 
   goal.speed = param.speed;
+  goal.acceleration_scale = param.acceleration_scale;
+  goal.jerk_scale = param.jerk_scale;
   if (!param.hand_action_type.empty())
   {
     goal.hand_action_type = param.hand_action_type;
@@ -923,6 +933,8 @@ ActionCallResult TaskActionClient::call_move_joints(
   }
   goal.enable_collision_check = param.enable_collision_check;
   goal.speed = param.speed;
+  goal.acceleration_scale = param.acceleration_scale;
+  goal.jerk_scale = param.jerk_scale;
   goal.timeout_ms = param.timeout_ms;
 
   // ========== 参数打印（实际发送的 Goal） ==========

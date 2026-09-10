@@ -230,6 +230,25 @@ private:
     {
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received movement request for part_id: %u", goal->arm_id);
+        if (!goal->via_poses.empty()) {
+            if (goal->arm_id > ARM_RIGHT || goal->enable_move_line || goal->via_poses.size() > 64) {
+                RCLCPP_WARN(this->get_logger(), "via_poses supports single-arm MoveP only, at most 64 poses");
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+            for (const auto& via : goal->via_poses) {
+                if (!motion_control_pkg::kinematics::validateAndNormalizePoseStamped(via).success) {
+                    return rclcpp_action::GoalResponse::REJECT;
+                }
+            }
+        }
+
+        if (!std::isfinite(goal->acceleration_scale) || goal->acceleration_scale < 0 || goal->acceleration_scale > 1 ||
+            !std::isfinite(goal->jerk_scale) || goal->jerk_scale < 0 || goal->jerk_scale > 1 ||
+            (goal->arm_id > ARM_BOTH && (goal->acceleration_scale != 0 || goal->jerk_scale != 0))) {
+            RCLCPP_WARN(this->get_logger(), "Acceleration/jerk scales require arm goals and values in [0,1]");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
 
         if (goal->control_mode != MovePose::Goal::CONTROL_POSITION &&
             goal->control_mode != MovePose::Goal::CONTROL_IMPEDANCE) {
@@ -480,6 +499,13 @@ private:
     {
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received move joints request for part_id: %u", goal->arm_id);
+        if (!std::isfinite(goal->acceleration_scale) || goal->acceleration_scale < 0 || goal->acceleration_scale > 1 ||
+            !std::isfinite(goal->jerk_scale) || goal->jerk_scale < 0 || goal->jerk_scale > 1 ||
+            (goal->arm_id > ARM_BOTH && (goal->acceleration_scale != 0 || goal->jerk_scale != 0))) {
+            RCLCPP_WARN(this->get_logger(), "Acceleration/jerk scales require arm goals and values in [0,1]");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
 
         if (goal->control_mode != MoveJoints::Goal::CONTROL_POSITION &&
             goal->control_mode != MoveJoints::Goal::CONTROL_IMPEDANCE) {

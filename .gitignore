@@ -37,3 +37,10 @@ __pycache__/
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
+
+# Local smooth-motion offline validation artifacts
+.smooth_validation/
+
+# Windows download metadata and local synchronization snapshots
+*:Zone.Identifier
+.robot*_sync_*/
