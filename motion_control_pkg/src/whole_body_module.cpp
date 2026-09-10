@@ -82,6 +82,7 @@ bool planToppraSamplesWholeBody(
     const std::vector<std::vector<double>>& waypoints,
     const std::vector<double>& velocity_limits,
     const std::vector<double>& acceleration_limits,
+    const std::vector<double>& jerk_limits,
     std::vector<std::vector<double>>& trajectory,
     std::string& error_message)
 {
@@ -93,7 +94,9 @@ bool planToppraSamplesWholeBody(
     if (!miracle_algo.toppraPlan(
             waypoints,
             motion_control_pkg::execution::kDualArmControlPeriodSeconds,
-            velocity_limits, acceleration_limits, trajectory)) {
+            velocity_limits, acceleration_limits, trajectory,
+            MiracleMAlgo::ToppraSolverMode::kStableCartesian,
+            std::numeric_limits<double>::infinity(), jerk_limits)) {
         error_message = "whole-body TOPPRA planning failed";
         return false;
     }
@@ -664,7 +667,7 @@ bool WholeBodyModule::plan_trajectory(
     } else {
         if (!planToppraSamplesWholeBody(
                 *miracle_algo_, active_waypoints, velocity_limits,
-                acceleration_limits, active_trajectory, error_message)) {
+                acceleration_limits, jerk_limits, active_trajectory, error_message)) {
             return false;
         }
     }

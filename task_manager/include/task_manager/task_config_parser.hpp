@@ -50,7 +50,10 @@ struct MovePoseParam
   uint8_t synchronization_mode;           ///< 同步模式：0=SYNC_START_AND_FINISH, 1=SYNC_START_ONLY（对应 YAML synchronization_mode；ARM_BOTH 使用）
   /// @}
   bool use_force_control;                 ///< 是否使用力控模式
+  std::vector<std::vector<double>> via_poses; ///< 连续 MoveP 中间 TCP 位姿 [x,y,z,qx,qy,qz,qw]
   bool enable_move_line;                  ///< 是否启用笛卡尔直线运动
+  float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
+  float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1
   std::vector<uint8_t> hand_action_type;  ///< 灵巧手动作类型
   std::string frame_id;                   ///< 坐标系 ID
@@ -119,6 +122,8 @@ struct MoveJointsParam
   uint8_t synchronization_mode;               ///< 同步模式：0=SYNC_START_AND_FINISH, 1=SYNC_START_ONLY（ARM_BOTH 使用）
   /// @}
   bool enable_collision_check;            ///< 是否启用碰撞检测
+  float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
+  float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1
   int64_t timeout_ms;                     ///< 操作超时时间 (毫秒)，默认 5000ms
 };

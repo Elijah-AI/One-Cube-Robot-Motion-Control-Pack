@@ -129,8 +129,14 @@ inline ScaledMotionLimits scaleMotionLimits(
   const std::vector<double> & velocity,
   const std::vector<double> & acceleration,
   const std::vector<double> & jerk,
-  double speed_scale)
+  double speed_scale, double acceleration_scale = 0.0, double jerk_scale = 0.0)
 {
+  if (!std::isfinite(acceleration_scale) || acceleration_scale < 0 || acceleration_scale > 1 ||
+    !std::isfinite(jerk_scale) || jerk_scale < 0 || jerk_scale > 1) {
+    return {false, {}, {}, {}, "acceleration_scale and jerk_scale must be in [0,1]"};
+  }
+  if (acceleration_scale == 0) {acceleration_scale = 1;}
+  if (jerk_scale == 0) {jerk_scale = 1;}
   const auto speed_validation = validateSpeedScale(speed_scale);
   if (!speed_validation.valid) {
     return {false, {}, {}, {}, speed_validation.error_message};
@@ -164,8 +170,8 @@ inline ScaledMotionLimits scaleMotionLimits(
       return result;
     }
     result.velocity[index] = velocity[index] * speed_scale;
-    result.acceleration[index] = acceleration[index] * speed_scale;
-    result.jerk[index] = jerk[index] * speed_scale;
+    result.acceleration[index] = acceleration[index] * speed_scale * acceleration_scale;
+    result.jerk[index] = jerk[index] * speed_scale * jerk_scale;
   }
   result.valid = true;
   return result;

@@ -1,3 +1,4 @@
+#include "motion_control_pkg/motion/jerk_limited_retiming.hpp"
 /*
 #####################################################################################
 #
@@ -1117,7 +1118,8 @@ bool MiracleMAlgo::solveIKWithLockedData(
     const Eigen::Isometry3d& goal,
     Eigen::VectorXd& q_res,
     int mode,
-    SingleArmIkWorkspace& workspace)
+    SingleArmIkWorkspace& workspace,
+    bool continuous_path)
 {
     double eps = 5e-5;
     const int IT_MAX = 1000;
@@ -1273,7 +1275,10 @@ bool MiracleMAlgo::solveIKWithLockedData(
             centering_velocity.setZero();
             addCcsJoint67CenteringVelocity(
                 q_res, *active_q, *active_v, centering_velocity);
-            v += nullspace_projector * centering_velocity;
+            // A sequential Cartesian path must remain near its previous IK
+            // solution. Unconditional centering can move redundant joints even
+            // for an arbitrarily small Cartesian step, creating a path jump.
+            if (!continuous_path) {v += nullspace_projector * centering_velocity;}
 
             const double current_error_norm = err.norm();
             bool step_accepted = false;
@@ -1314,6 +1319,9 @@ bool MiracleMAlgo::solveIKWithLockedData(
                 }
             }
             if (!step_accepted) {
+                // Refinement may recover a smaller continuation step. A distant
+                // fallback seed would invalidate the continuous-path contract.
+                if (continuous_path) {break;}
                 bool reseeded = false;
                 while (next_fallback_seed <
                     kSingleArmFallbackJoint6SeedsDeg.size() && !reseeded)
@@ -2371,6 +2379,21 @@ bool MiracleMAlgo::extractLegJoints(
     return true;
 }
 
+bool MiracleMAlgo::mergeSingleArmJoints(bool is_left, const std::vector<double>& reference,
+    const std::vector<double>& arm, std::vector<double>& full) const
+{
+    const auto& indices = is_left ? left_arm_q_indices_ : right_arm_q_indices_;
+    if (reference.size() != static_cast<std::size_t>(model_.nq) || arm.size() != indices.size()) {
+        return false;
+    }
+    full = reference;
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        if (!std::isfinite(arm[i])) {return false;}
+        full[indices[i]] = arm[i];
+    }
+    return true;
+}
+
 bool MiracleMAlgo::mergeWholeBodyJoints(
     const std::vector<double>& reference_full_q,
     bool use_left,
@@ -2707,14 +2730,12 @@ bool MiracleMAlgo::planSingleArmCartesianIkWaypoints(
     for (std::size_t segment = 1U; segment <= sampling.segments; ++segment) {
         const double alpha = static_cast<double>(segment) /
             static_cast<double>(sampling.segments);
-        const pinocchio::SE3 interpolated = pinocchio::SE3::Interpolate(
-            start_se3, pinocchio::SE3(goal.rotation(), goal.translation()), alpha);
-        Eigen::Isometry3d target = Eigen::Isometry3d::Identity();
-        target.matrix() = interpolated.toHomogeneousMatrix();
+        const Eigen::Isometry3d target =
+            motion_control_pkg::motion::interpolateCartesianLine(actual_start_pose, goal, alpha);
 
         const auto ik_started_at = std::chrono::steady_clock::now();
         const bool ik_ok = solveIKWithLockedData(
-            q_current, target, q_next, is_left ? 0 : 1, workspace);
+            q_current, target, q_next, is_left ? 0 : 1, workspace, true);
         if (ik_time_seconds != nullptr) {
             *ik_time_seconds += std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - ik_started_at).count();
@@ -3123,13 +3144,24 @@ bool MiracleMAlgo::ruckigPlan(
     std::vector<double> new_position(dof);
     std::vector<double> new_velocity(dof);
     std::vector<double> new_acceleration(dof);
-    const std::size_t total_steps =
-        static_cast<std::size_t>(std::max(1, static_cast<int>(std::ceil(total_time / dt))));
-    for (std::size_t i = 0; i < total_steps; ++i) {
-        const double new_time =
-            i + 1U == total_steps ? total_time : static_cast<double>(i) * dt;
+    // Stretch by less than one tick so every position is sent on its actual
+    // planned time grid, including t=0 and the exact stationary endpoint.
+    if (!std::isfinite(total_time) || total_time < 0 || total_time/dt > 1000000) {
+        return false;
+    }
+    const std::size_t total_steps = static_cast<std::size_t>(std::ceil(total_time/dt));
+    for (std::size_t i = 0; i <= total_steps; ++i) {
+        const double new_time = total_steps == 0 ? 0.0 :
+            total_time * static_cast<double>(i) / static_cast<double>(total_steps);
         trajectory.at_time(new_time, new_position, new_velocity, new_acceleration);
         res_trajectory.emplace_back(new_position.begin(), new_position.end());
+    }
+    std::string derivative_error;
+    if (!motion_control_pkg::motion::validateCommandDerivatives(
+        res_trajectory, dt, max_velocity, max_acc, max_jerk, derivative_error)) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "%s", derivative_error.c_str());
+        res_trajectory.clear();
+        return false;
     }
     return true;
 }
@@ -3141,7 +3173,8 @@ bool MiracleMAlgo::toppraPlan(
     const std::vector<double>& max_acc,
     std::vector<std::vector<double>>& res_trajectory,
     ToppraSolverMode solver_mode,
-    double maximum_duration_seconds)
+    double maximum_duration_seconds,
+    const std::vector<double>& max_jerk)
 {
     const int dof = static_cast<int>(max_velocity.size());
     if (ompl_path.size() < 2 || dof <= 0 || !std::isfinite(dt) || dt <= 0.0 ||
@@ -3489,70 +3522,53 @@ bool MiracleMAlgo::toppraPlan(
         return false;
     }
 
-    int sample_cnt = static_cast<int>(std::ceil(totalT / dt));
-    sample_cnt = std::max(1, sample_cnt);
-    RCLCPP_INFO(
-        rclcpp::get_logger("MiracleMAlgo"),
-        "toppraPlan: sample count=%d totalT=%.9f s dt=%.9f s",
-        sample_cnt, totalT, dt);
-
-    RCLCPP_INFO(
-        rclcpp::get_logger("MiracleMAlgo"),
-        "toppraPlan: sample time grid construction begin samples=%d",
-        sample_cnt);
-    const auto sample_grid_started_at = std::chrono::steady_clock::now();
-    toppra::Vector samp_t(sample_cnt);
-    for (int i = 0; i < sample_cnt; ++i)
-    {
-        samp_t(i) = i + 1 == sample_cnt ? totalT : static_cast<double>(i) * dt;
+    std::vector<double> jerk_limits = max_jerk;
+    if (jerk_limits.empty()) {
+        // Compatibility for existing callers; explicit per-joint limits are
+        // passed by all arm and whole-body production planners.
+        jerk_limits = max_acc;
+        for (auto& limit : jerk_limits) {limit *= 5.0;}
     }
-    const double sample_grid_seconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - sample_grid_started_at).count();
-    RCLCPP_INFO(
-        rclcpp::get_logger("MiracleMAlgo"),
-        "toppraPlan: sample time grid construction end samples=%d elapsed=%.6f s",
-        sample_cnt, sample_grid_seconds);
-
-    // 批量求值 pos/vel/acc
-    RCLCPP_INFO(
-        rclcpp::get_logger("MiracleMAlgo"),
-        "toppraPlan: param.eval begin samples=%d order=0", sample_cnt);
-    const auto eval_started_at = std::chrono::steady_clock::now();
-    auto pos_buf = param.eval(samp_t, 0);
-    const double eval_seconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - eval_started_at).count();
-    RCLCPP_INFO(
-        rclcpp::get_logger("MiracleMAlgo"),
-        "toppraPlan: param.eval end samples=%zu elapsed=%.6f s",
-        pos_buf.size(), eval_seconds);
-    // auto vel_buf = param.eval(samp_t, 1);
-    // auto acc_buf = param.eval(samp_t, 2);
-
-    RCLCPP_INFO(
-        rclcpp::get_logger("MiracleMAlgo"),
-        "toppraPlan: trajectory materialization begin samples=%d dof=%d",
-        sample_cnt, dof);
-    const auto materialization_started_at = std::chrono::steady_clock::now();
-    res_trajectory.clear();
-    // 5. 填充统一结构体 
-    res_trajectory.resize(sample_cnt, std::vector<double>(dof));
-
-
-    for (int i = 0; i < sample_cnt; ++i)
-    {
-        for (int j = 0; j < dof; ++j)
-        {
-            res_trajectory[i][j] = pos_buf[i](j);
-            // res.velocities[i][j] = vel_buf[i](j);
-            // res.accelerations[i][j] = acc_buf[i](j);
-        }
+    const std::vector<double> knots(raw_time.data(), raw_time.data()+raw_time.size());
+    const auto evaluate = [&](double time, int order) {
+        const auto value = param.eval_single(time, order);
+        return std::vector<double>(value.data(), value.data()+value.size());
+    };
+    auto retimed = motion_control_pkg::motion::retimeCubicTrajectory(
+        knots, evaluate, dt, max_velocity, max_acc, jerk_limits, maximum_duration_seconds);
+    // The TOPPRA time-domain fit can contain large jerk around acceleration
+    // switches. Also retime the original geometric cubic directly, with the
+    // TOPPRA duration as its nominal clock. This keeps every geometric waypoint
+    // and avoids slowing the whole move just to accommodate fit-induced jerk.
+    std::vector<double> geometric_knots;
+    const double path_span = breakPts[breakPts.size()-1] - breakPts[0];
+    const double path_rate = path_span/totalT;
+    for (Eigen::Index i = 0; i < breakPts.size(); ++i) {
+        geometric_knots.push_back((breakPts[i]-breakPts[0])/path_rate);
     }
-    const double materialization_seconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - materialization_started_at).count();
-    RCLCPP_INFO(
-        rclcpp::get_logger("MiracleMAlgo"),
-        "toppraPlan: trajectory materialization end samples=%zu elapsed=%.6f s",
-        res_trajectory.size(), materialization_seconds);
+    const auto geometric_evaluate = [&](double time, int order) {
+        auto value = path->eval_single(breakPts[0]+std::clamp(time/totalT, 0.0, 1.0)*path_span, order);
+        value *= std::pow(path_rate, order);
+        return std::vector<double>(value.data(), value.data()+value.size());
+    };
+    auto geometric_retimed = motion_control_pkg::motion::retimeCubicTrajectory(
+        geometric_knots, geometric_evaluate, dt, max_velocity, max_acc, jerk_limits, maximum_duration_seconds);
+    const bool use_geometric = stable_cartesian_mode || (geometric_retimed.valid &&
+        (!retimed.valid || geometric_retimed.duration < retimed.duration));
+    if (use_geometric) {retimed = std::move(geometric_retimed);}
+    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "toppraPlan: retiming source=%s",
+        use_geometric ? "geometric_path" : "time_spline");
+    if (!retimed.valid) {
+        RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+            "toppraPlan: jerk-limited retiming failed: %s", retimed.error.c_str());
+        return false;
+    }
+    RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
+        "toppraPlan: v/a/jerk checked, zero endpoint v/a; source=%.6f s final=%.6f s "
+        "endpoint_window=%.6f s time_scale=%.6f samples=%zu",
+        retimed.source_duration, retimed.duration, retimed.endpoint_window,
+        retimed.time_scale, retimed.positions.size());
+    res_trajectory = std::move(retimed.positions);
     return true;
 }
 //--------------------------------------------------------------//

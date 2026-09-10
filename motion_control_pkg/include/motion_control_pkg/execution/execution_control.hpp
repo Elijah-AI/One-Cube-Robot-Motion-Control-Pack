@@ -47,6 +47,11 @@ public:
   {
   }
 
+  double remainingSeconds() const noexcept
+  {
+    return std::chrono::duration<double>(deadline_ - std::chrono::steady_clock::now()).count();
+  }
+
   bool expired() const noexcept
   {
     return std::chrono::steady_clock::now() >= deadline_;

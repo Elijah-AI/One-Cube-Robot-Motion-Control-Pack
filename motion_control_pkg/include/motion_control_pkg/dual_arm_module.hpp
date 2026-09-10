@@ -330,6 +330,8 @@ private:
     std::shared_ptr<MiracleMAlgo> miracle_algo_;
     motion_control_pkg::sdk::ActiveArmConfiguration arm_configuration_;
     std::string sdk_config_path_;
+    double acceleration_scale_{1.0};
+    double jerk_scale_{1.0};
     std::string planning_frame_;
     Eigen::Isometry3d left_model_end_to_tool_tcp_;
     Eigen::Isometry3d right_model_end_to_tool_tcp_;

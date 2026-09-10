@@ -18,6 +18,18 @@ inline constexpr double kCartesianLinePositionToleranceMeters = 0.0015;
 inline constexpr double kCartesianLineOrientationToleranceRadians = 0.02;
 inline constexpr std::size_t kMaxCartesianIkSegments = 4096U;
 
+// Cartesian MoveL means a straight translation plus shortest-arc rotation.
+// SE3 exponential interpolation describes a screw and is not generally straight.
+inline Eigen::Isometry3d interpolateCartesianLine(
+  const Eigen::Isometry3d& start, const Eigen::Isometry3d& goal, double progress)
+{
+  Eigen::Isometry3d result = Eigen::Isometry3d::Identity();
+  result.translation() = start.translation() + progress*(goal.translation()-start.translation());
+  result.linear() = Eigen::Quaterniond(start.rotation()).normalized().slerp(
+    progress, Eigen::Quaterniond(goal.rotation()).normalized()).normalized().toRotationMatrix();
+  return result;
+}
+
 struct CartesianLineSegmentCount
 {
   bool valid{false};

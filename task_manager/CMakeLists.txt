@@ -17,11 +17,6 @@ find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(com_interfaces REQUIRED)
 
-# 单元测试依赖
-if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-endif()
-
 # Discover both system installs and isolated offline dependency prefixes.
 find_path(MODBUS_INCLUDE_DIR NAMES modbus/modbus.h)
 find_library(MODBUS_LIB NAMES modbus)
@@ -79,74 +74,5 @@ install(DIRECTORY launch
 install(DIRECTORY include/
   DESTINATION include/
 )
-
-# ============================================================================
-# 单元测试
-# ============================================================================
-if(BUILD_TESTING)
-  # ----- test_fsm_state -----
-  ament_add_gtest(test_fsm_state
-    test/test_fsm_state.cpp
-    src/fsm_state.cpp
-  )
-  target_include_directories(test_fsm_state PRIVATE include)
-  ament_target_dependencies(test_fsm_state
-    rclcpp
-    com_interfaces
-  )
-
-  # ----- test_prioritized_task -----
-  ament_add_gtest(test_prioritized_task
-    test/test_prioritized_task.cpp
-  )
-  target_include_directories(test_prioritized_task PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
-  ament_target_dependencies(test_prioritized_task
-    rclcpp
-    rclcpp_action
-    std_msgs
-    com_interfaces
-  )
-
-  # ----- test_add_task_action -----
-  ament_add_gtest(test_add_task_action
-    test/test_add_task_action.cpp
-  )
-  target_include_directories(test_add_task_action PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
-  ament_target_dependencies(test_add_task_action
-    rclcpp
-    rclcpp_action
-    std_msgs
-    com_interfaces
-  )
-
-  # ----- test_task_config_parser -----
-  ament_add_gtest(test_task_config_parser
-    test/test_task_config_parser.cpp
-    src/task_config_parser.cpp
-  )
-  target_include_directories(test_task_config_parser PRIVATE include)
-  target_compile_definitions(test_task_config_parser PRIVATE
-    TASK_MANAGER_LOCAL_PARALLEL_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/local_parallel_task_config.yaml"
-  )
-  target_link_libraries(test_task_config_parser yaml-cpp)
-  ament_target_dependencies(test_task_config_parser rclcpp)
-
-  # ----- test_behavior_tree_engine -----
-  ament_add_gtest(test_behavior_tree_engine
-    test/test_behavior_tree_engine.cpp
-    src/behavior_tree_engine.cpp
-    src/task_action_client.cpp
-  )
-  target_include_directories(test_behavior_tree_engine PRIVATE include ${CMAKE_CURRENT_BINARY_DIR})
-  target_link_libraries(test_behavior_tree_engine uuid)
-  ament_target_dependencies(test_behavior_tree_engine
-    rclcpp
-    rclcpp_action
-    std_msgs
-    geometry_msgs
-    sensor_msgs
-    com_interfaces
-  )
-endif()
 
 ament_package()

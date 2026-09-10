@@ -1,3 +1,4 @@
+#include "motion_control_pkg/execution/stream_timing.hpp"
 #include "dual_arm_module.hpp"
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
@@ -45,20 +46,43 @@ private:
     bool has_cloud_;
 };
 
-void addPeriodToTimespec(timespec& timestamp, std::chrono::nanoseconds period)
-{
-    const auto total_nanoseconds =
-        static_cast<long long>(timestamp.tv_nsec) + period.count();
-    timestamp.tv_sec += static_cast<time_t>(
-        total_nanoseconds / 1'000'000'000LL);
-    timestamp.tv_nsec = static_cast<long>(
-        total_nanoseconds % 1'000'000'000LL);
-}
-
 void sleepUntilTimespec(const timespec& timestamp)
 {
     while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &timestamp, nullptr) == EINTR) {
     }
+}
+
+std::int64_t monotonicNanoseconds()
+{
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return static_cast<std::int64_t>(now.tv_sec)*1000000000LL + now.tv_nsec;
+}
+std::int64_t asNanoseconds(const timespec& t)
+{
+    return static_cast<std::int64_t>(t.tv_sec)*1000000000LL + t.tv_nsec;
+}
+struct StreamTimingReport
+{
+    motion_control_pkg::execution::StreamTiming stats;
+    ~StreamTimingReport()
+    {
+        RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"),
+            "arm stream timing: samples=%zu mean_gap_us=%.3f max_gap_us=%.3f "
+            "max_lateness_us=%.3f late_over_1ms=%zu",
+            stats.samples, stats.samples > 1 ? double(stats.gap_sum)/(stats.samples-1)/1000 : 0,
+            double(stats.maximum_gap)/1000, double(stats.maximum_lateness)/1000, stats.late_samples);
+    }
+};
+void scheduleNextSample(timespec& next, std::int64_t started)
+{
+    const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        motion_control_pkg::execution::kDualArmControlPeriod).count();
+    const auto ns = motion_control_pkg::execution::nextStreamTick(
+        asNanoseconds(next), started, monotonicNanoseconds(), period);
+    next.tv_sec = ns / 1000000000LL;
+    next.tv_nsec = ns % 1000000000LL;
+    sleepUntilTimespec(next);
 }
 
 template <typename GoalHandleT>
@@ -77,6 +101,12 @@ bool streamSingleArmTrajectory(
         abort_goal("trajectory must contain at least one sample");
         return false;
     }
+    const std::size_t planned_samples = command_points.size();
+    if ((planned_samples-1)*motion_control_pkg::execution::kDualArmControlPeriodSeconds > deadline.remainingSeconds()) {
+        abort_goal("Planned motion exceeds remaining action timeout; no trajectory samples sent");
+        return false;
+    }
+    StreamTimingReport timing;
     timespec next_cycle{};
     clock_gettime(CLOCK_MONOTONIC, &next_cycle);
     auto next_feedback = std::chrono::steady_clock::now();
@@ -93,6 +123,8 @@ bool streamSingleArmTrajectory(
             abort_goal(std::string(action_name) + " command streaming timed out");
             return false;
         }
+        const auto sample_started = monotonicNanoseconds();
+        timing.stats.observe(asNanoseconds(next_cycle), sample_started, 4000000LL);
         const auto send_result =
             sdk_command_gate.sendJointPosition(channel, command_points[index]);
         if (!send_result) {
@@ -110,10 +142,7 @@ bool streamSingleArmTrajectory(
             next_feedback = now + std::chrono::milliseconds(50);
         }
         if (index + 1U < command_points.size()) {
-            addPeriodToTimespec(
-                next_cycle, std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    motion_control_pkg::execution::kDualArmControlPeriod));
-            sleepUntilTimespec(next_cycle);
+            scheduleNextSample(next_cycle, sample_started);
         }
     }
     return true;
@@ -141,6 +170,12 @@ bool streamDualArmTrajectory(
         abort_goal("dual-arm synchronized trajectories must have equal sample counts");
         return false;
     }
+    const std::size_t planned_samples = left_commands.size();
+    if ((planned_samples-1)*motion_control_pkg::execution::kDualArmControlPeriodSeconds > deadline.remainingSeconds()) {
+        abort_goal("Planned motion exceeds remaining action timeout; no trajectory samples sent");
+        return false;
+    }
+    StreamTimingReport timing;
     timespec next_cycle{};
     clock_gettime(CLOCK_MONOTONIC, &next_cycle);
     auto next_feedback = std::chrono::steady_clock::now();
@@ -155,6 +190,8 @@ bool streamDualArmTrajectory(
             abort_goal(std::string(action_name) + " command streaming timed out");
             return false;
         }
+        const auto sample_started = monotonicNanoseconds();
+        timing.stats.observe(asNanoseconds(next_cycle), sample_started, 4000000LL);
         const auto send_result = sdk_command_gate.sendJointPositions(
             left_commands[index], right_commands[index]);
         if (!send_result) {
@@ -171,10 +208,7 @@ bool streamDualArmTrajectory(
             next_feedback = now + std::chrono::milliseconds(50);
         }
         if (index + 1U < left_commands.size()) {
-            addPeriodToTimespec(
-                next_cycle, std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    motion_control_pkg::execution::kDualArmControlPeriod));
-            sleepUntilTimespec(next_cycle);
+            scheduleNextSample(next_cycle, sample_started);
         }
     }
     return true;
@@ -220,10 +254,11 @@ bool planToppraSamples(
     const std::vector<std::vector<double>>& waypoints,
     const std::vector<double>& velocity_limits,
     const std::vector<double>& acceleration_limits,
+    const std::vector<double>& jerk_limits,
     std::vector<std::vector<double>>& trajectory,
     std::string& error_message,
     MiracleMAlgo::ToppraSolverMode solver_mode =
-        MiracleMAlgo::ToppraSolverMode::kSeidel,
+        MiracleMAlgo::ToppraSolverMode::kStableCartesian,
     double maximum_duration_seconds =
         std::numeric_limits<double>::infinity())
 {
@@ -241,7 +276,7 @@ bool planToppraSamples(
             waypoints,
             motion_control_pkg::execution::kDualArmControlPeriodSeconds,
             velocity_limits, acceleration_limits, trajectory, solver_mode,
-            maximum_duration_seconds))
+            maximum_duration_seconds, jerk_limits))
     {
         error_message = "MiracleMAlgo::toppraPlan failed";
         return false;
@@ -294,6 +329,12 @@ DualArmModule::DualArmModule(
     if (!arm_device_ || !miracle_algo_) {
         throw std::invalid_argument(
             "DualArmModule requires injected SDK adapter and MiracleMAlgo");
+    }
+    acceleration_scale_ = shared_node->declare_parameter<double>("arm_acceleration_scale", 1.0);
+    jerk_scale_ = shared_node->declare_parameter<double>("arm_jerk_scale", 1.0);
+    if (!std::isfinite(acceleration_scale_) || acceleration_scale_ <= 0 || acceleration_scale_ > 1 ||
+        !std::isfinite(jerk_scale_) || jerk_scale_ <= 0 || jerk_scale_ > 1) {
+        throw std::invalid_argument("arm acceleration/jerk scales must be in (0,1]");
     }
     const std::vector<double> joint_stiffness{
         5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0};
@@ -1003,7 +1044,7 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
         arm_data[arm].motion = motion_control_pkg::motion::scaleMotionLimits(
             arm == 0U ? l_v_limit_ : r_v_limit_,
             arm == 0U ? l_a_limit_ : r_a_limit_,
-            arm == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed);
+            arm == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed, goal->acceleration_scale, goal->jerk_scale);
         if (!arm_data[arm].limits.valid || !arm_data[arm].motion.valid) {
             abort_goal(arm_data[arm].limits.valid ?
                 arm_data[arm].motion.error_message :
@@ -1097,7 +1138,7 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
             combined_velocity, combined_acceleration, combined_jerk,
             planned_positions, planning_error) :
         planToppraSamples(
-            *miracle_algo_, dual_path, combined_velocity, combined_acceleration,
+            *miracle_algo_, dual_path, combined_velocity, combined_acceleration, combined_jerk,
             planned_positions, planning_error);
     if (!planned || planned_positions.empty()) {
         abort_goal("Dual-arm 14-DOF time parameterization failed: " +
@@ -1526,7 +1567,7 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
             motion_control_pkg::motion::scaleMotionLimits(
             arm_index == 0U ? l_v_limit_ : r_v_limit_,
             arm_index == 0U ? l_a_limit_ : r_a_limit_,
-            arm_index == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed);
+            arm_index == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed, goal->acceleration_scale, goal->jerk_scale);
         if (!arm_data[arm_index].limits.valid || !arm_data[arm_index].motion.valid) {
             return false;
         }
@@ -1540,59 +1581,73 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         return true;
     };
 
-    if(goal->enable_move_line)
+    if (goal->enable_move_line)
     {
         if (!init_arm_planning_data(0) || !init_arm_planning_data(1)) {
-            abort_goal("Failed to initialize arm planning data for cartesian line");
-            return;
+            abort_goal("Failed to initialize dual MoveL limits"); return;
         }
-
-        double lx = left_root_to_end.translation().x();
-        double ly = left_root_to_end.translation().y();
-        double lz = left_root_to_end.translation().z();
-        Eigen::Quaterniond left_q_root_to_model_end(left_root_to_end.rotation());
-        // 确保四元数归一化，防止底层库崩溃
-        left_q_root_to_model_end.normalize();
-        double lqx = left_q_root_to_model_end.x();
-        double lqy = left_q_root_to_model_end.y();
-        double lqz = left_q_root_to_model_end.z();
-        double lqw = left_q_root_to_model_end.w();
-        std::vector<double> left_end_poseture={lx,ly,lz,lqx,lqy,lqz,lqw};
-
-        double rx = right_root_to_end.translation().x();
-        double ry = right_root_to_end.translation().y();
-        double rz = right_root_to_end.translation().z();
-        Eigen::Quaterniond right_q_root_to_model_end(right_root_to_end.rotation());
-        // 确保四元数归一化
-        right_q_root_to_model_end.normalize();
-        double rqx = right_q_root_to_model_end.x();
-        double rqy = right_q_root_to_model_end.y();
-        double rqz = right_q_root_to_model_end.z();
-        double rqw = right_q_root_to_model_end.w();
-        std::vector<double> right_end_poseture={rx,ry,rz,rqx,rqy,rqz,rqw};
-        
-        RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "Calling planDualArmCartesianLine...");
-        auto start_time = std::chrono::high_resolution_clock::now();
-        bool plan_success = miracle_algo_->planDualArmCartesianLine(
-            full_start_q, left_end_poseture, right_end_poseture, 
-            0.004, goal->speed*CARTES_V_MAX, goal->speed*CARTES_A_MAX,
-            goal->speed*CARTES_J_MAX, planned_positions);
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> duration_ms = end_time - start_time;
-        RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "dealling time: %f ms",duration_ms.count());
-        if (!plan_success) {
-            abort_goal("Dual-arm Cartesian line planning failed (returned false)");
-            return;
+        std::vector<double> velocity, acceleration, jerk;
+        for (const auto& data : arm_data) {
+            velocity.insert(velocity.end(), data.motion.velocity.begin(), data.motion.velocity.end());
+            acceleration.insert(acceleration.end(), data.motion.acceleration.begin(), data.motion.acceleration.end());
+            jerk.insert(jerk.end(), data.motion.jerk.begin(), data.motion.jerk.end());
         }
-        RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "shuangbi guihua wancheng");
-
-        // 【关键防御】检查 planned_positions 是否为空
-        if (planned_positions.empty()) {
-            abort_goal("Dual-arm Cartesian line planner returned empty trajectory");
-            return;
+        double translation_step = motion_control_pkg::motion::kCartesianIkTranslationStepMeters;
+        double rotation_step = motion_control_pkg::motion::kCartesianIkRotationStepRadians;
+        bool valid = false;
+        std::string error;
+        for (int attempt = 0; attempt < 3 && !valid; ++attempt) {
+            std::array<std::vector<std::vector<double>>, 2> coarse;
+            std::array<Eigen::Isometry3d, 2> starts;
+            const std::array<Eigen::Isometry3d, 2> targets{left_root_to_end, right_root_to_end};
+            bool ik_ok = true;
+            for (std::size_t arm = 0; arm < 2; ++arm) {
+                double ik_seconds = 0;
+                const bool ok = miracle_algo_->planSingleArmCartesianIkWaypoints(arm == 0, full_start_q,
+                    targets[arm], translation_step, rotation_step, coarse[arm], starts[arm], &ik_seconds);
+                result->ik_time += ik_seconds;
+                ik_ok = ik_ok && ok;
+            }
+            if (!ik_ok) {error = "dual MoveL continuous IK failed";}
+            else {
+                // Match normalized Cartesian progress before one 14-DOF
+                // parameterization. Neither arm is padded with an early stop.
+                const std::size_t count = std::max(coarse[0].size(), coarse[1].size());
+                std::vector<std::vector<double>> combined;
+                for (std::size_t i = 0; i < count; ++i) {
+                    std::vector<double> q;
+                    for (std::size_t arm = 0; arm < 2; ++arm) {
+                        const double x = count <= 1 ? 0.0 :
+                            static_cast<double>(i)*(coarse[arm].size()-1)/(count-1);
+                        const auto a = static_cast<std::size_t>(std::floor(x));
+                        const auto b = std::min(a+1, coarse[arm].size()-1);
+                        for (std::size_t j = 0; j < 7; ++j) {
+                            q.push_back(coarse[arm][a][j]+(x-a)*(coarse[arm][b][j]-coarse[arm][a][j]));
+                        }
+                    }
+                    combined.push_back(std::move(q));
+                }
+                valid = planToppraSamples(*miracle_algo_, combined, velocity, acceleration, jerk,
+                    planned_positions, error, MiracleMAlgo::ToppraSolverMode::kStableCartesian,
+                    static_cast<double>(goal->timeout_ms)/1000.0);
+                for (std::size_t arm = 0; arm < 2 && valid; ++arm) {
+                    std::vector<std::vector<double>> samples;
+                    for (const auto& q : planned_positions) {
+                        samples.emplace_back(q.begin()+arm*7, q.begin()+(arm+1)*7);
+                    }
+                    double position_error = 0, rotation_error = 0;
+                    valid = miracle_algo_->validateSingleArmCartesianTrajectory(arm == 0, full_start_q,
+                        starts[arm], targets[arm], samples,
+                        motion_control_pkg::motion::kCartesianLinePositionToleranceMeters,
+                        motion_control_pkg::motion::kCartesianLineOrientationToleranceRadians,
+                        position_error, rotation_error, error);
+                }
+            }
+            if (goal_handle->is_canceling()) {cancel_goal("Dual MoveL canceled during planning"); return;}
+            if (deadline.expired()) {abort_goal("Dual MoveL timed out during planning"); return;}
+            translation_step *= 0.5; rotation_step *= 0.5;
         }
-        
-        RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"), "Plan succeeded with %zu points", planned_positions.size());
+        if (!valid) {abort_goal("Jerk-limited dual MoveL failed: " + error); return;}
     }
     else
     {
@@ -1722,7 +1777,7 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
                 combined_velocity, combined_acceleration, combined_jerk,
                 planned_positions, planning_error) :
             planToppraSamples(
-                *miracle_algo_, dual_path, combined_velocity, combined_acceleration,
+                *miracle_algo_, dual_path, combined_velocity, combined_acceleration, combined_jerk,
                 planned_positions, planning_error);
         if (!planned || planned_positions.empty()) {
             abort_goal("Dual-arm pose 14-DOF time parameterization failed: " +
@@ -2052,7 +2107,7 @@ void DualArmModule::execution_loop_move_joint_impl(
     const auto scaled_limits =
         motion_control_pkg::motion::scaleMotionLimits(
         base_velocity, base_acceleration, base_jerk,
-        static_cast<double>(goal->speed));
+        static_cast<double>(goal->speed), goal->acceleration_scale, goal->jerk_scale);
     if (!scaled_limits.valid) {
         abort_goal(scaled_limits.error_message);
         return;
@@ -2451,7 +2506,7 @@ void DualArmModule::execution_loop_move_pose_impl(
         is_left ? l_v_limit_ : r_v_limit_,
         is_left ? l_a_limit_ : r_a_limit_,
         is_left ? l_jerk_limit_ : r_jerk_limit_,
-        static_cast<double>(goal->speed));
+        static_cast<double>(goal->speed), goal->acceleration_scale, goal->jerk_scale);
     if (!scaled_limits.valid) {
         abort_goal(scaled_limits.error_message);
         return;
@@ -2621,8 +2676,65 @@ void DualArmModule::execution_loop_move_pose_impl(
             return;
         }
     }
+    std::vector<std::vector<double>> via_joint_targets;
+    std::vector<Eigen::Isometry3d> via_tcp_targets;
     if (!goal->enable_move_line) {
-        if (goal->enable_collision_check) {
+        if (!goal->via_poses.empty()) {
+            active_arm_path.push_back(current_arm_q);
+            std::vector<double> seed = full_start_q;
+            std::vector<Eigen::Isometry3d> targets;
+            for (const auto& via : goal->via_poses) {
+                geometry_msgs::msg::PoseStamped normalized;
+                if (!normalizePoseTargetToPlanningFrame(via, normalized, conversion_error)) {
+                    abort_goal(conversion_error); return;
+                }
+                if (goal->bound_size.size() == 3) {
+                    normalized.pose.position.x += goal->bound_size[0];
+                    normalized.pose.position.y += goal->bound_size[1];
+                    normalized.pose.position.z += goal->bound_size[2];
+                }
+                via_tcp_targets.push_back(motion_control_pkg::kinematics::poseToIsometry(normalized.pose));
+                Eigen::Isometry3d root_target;
+                if (!miracle_algo_->transformPoseToModelRoot(planning_frame_, full_start_q,
+                    motion_control_pkg::kinematics::targetTcpToModelEndPose(normalized.pose, model_end_to_tool_tcp),
+                    root_target)) {abort_goal("Failed to transform MoveP via TCP"); return;}
+                targets.push_back(root_target);
+            }
+            targets.push_back(root_to_model_end);
+            for (std::size_t index = 0; index < targets.size(); ++index) {
+                if (goal_handle->is_canceling()) {cancel_goal("Continuous MoveP canceled during planning"); return;}
+                if (deadline.expired()) {abort_goal("Continuous MoveP timed out during planning"); return;}
+                if (goal->enable_collision_check) {
+                    std::vector<std::vector<double>> segment;
+                    double ik_seconds = 0;
+                    if (!miracle_algo_->planSingleArmCartesianGoal(is_left, seed, targets[index], segment, &ik_seconds) || segment.empty()) {
+                        abort_goal("Continuous MoveP IK/OMPL segment failed"); return;
+                    }
+                    result->ik_time += ik_seconds;
+                    for (std::size_t k = 1; k < segment.size(); ++k) {
+                        std::vector<double> q;
+                        if (!miracle_algo_->extractSingleArmJoints(is_left, segment[k], q)) {
+                            abort_goal("Invalid continuous MoveP waypoint"); return;
+                        }
+                        active_arm_path.push_back(std::move(q));
+                    }
+                    seed = segment.back();
+                } else {
+                    std::vector<double> q;
+                    const auto ik_start = std::chrono::steady_clock::now();
+                    const bool ok = miracle_algo_->solveSingleArmCartesianIk(is_left, seed, targets[index], q);
+                    result->ik_time += std::chrono::duration<double>(std::chrono::steady_clock::now()-ik_start).count();
+                    if (!ok) {abort_goal("Continuous MoveP IK failed"); return;}
+                    active_arm_path.push_back(q);
+                    std::vector<double> next;
+                    if (!miracle_algo_->mergeSingleArmJoints(is_left, seed, q, next)) {
+                        abort_goal("Continuous MoveP state merge failed"); return;
+                    }
+                    seed = std::move(next);
+                }
+                if (index < goal->via_poses.size()) {via_joint_targets.push_back(active_arm_path.back());}
+            }
+        } else if (goal->enable_collision_check) {
             // 复用 MiracleMAlgo 内部 Pinocchio IK、Coal 状态有效性与 OMPL
             // RRTConnect；旧的恒真 OMPLWrapper 不再进入 MovePose 主链。
             std::vector<std::vector<double>> full_ompl_path;
@@ -2697,7 +2809,7 @@ void DualArmModule::execution_loop_move_pose_impl(
                 scaled_limits.jerk, planned_positions, planner_error) :
             planToppraSamples(
                 *miracle_algo_, waypoint_positions, scaled_limits.velocity,
-                scaled_limits.acceleration, planned_positions, planner_error);
+                scaled_limits.acceleration, scaled_limits.jerk, planned_positions, planner_error);
         if (!planned) {
             abort_goal(std::string(arm_name) + " arm " + planner_name +
                 " time parameterization failed: " + planner_error);
@@ -2741,7 +2853,7 @@ void DualArmModule::execution_loop_move_pose_impl(
                     std::string toppra_error;
                     if (!planToppraSamples(
                         *miracle_algo_, active_arm_path, scaled_limits.velocity,
-                        scaled_limits.acceleration, planned_positions,
+                        scaled_limits.acceleration, scaled_limits.jerk, planned_positions,
                         toppra_error,
                         MiracleMAlgo::ToppraSolverMode::kStableCartesian,
                         std::chrono::duration<double>(timeout).count()))
@@ -2788,6 +2900,38 @@ void DualArmModule::execution_loop_move_pose_impl(
         }
     }
 
+    if (goal->enable_collision_check) {
+        for (const auto& q : planned_positions) {
+            std::vector<double> full;
+            if (deadline.expired() || !miracle_algo_->mergeSingleArmJoints(is_left, full_start_q, q, full) ||
+                !miracle_algo_->isFullQValid(miracle_algo_->toEigenConfig(full))) {
+                abort_goal("Retimed MoveP/MoveL sample failed collision check or timed out"); return;
+            }
+        }
+    }
+    for (std::size_t via = 0; via < via_joint_targets.size(); ++via) {
+        const auto distance = [&](const std::vector<double>& q) {
+            double d = 0;
+            for (std::size_t j = 0; j < q.size(); ++j) {d += std::pow(q[j]-via_joint_targets[via][j], 2);}
+            return d;
+        };
+        const auto nearest = std::min_element(planned_positions.begin(), planned_positions.end(),
+            [&](const auto& a, const auto& b) {return distance(a) < distance(b);});
+        std::vector<double> full;
+        Eigen::Isometry3d end_pose;
+        if (nearest == planned_positions.end() ||
+            !miracle_algo_->mergeSingleArmJoints(is_left, full_start_q, *nearest, full) ||
+            !miracle_algo_->getFramePoseAtConfiguration(planning_frame_, model_end_frame, full, end_pose)) {
+            abort_goal("Continuous MoveP via FK failed"); return;
+        }
+        const auto tcp = end_pose * model_end_to_tool_tcp;
+        if ((tcp.translation()-via_tcp_targets[via].translation()).norm() >
+                motion_control_pkg::motion::kCartesianLinePositionToleranceMeters ||
+            Eigen::AngleAxisd(tcp.rotation().transpose()*via_tcp_targets[via].rotation()).angle() >
+                motion_control_pkg::motion::kCartesianLineOrientationToleranceRadians) {
+            abort_goal("Continuous MoveP misses via TCP tolerance after retiming"); return;
+        }
+    }
     const auto trajectory_validation =
         motion_control_pkg::motion::validateTrajectoryPositions(
         planned_positions, effective_limits.lower, effective_limits.upper,
@@ -3726,8 +3870,8 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
 
     //   std::cout<<"i:="<<i<<","<<"v:="<< l_v_limit_[i]<<","<<r_v_limit_[i]<<std::endl;
       
-      l_a_limit_[i] = pnva_[0][i][3]*motion_control_pkg::kinematics::kDegreesToRadians;
-      r_a_limit_[i] = pnva_[1][i][3]*motion_control_pkg::kinematics::kDegreesToRadians;
+      l_a_limit_[i] = pnva_[0][i][3]*motion_control_pkg::kinematics::kDegreesToRadians * acceleration_scale_;
+      r_a_limit_[i] = pnva_[1][i][3]*motion_control_pkg::kinematics::kDegreesToRadians * acceleration_scale_;
 
     //   std::cout<<"i:="<<i<<","<<"a:="<< l_a_limit_[i]<<","<<r_a_limit_[i]<<std::endl;
       
@@ -3735,8 +3879,8 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
 
       // 加速度在上一行已经由度制转换为 rad/s²；jerk 只按倍数生成，
       // 不得再次乘 DEG2RAD，否则约束会被错误缩小约 57.3 倍。
-      l_jerk_limit_[i] = 5.0 * l_a_limit_[i];
-      r_jerk_limit_[i] = 5.0 * r_a_limit_[i];
+      l_jerk_limit_[i] = 5.0 * pnva_[0][i][3] * motion_control_pkg::kinematics::kDegreesToRadians * jerk_scale_;
+      r_jerk_limit_[i] = 5.0 * pnva_[1][i][3] * motion_control_pkg::kinematics::kDegreesToRadians * jerk_scale_;
       
     //   std::cout<<"i:="<<i<<","<<"j:="<< l_jerk_limit_[i]<<","<<r_jerk_limit_[i]<<std::endl;
     }

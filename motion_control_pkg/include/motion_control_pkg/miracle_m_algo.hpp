@@ -400,6 +400,8 @@ public:
         double timeout_seconds = 10.0,
         std::size_t max_seed_attempts = 10U,
         bool enable_collision_avoidance = true);
+    bool mergeSingleArmJoints(bool is_left, const std::vector<double>& reference,
+                              const std::vector<double>& arm, std::vector<double>& full) const;
     bool extractSingleArmJoints(bool is_left,
                                 const std::vector<double>& full_q,
                                 std::vector<double>& arm_q) const;
@@ -804,7 +806,8 @@ public:
         std::vector<std::vector<double>>& res_trajectory,
         ToppraSolverMode solver_mode = ToppraSolverMode::kSeidel,
         double maximum_duration_seconds =
-            std::numeric_limits<double>::infinity());
+            std::numeric_limits<double>::infinity(),
+        const std::vector<double>& max_jerk = {});
     
     // std::shared_ptr<GMCA::GMCA> robot; ///< 运动学，动力学底层类，封装为库
 
@@ -862,7 +865,8 @@ private:
         const Eigen::Isometry3d& goal,
         Eigen::VectorXd& q_res,
         int mode,
-        SingleArmIkWorkspace& workspace);
+        SingleArmIkWorkspace& workspace,
+        bool continuous_path = false);
 
     bool solveDualIK(const Eigen::VectorXd& q_init,
                      const Eigen::Isometry3d& left_goal,
