@@ -1465,11 +1465,12 @@ void CameraDriverNode::onFrameSet(size_t cam_index, std::shared_ptr<ob::FrameSet
       }
     }
 
-    // 头部位姿变换：将相机系点云从相机坐标系变换到机器人基坐标系
-    // （T = M_end × M_fixed，P' = T × P）；尚未收到头部位姿时保持原样。
+    // 点云坐标变换：按各相机外参将相机系点云变换到机器人基座标系（P' = T × P）。
+    //   0 号（头部）相机：T = M_end × kFixedTransform_0，两次转换（相机→头部→基座）；
+    //   1 号（底盘）相机：T = kFixedTransform_1，一次转换（相机→基座）。
     if (rgbd_msg->camera_rgbd_pointcloud.width > 0 &&
         rgbd_msg->camera_rgbd_pointcloud.height > 0) {
-      applyPointCloudTransform(rgbd_msg->camera_rgbd_pointcloud);
+      applyPointCloudTransform(rgbd_msg->camera_rgbd_pointcloud, camera_id);
     }
 
     // Transition to RUNNING on first valid frame
@@ -1571,8 +1572,9 @@ void CameraDriverNode::motor_callback(const MotorStatus::SharedPtr msg)
 // ----------------------------------------------------------
 // 头部位姿回调（/Control/HeadPose，眼在手标定）
 //   取 end_effector_pose[0]（头部末端位姿）构建 M_end 4×4，
-//   与固定标定矩阵 kFixedTransform_（相机→头部末端）相乘得到
-//   点云变换矩阵 T = M_end × M_fixed（行主序，P' = T × P）。
+//   与头部相机固定标定矩阵 kFixedTransform_0（相机→头部末端）相乘得到
+//   头部相机点云变换矩阵 T = M_end × kFixedTransform_0（行主序，P' = T × P）。
+//   头部相机需两次转换：相机→头部末端（kFixedTransform_0）→基座（M_end）。
 // ----------------------------------------------------------
 void CameraDriverNode::head_pose_callback(const MotorStatus::SharedPtr msg)
 {
@@ -1586,9 +1588,9 @@ void CameraDriverNode::head_pose_callback(const MotorStatus::SharedPtr msg)
   float M_end[16];
   poseToMat4(pose, M_end);
 
-  // T = M_end × M_fixed
+  // T = M_end × kFixedTransform_0（头部相机：相机→头部末端→基座）
   float T[16];
-  mat4Mul(M_end, kFixedTransform_.data(), T);
+  mat4Mul(M_end, kFixedTransform_0.data(), T);
 
   {
     std::lock_guard<std::mutex> lock(head_pose_mtx_);
@@ -1657,11 +1659,22 @@ void CameraDriverNode::mat4TransformPoint(const float M[16], float x, float y, f
   oz = M[8] * x + M[9] * y + M[10] * z + M[11];
 }
 
-// 应用已保存的变换矩阵 T 到点云：P' = T × P（原地修改 xyz），并更新 frame_id
-void CameraDriverNode::applyPointCloudTransform(sensor_msgs::msg::PointCloud2 &pc_msg)
+// 按 camera_id 选择对应相机的外参变换矩阵并应用到点云：P' = T × P（原地修改 xyz），
+// 并更新 frame_id 为基座标系。
+//   0 号（头部）相机：T = M_end × kFixedTransform_0（相机→头部末端→基座，两次转换），
+//     尚未收到头部位姿时点云保持原样；
+//   1 号（底盘）相机：T = kFixedTransform_1（相机→基座，一次转换，与头部位姿无关）。
+void CameraDriverNode::applyPointCloudTransform(sensor_msgs::msg::PointCloud2 &pc_msg,
+                                                uint8_t camera_id)
 {
   float T[16];
-  {
+  if (camera_id == 1) {
+    // 底盘相机：固定外参直接变换到基座标系
+    for (int i = 0; i < 16; ++i) {
+      T[i] = kFixedTransform_1[i];
+    }
+  } else {
+    // 头部相机：使用 M_end × kFixedTransform_0（头部末端位姿 × 相机→头部外参）
     std::lock_guard<std::mutex> lock(head_pose_mtx_);
     if (!head_pose_available_) {
       return;  // 尚未收到头部位姿，点云保持原样

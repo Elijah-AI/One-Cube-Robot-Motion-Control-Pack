@@ -43,7 +43,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'camera_id_sn_map',
-            default_value='["CPC8563000CJ","CPC85630003B"]',
+            default_value='["CPC8563000PW","CPC8563000CJ"]',
             description=(
                 'Multi-camera SN -> camera_id mapping (string array, index = camera_id): '
                 'camera_id 0=head (CPC8563000PW), 1=waist (CPC8563000X6); '

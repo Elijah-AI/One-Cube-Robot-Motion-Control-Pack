@@ -104,5 +104,9 @@ tasks:
     trigger_reg: 40104
     status_reg: 50104
     config_file: "tasks/pallet_place.yaml"
+  demo1:              # A2 放置到码垛回填（转运 → 码垛空缺格）
+    trigger_reg: 40105
+    status_reg: 50105
+    config_file: "tasks/demo1.yaml"
 boot_task:
   config_file: "boot_task.yaml"

@@ -156,7 +156,7 @@ private:
   bool all_node_online_; //所有节点成功连接
   bool error_;           //有无节点反馈异常
   bool emergency_;       //有无节点反馈急停
-  bool reset_done_;   //是否复位完成
+  bool reset_done_;      //是否复位完成
 };
 
 } // namespace safety_monitor

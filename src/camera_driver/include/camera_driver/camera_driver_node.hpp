@@ -231,12 +231,16 @@ class CameraDriverNode : public rclcpp::Node {
 
   // --- 头部位姿订阅与点云坐标变换（/Control/HeadPose，眼在手标定） ---
   // 订阅头部末端位姿（MotorStatus，取 end_effector_pose[0]）构建 M_end 4×4，
-  // 与固定标定矩阵 kFixedTransform_（相机→头部末端）相乘得到点云变换矩阵
-  // T = M_end × M_fixed，将相机系点云变换到机器人基坐标系（P' = T × P）。
+  // 与头部相机固定标定矩阵 kFixedTransform_0（相机→头部末端）相乘得到
+  // 头部相机点云变换矩阵 T = M_end × kFixedTransform_0（行主序，P' = T × P）。
+  // 头部相机需两次转换：相机→头部末端→基座。
   void head_pose_callback(const MotorStatus::SharedPtr msg);
-  // 应用已保存的变换矩阵 T 到点云（原地修改 xyz），并更新 frame_id 为基坐标系；
-  // 若尚未收到头部位姿则保持原样。
-  void applyPointCloudTransform(sensor_msgs::msg::PointCloud2 &pc_msg);
+  // 按 camera_id 选择对应相机的外参变换应用到点云（原地修改 xyz），并更新
+  // frame_id 为基座标系：
+  //   0 号（头部）相机：T = M_end × kFixedTransform_0（相机→头部→基座，两次转换），
+  //     尚未收到头部位姿时保持原样；
+  //   1 号（底盘）相机：T = kFixedTransform_1（相机→基座，一次转换，与头部位姿无关）。
+  void applyPointCloudTransform(sensor_msgs::msg::PointCloud2 &pc_msg, uint8_t camera_id);
   // 工具函数：四元数位姿 -> 4×4 矩阵（行主序）；4×4 相乘（行主序）；齐次变换点
   static void poseToMat4(const geometry_msgs::msg::Pose &pose, float M[16]);
   static void mat4Mul(const float A[16], const float B[16], float out[16]);
@@ -353,23 +357,32 @@ class CameraDriverNode : public rclcpp::Node {
   // --- 头部位姿与点云坐标变换状态 ---
   rclcpp::Subscription<MotorStatus>::SharedPtr sub_head_pose_{nullptr};
   std::mutex head_pose_mtx_;              // 保护 head_pose_transform_ / head_pose_available_
-  bool head_pose_available_ = false;      // 是否已收到头部位姿并构建变换矩阵
-  std::array<float, 16> head_pose_transform_{};  // T = M_end × M_fixed（行主序）
+  bool head_pose_available_ = false;      // 是否已收到头部位姿并构建变换矩阵（头部相机）
+  std::array<float, 16> head_pose_transform_{};  // 头部相机 T = M_end × kFixedTransform_0（行主序）
   // 固定标定矩阵 M_fixed（行主序，相机→头部末端，手眼标定结果） //141主机的
-  // const std::array<float, 16> kFixedTransform_{
-  //   0.01571449f, -0.30814851f,  0.9512087f,  0.10762206f,
-  //   0.00216534f, -0.95131259f, -0.3082185f,  0.12872836f,
-  //   0.99987466f,  0.00690311f, -0.01428272f, -0.01844746f,
-  //   0.0f,         0.0f,         0.0f,         1.0f
-  // };
+  // 0 号相机（头部相机）外参：相机 → 头部末端（还需再乘头部末端在基座系下的实时位姿 M_end）
+  const std::array<float, 16> kFixedTransform_0{
+    0.01571449f, -0.30814851f,  0.9512087f,  0.10762206f,
+    0.00216534f, -0.95131259f, -0.3082185f,  0.12872836f,
+    0.99987466f,  0.00690311f, -0.01428272f, -0.01844746f,
+    0.0f,         0.0f,         0.0f,         1.0f
+  };
+
+  // 1 号相机（底盘相机）外参：相机 → 基座标系（直接一次旋转到基座，与头部位姿无关）
+  const std::array<float, 16> kFixedTransform_1{
+    0.0f,  0.0f,  1.0f,  0.0f,
+    -1.0f, 0.0f,  0.0f,  0.0f,
+    0.0f, -1.0f,  0.0f,  0.0f,
+    0.0f,  0.0f,  0.0f,  1.0f
+  };
 
   // 固定标定矩阵 M_fixed（行主序，相机→头部末端，手眼标定结果） //136主机的
-  const std::array<float, 16> kFixedTransform_{
-    -1.4207706586713147e-02, -3.0468173843290935e-01, 9.5234824478183744e-01,  1.0791357510450654e-01,
-    5.5389667691170047e-03, -9.5245374778143488e-01, -3.0463285801802209e-01,  1.2887697895527106e-01,
-    9.9988372370024903e-01, 9.4689101708163163e-04, 1.5219805410230502e-02,    -2.7674147492936205e-02,
-    0.0f,         0.0f,          0.0f,         1.0f
-  };
+  // const std::array<float, 16> kFixedTransform_{
+  //   -1.4207706586713147e-02, -3.0468173843290935e-01, 9.5234824478183744e-01,  1.0791357510450654e-01,
+  //   5.5389667691170047e-03, -9.5245374778143488e-01, -3.0463285801802209e-01,  1.2887697895527106e-01,
+  //   9.9988372370024903e-01, 9.4689101708163163e-04, 1.5219805410230502e-02,    -2.7674147492936205e-02,
+  //   0.0f,         0.0f,          0.0f,         1.0f
+  // };
   // 点云变换后的坐标系 frame_id（机器人基坐标系）
   std::string pointcloud_base_frame_id_{"base_link"};
 
