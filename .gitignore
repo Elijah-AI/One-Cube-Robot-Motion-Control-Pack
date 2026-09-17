@@ -44,3 +44,12 @@ __pycache__/
 # Windows download metadata and local synchronization snapshots
 *:Zone.Identifier
 .robot*_sync_*/
+
+# Additional develop workspace artifacts
+# Editor / OS temporary files (won't be pushed to server)
+*.swp
+*.swo
+*~
+*.tmp
+*.orig
+.DS_Store

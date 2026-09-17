@@ -1,0 +1,992 @@
+# HHworkspace task: motion parameters and order preserved.
+action_sequencenum: 1
+action_sequence1:
+- parallel_actions:
+  - action_type: move_joints
+    params:
+      arm_id: '4'
+      joint_name:
+      - leg_joint1
+      - leg_joint2
+      - leg_joint3
+      - body_joint
+      position:
+      - -1.0
+      - 2.2
+      - -1.2
+      - -1.37
+      enable_collision_check: 0
+      speed: 0.8
+      timeout_ms: 15000
+  - action_type: move_joints
+    params:
+      arm_id: '0'
+      joint_name:
+      - Joint1_L
+      - Joint2_L
+      - Joint3_L
+      - Joint4_L
+      - Joint5_L
+      - Joint6_L
+      - Joint7_L
+      position:
+      - -0.3570031357117381
+      - -0.9126436008072708
+      - 0.3374029025895138
+      - -1.8517995028984984
+      - -0.9134245727969366
+      - 0.9415111351802664
+      - -0.8714162692361901
+      enable_collision_check: 0
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_joints
+    params:
+      arm_id: '1'
+      joint_name:
+      - Joint1_R
+      - Joint2_R
+      - Joint3_R
+      - Joint4_R
+      - Joint5_R
+      - Joint6_R
+      - Joint7_R
+      position:
+      - 0.6397361681014009
+      - -0.5832027176392532
+      - -0.8220328736686873
+      - -1.884303783477079
+      - 0.9503200065388943
+      - 0.5485912108481474
+      - 0.8430800355006652
+      enable_collision_check: 0
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 1
+      comport:
+      - 2
+      - 2
+      position:
+      - 0
+      - 120
+      speed:
+      - 0
+      - 255
+      max_torque:
+      - 0
+      - 60
+      block: true
+      timeout_ms: 10000
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 0
+      comport:
+      - 2
+      - 2
+      position:
+      - 120
+      - 0
+      speed:
+      - 255
+      - 0
+      max_torque:
+      - 60
+      - 0
+      block: true
+      timeout_ms: 10000
+- parallel_actions:
+  - action_type: move_pose
+    params:
+      arm_id: '1'
+      frame_id: base_link
+      target_pose:
+      - 0.5892883848637871
+      - 0.40222333445507424
+      - 1.0610234408027146
+      - 0.007908618677328557
+      - 0.999964740032175
+      - -0.0012695782943420617
+      - 0.002522025764307673
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_pose
+    params:
+      arm_id: '0'
+      frame_id: base_link
+      target_pose:
+      - 0.35752231689846964
+      - 0.4075158617094619
+      - 1.0958574044075944
+      - 0.9999084036424457
+      - -0.00199972610694888
+      - -0.013298983837791246
+      - 0.0015239585281199655
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.35
+      timeout_ms: 45000
+- parallel_actions:
+  - action_type: move_pose
+    params:
+      arm_id: '1'
+      frame_id: base_link
+      target_pose:
+      - 0.5892883848637871
+      - 0.40222333445507424
+      - 0.8110234408027145
+      - 0.007908618677328557
+      - 0.999964740032175
+      - -0.0012695782943420617
+      - 0.002522025764307673
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_pose
+    params:
+      arm_id: '0'
+      frame_id: base_link
+      target_pose:
+      - 0.35752231689846964
+      - 0.4075158617094619
+      - 0.8458574044075944
+      - 0.9999084036424457
+      - -0.00199972610694888
+      - -0.013298983837791246
+      - 0.0015239585281199655
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+- parallel_actions:
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 1
+      comport:
+      - 2
+      - 2
+      position:
+      - 0
+      - 255
+      speed:
+      - 0
+      - 255
+      max_torque:
+      - 0
+      - 60
+      block: true
+      timeout_ms: 10000
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 0
+      comport:
+      - 2
+      - 2
+      position:
+      - 255
+      - 0
+      speed:
+      - 255
+      - 0
+      max_torque:
+      - 60
+      - 0
+      block: true
+      timeout_ms: 10000
+- parallel_actions:
+  - action_type: move_pose
+    params:
+      arm_id: '1'
+      frame_id: base_link
+      target_pose:
+      - 0.5892883848637871
+      - 0.40222333445507424
+      - 1.0610234408027146
+      - 0.007908618677328557
+      - 0.999964740032175
+      - -0.0012695782943420617
+      - 0.002522025764307673
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_pose
+    params:
+      arm_id: '0'
+      frame_id: base_link
+      target_pose:
+      - 0.35752231689846964
+      - 0.4075158617094619
+      - 1.0958574044075944
+      - 0.9999084036424457
+      - -0.00199972610694888
+      - -0.013298983837791246
+      - 0.0015239585281199655
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+- action_type: move_joints
+  params:
+    arm_id: '4'
+    joint_name:
+    - leg_joint1
+    - leg_joint2
+    - leg_joint3
+    - body_joint
+    position:
+    - -1.0
+    - 2.2
+    - -1.2
+    - 0.0
+    enable_collision_check: 0
+    speed: 0.8
+    timeout_ms: 15000
+- action_type: move_pose
+  params:
+    arm_id: '1'
+    frame_id: base_link
+    target_pose:
+    - 0.8479058980816546
+    - -0.06958163336625772
+    - 1.059754675964031
+    - 0.7140013642716687
+    - 0.6991433193507577
+    - 0.024978959057485633
+    - 0.027869740397155982
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: false
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: move_pose
+  params:
+    arm_id: '1'
+    frame_id: base_link
+    target_pose:
+    - 0.8479058980816546
+    - -0.06958163336625772
+    - 0.859754675964031
+    - 0.7140013642716687
+    - 0.6991433193507577
+    - 0.024978959057485633
+    - 0.027869740397155982
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: gripper_ctrl
+  params:
+    gripper_id: 1
+    comport:
+    - 2
+    - 2
+    position:
+    - 0
+    - 150
+    speed:
+    - 0
+    - 255
+    max_torque:
+    - 0
+    - 60
+    block: true
+    timeout_ms: 10000
+- action_type: move_pose
+  params:
+    arm_id: '1'
+    frame_id: base_link
+    target_pose:
+    - 0.8479058980816546
+    - -0.06958163336625772
+    - 1.059754675964031
+    - 0.7140013642716687
+    - 0.6991433193507577
+    - 0.024978959057485633
+    - 0.027869740397155982
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- parallel_actions:
+  - action_type: move_joints
+    params:
+      arm_id: '1'
+      joint_name:
+      - Joint1_R
+      - Joint2_R
+      - Joint3_R
+      - Joint4_R
+      - Joint5_R
+      - Joint6_R
+      - Joint7_R
+      position:
+      - 0.6397361681014009
+      - -0.5832027176392532
+      - -0.8220328736686873
+      - -1.884303783477079
+      - 0.9503200065388943
+      - 0.5485912108481474
+      - 0.8430800355006652
+      enable_collision_check: 0
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_joints
+    params:
+      arm_id: '4'
+      joint_name:
+      - leg_joint1
+      - leg_joint2
+      - leg_joint3
+      - body_joint
+      position:
+      - -1.0
+      - 2.2
+      - -1.2
+      - 0.4
+      enable_collision_check: 0
+      speed: 0.8
+      timeout_ms: 15000
+- action_type: move_pose
+  params:
+    arm_id: '0'
+    frame_id: base_link
+    target_pose:
+    - 0.849704152321697
+    - 0.008974885217462189
+    - 1.063319495516948
+    - 0.7080667363643175
+    - -0.7059446817562889
+    - 0.010155842054073355
+    - -0.013433615543428786
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: false
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: move_pose
+  params:
+    arm_id: '0'
+    frame_id: base_link
+    target_pose:
+    - 0.849704152321697
+    - 0.008974885217462189
+    - 0.8633194955169481
+    - 0.7080667363643175
+    - -0.7059446817562889
+    - 0.010155842054073355
+    - -0.013433615543428786
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: gripper_ctrl
+  params:
+    gripper_id: 0
+    comport:
+    - 2
+    - 2
+    position:
+    - 150
+    - 0
+    speed:
+    - 255
+    - 0
+    max_torque:
+    - 60
+    - 0
+    block: true
+    timeout_ms: 10000
+- action_type: move_pose
+  params:
+    arm_id: '0'
+    frame_id: base_link
+    target_pose:
+    - 0.849704152321697
+    - 0.008974885217462189
+    - 1.063319495516948
+    - 0.7080667363643175
+    - -0.7059446817562889
+    - 0.010155842054073355
+    - -0.013433615543428786
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- parallel_actions:
+  - action_type: move_joints
+    params:
+      arm_id: '4'
+      joint_name:
+      - leg_joint1
+      - leg_joint2
+      - leg_joint3
+      - body_joint
+      position:
+      - -1.0
+      - 2.2
+      - -1.2
+      - -1.57
+      enable_collision_check: 0
+      speed: 0.8
+      timeout_ms: 15000
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 1
+      comport:
+      - 2
+      - 2
+      position:
+      - 0
+      - 100
+      speed:
+      - 0
+      - 255
+      max_torque:
+      - 0
+      - 60
+      block: true
+      timeout_ms: 10000
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 0
+      comport:
+      - 2
+      - 2
+      position:
+      - 120
+      - 0
+      speed:
+      - 255
+      - 0
+      max_torque:
+      - 60
+      - 0
+      block: true
+      timeout_ms: 10000
+- parallel_actions:
+  - action_type: move_pose
+    params:
+      arm_id: '1'
+      frame_id: base_link
+      target_pose:
+      - 0.5204827605553153
+      - 0.4056060309702072
+      - 1.0717764117474335
+      - -0.03718022364988024
+      - 0.9989343476897845
+      - -0.022431486575720406
+      - 0.015640600529803803
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_pose
+    params:
+      arm_id: '0'
+      frame_id: base_link
+      target_pose:
+      - 0.26552412986432467
+      - 0.4118776840913863
+      - 1.0721877077224846
+      - 0.9997810180368611
+      - 0.012582149119897792
+      - 0.0016212844505930485
+      - -0.01664262399481089
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.35
+      timeout_ms: 45000
+- parallel_actions:
+  - action_type: move_pose
+    params:
+      arm_id: '1'
+      frame_id: base_link
+      target_pose:
+      - 0.5204827605553153
+      - 0.4056060309702072
+      - 0.8067764117474336
+      - -0.03718022364988024
+      - 0.9989343476897845
+      - -0.022431486575720406
+      - 0.015640600529803803
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_pose
+    params:
+      arm_id: '0'
+      frame_id: base_link
+      target_pose:
+      - 0.26552412986432467
+      - 0.4118776840913863
+      - 0.8221877077224846
+      - 0.9997810180368611
+      - 0.012582149119897792
+      - 0.0016212844505930485
+      - -0.01664262399481089
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+- parallel_actions:
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 1
+      comport:
+      - 2
+      - 2
+      position:
+      - 0
+      - 255
+      speed:
+      - 0
+      - 255
+      max_torque:
+      - 0
+      - 60
+      block: true
+      timeout_ms: 10000
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 0
+      comport:
+      - 2
+      - 2
+      position:
+      - 255
+      - 0
+      speed:
+      - 255
+      - 0
+      max_torque:
+      - 60
+      - 0
+      block: true
+      timeout_ms: 10000
+- parallel_actions:
+  - action_type: move_pose
+    params:
+      arm_id: '1'
+      frame_id: base_link
+      target_pose:
+      - 0.5204827605553153
+      - 0.4056060309702072
+      - 1.0997764117474336
+      - -0.03718022364988024
+      - 0.9989343476897845
+      - -0.022431486575720406
+      - 0.015640600529803803
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_pose
+    params:
+      arm_id: '0'
+      frame_id: base_link
+      target_pose:
+      - 0.26552412986432467
+      - 0.4118776840913863
+      - 1.0921877077224846
+      - 0.9997810180368611
+      - 0.012582149119897792
+      - 0.0016212844505930485
+      - -0.01664262399481089
+      bound_size:
+      - 0.0
+      - 0.0
+      - 0.0
+      use_config_pose: true
+      enable_collision_check: 0
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.35
+      timeout_ms: 45000
+- action_type: move_joints
+  params:
+    arm_id: '4'
+    joint_name:
+    - leg_joint1
+    - leg_joint2
+    - leg_joint3
+    - body_joint
+    position:
+    - -1.0
+    - 2.2
+    - -1.2
+    - -0.4
+    enable_collision_check: 0
+    speed: 0.8
+    timeout_ms: 15000
+- action_type: move_pose
+  params:
+    arm_id: '1'
+    frame_id: base_link
+    target_pose:
+    - 0.8637583238097376
+    - -0.028816892423092866
+    - 1.054465498945953
+    - 0.7139391509165717
+    - 0.6977154907343159
+    - 0.02051436626400927
+    - 0.0553456733149355
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: false
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: move_pose
+  params:
+    arm_id: '1'
+    frame_id: base_link
+    target_pose:
+    - 0.8637583238097376
+    - -0.028816892423092866
+    - 0.854465498945953
+    - 0.7139391509165717
+    - 0.6977154907343159
+    - 0.02051436626400927
+    - 0.0553456733149355
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: gripper_ctrl
+  params:
+    gripper_id: 1
+    comport:
+    - 2
+    - 2
+    position:
+    - 0
+    - 150
+    speed:
+    - 0
+    - 255
+    max_torque:
+    - 0
+    - 60
+    block: true
+    timeout_ms: 10000
+- action_type: move_pose
+  params:
+    arm_id: '1'
+    frame_id: base_link
+    target_pose:
+    - 0.8637583238097376
+    - -0.028816892423092866
+    - 1.054465498945953
+    - 0.7139391509165717
+    - 0.6977154907343159
+    - 0.02051436626400927
+    - 0.0553456733149355
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- parallel_actions:
+  - action_type: move_joints
+    params:
+      arm_id: '1'
+      joint_name:
+      - Joint1_R
+      - Joint2_R
+      - Joint3_R
+      - Joint4_R
+      - Joint5_R
+      - Joint6_R
+      - Joint7_R
+      position:
+      - 0.6397361681014009
+      - -0.5832027176392532
+      - -0.8220328736686873
+      - -1.884303783477079
+      - 0.9503200065388943
+      - 0.5485912108481474
+      - 0.8430800355006652
+      enable_collision_check: 0
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_joints
+    params:
+      arm_id: '4'
+      joint_name:
+      - leg_joint1
+      - leg_joint2
+      - leg_joint3
+      - body_joint
+      position:
+      - -1.0
+      - 2.2
+      - -1.2
+      - 0.4
+      enable_collision_check: 0
+      speed: 0.8
+      timeout_ms: 15000
+- action_type: move_pose
+  params:
+    arm_id: '0'
+    frame_id: base_link
+    target_pose:
+    - 0.8520276737486208
+    - 0.04062413283428013
+    - 1.0675115573964273
+    - 0.7084984454064637
+    - -0.7052231446211558
+    - 0.02261895829822822
+    - -0.013366071703215987
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: false
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: move_pose
+  params:
+    arm_id: '0'
+    frame_id: base_link
+    target_pose:
+    - 0.8520276737486208
+    - 0.04062413283428013
+    - 0.8675115573964274
+    - 0.7084984454064637
+    - -0.7052231446211558
+    - 0.02261895829822822
+    - -0.013366071703215987
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- action_type: gripper_ctrl
+  params:
+    gripper_id: 0
+    comport:
+    - 2
+    - 2
+    position:
+    - 150
+    - 0
+    speed:
+    - 255
+    - 0
+    max_torque:
+    - 60
+    - 0
+    block: true
+    timeout_ms: 10000
+- action_type: move_pose
+  params:
+    arm_id: '0'
+    frame_id: base_link
+    target_pose:
+    - 0.8520276737486208
+    - 0.04062413283428013
+    - 1.0675115573964273
+    - 0.7084984454064637
+    - -0.7052231446211558
+    - 0.02261895829822822
+    - -0.013366071703215987
+    bound_size:
+    - 0.0
+    - 0.0
+    - 0.0
+    use_config_pose: true
+    enable_collision_check: 0
+    use_force_control: false
+    enable_move_line: true
+    speed: 0.35
+    timeout_ms: 45000
+- parallel_actions:
+  - action_type: move_joints
+    params:
+      arm_id: '0'
+      joint_name:
+      - Joint1_L
+      - Joint2_L
+      - Joint3_L
+      - Joint4_L
+      - Joint5_L
+      - Joint6_L
+      - Joint7_L
+      position:
+      - -0.3570031357117381
+      - -0.9126436008072708
+      - 0.3374029025895138
+      - -1.8517995028984984
+      - -0.9134245727969366
+      - 0.9415111351802664
+      - -0.8714162692361901
+      enable_collision_check: 0
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_joints
+    params:
+      arm_id: '1'
+      joint_name:
+      - Joint1_R
+      - Joint2_R
+      - Joint3_R
+      - Joint4_R
+      - Joint5_R
+      - Joint6_R
+      - Joint7_R
+      position:
+      - 0.6397361681014009
+      - -0.5832027176392532
+      - -0.8220328736686873
+      - -1.884303783477079
+      - 0.9503200065388943
+      - 0.5485912108481474
+      - 0.8430800355006652
+      enable_collision_check: 0
+      speed: 0.35
+      timeout_ms: 45000
+  - action_type: move_joints
+    params:
+      arm_id: '4'
+      joint_name:
+      - leg_joint1
+      - leg_joint2
+      - leg_joint3
+      - body_joint
+      position:
+      - -1.0
+      - 2.2
+      - -1.2
+      - 0.0
+      enable_collision_check: 0
+      speed: 0.8
+      timeout_ms: 15000

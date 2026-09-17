@@ -1,0 +1,19 @@
+self_check:
+  action_sequence:
+  - action_type: vision_check_self
+    params:
+      timeout_ms: 15000
+  - action_type: control_check_self
+    params:
+      comport:
+      - 2
+      - 2
+      timeout_ms: 15000
+reset:
+  action_sequence:
+  - action_type: vision_reset
+    params:
+      timeout_ms: 15000
+  - action_type: control_reset
+    params:
+      timeout_ms: 15000

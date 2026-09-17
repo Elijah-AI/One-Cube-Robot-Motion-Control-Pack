@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>vision_calibration</name>
+  <version>0.0.1</version>
+  <description>Hand-eye calibration data acquisition node controlled by CalibrationControl action</description>
+  <maintainer email="user@test.com">user</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>com_interfaces</depend>
+  <depend>cv_bridge</depend>
+  <depend>libopencv-dev</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

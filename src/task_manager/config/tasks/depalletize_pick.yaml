@@ -1,0 +1,129 @@
+# ============================================================================
+# task_manager 单箱任务动作配置 —— A1 码垛取箱（depalletize_pick）
+# ============================================================================
+# 对应场景方案：task_manager/docs/scenario_palletizing_rack_transfer.md
+#   §7.2 取箱 SOP P1~P5 / §8.1（触发 40101 / 状态 50101）/ §8.2 A1 / §8.4 示例
+# 触发/状态寄存器见主配置 task_config.yaml（tasks.depalletize_pick.*）
+# 本文件由主配置 tasks.depalletize_pick.config_file 外链加载（相对主配置目录解析）
+#
+# 【任务语义（单点检测，方案A）—— 两段复用本任务文件】
+#   本任务只搬 1 箱。M4/SRC-1000 触发前须先把底盘导航/换站到该箱号对应的子站点
+#   PALLET_A_* 并到位停稳；当前目标号 #b 与层阶段（正向段1 第3层整层按 #9→#1 递减、
+#   段2 第2层按 #9→#8→#7 递减，#1 也取走、共 12 箱）由 M4/计数作为 target_no 注入。
+#   视觉只对 target_no=#b 列"当前最上层未取走箱"的格做单点检测（type=0 码垛箱；
+#   段1 为第3层、站高 H3；段2 时第3层已空、返回第2层该列箱、站高 H2=H3−250 mm）：
+#     命中（该 #b 列当前层仍有箱，未被取走）→ 返回该箱 6D + 置信度，进入抓取；
+#     未命中（已取走/无箱）→ detected_targets 为空（total_detected_count=0），
+#                          本任务不抓取，由主站按顺序/异常核对（见方案 9.3）。
+#   不扫描全层、不返回其余格位、不做编号排序（方案A）。段1/段2 复用本任务文件，层阶段由编排给定。
+#
+# 【执行约定（固定点位执行、无视觉伺服）】
+#   - 抓/放各 move_pose 段按动作前视觉一次定位给出的固定位姿执行，不实时跟视觉；
+#   - 贴合到位判定暂以"低速位置到位"为准（下压/下放到设定位姿即判贴合）；
+#   - use_force_control 力控贴合确认为后续实现项（此处统一 false）；
+#   - 抓/放各 move_pose 段开启 自身避障(enable_collision_check) + 环境避障
+#     (enable_collision_check=2)，bound_size 按吸盘+当前所持箱体实际包络逐段下发（现场标定）；
+#   - enable_move_line（垂直直线进出）为运控侧建议能力，当前运行版本未开放，支持后按需开启。
+#
+# 【字段说明】
+#   - use_config_pose=false 的 move_pose：target_pose 为占位值（现场标定替换），
+#     运行期由同 action_sequence 的 vision_detect 结果（detected_targets[0].pose）注入；
+#   - 抬升/退开等"人工固定高位姿"段建议 use_config_pose=true 并按现场写死目标位姿
+#     （扩展点 T2 pose_offset 落地后可改回视觉位 + 相对偏移，见方案 8.3 T2）；
+#   - vision_detect 的 type / target_no 为本场景按 target_no 扩展的单点检测字段
+#     （现行解析器仅读取 目标名/坐标系/优先级，其余键安全忽略；type/target_no 待代码支持后生效）。
+# ============================================================================
+action_sequencenum: 1
+action_sequence1:
+  # ① 取箱前询问视觉：对 target_no=#b 列"当前最上层未取走箱"格单点检测（type=0 码垛箱）
+  #   命中（该格仍有箱）→ 返回该箱 6D+置信度；未命中（已取走/无箱）→ detected_targets 为空
+  - action_type: vision_detect
+    delay_ms: 0
+    params:
+      target_obj_name: "pallet_box"     # 码垛箱
+      expected_frame_id: "base_link"    # 视觉 6D 输出系（按手眼/车体外参标定结果）
+      type: 0                           # 0=码垛箱抓取单点检测（扩展字段，代码支持后生效）
+      target_no: 9                      # 目标号格 #b（示例=正向段1 首箱 第3层#9；M4 按段1 第3层 #9→#1 递减、段2 第2层 #9→#7 递减注入，扩展字段）
+      priority: 1
+    feedback_check:                     # 置信度过低 → 按反馈条件选视角微调动作并重测（见方案 6.4/8.2）
+      enable: true
+      check_field: "detected_targets[0].confidence"
+      operator: ">="
+      threshold: 0.6
+      max_retries: 2
+      on_exhaust: "fail"                # 重试用尽仍不足 → 本动作失败
+      retry_actions:
+        # 兜底微调：头部 move_pose 回正视作业面的标定视角（现场标定替换）
+        - action_type: move_pose
+          params:
+            arm_id: 3                   # HEAD
+            frame_id: "base_link"
+            enable_collision_check: 0
+            use_config_pose: true
+            use_force_control: false
+            target_pose: [520.0, 0.0, 830.0, 0.0, 0.0, 0.0, 1.0]  # 占位，现场标定
+            bound_size: [0.0, 0.0, 0.0]
+            speed: 0.2
+            hand_action_type: []
+            timeout_ms: 5000
+  # ② P1 接近：左臂到箱顶上方安全高度（use_config_pose=false，占位位姿由 ① 视觉结果注入）
+  - action_type: move_pose
+    delay_ms: 0
+    params:
+      arm_id: 0                         # ARM_LEFT
+      frame_id: "base_link"
+      enable_collision_check: 2  # 自碰撞 + 外部点云
+      use_config_pose: false            # false：运行期使用同序列 ① 的视觉位姿
+      use_force_control: false
+      target_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]  # 占位（视觉结果注入；现场标定）
+      bound_size: [0.0, 0.0, 0.15]
+      speed: 0.3
+      hand_action_type: []
+      timeout_ms: 8000
+  # ③ P2 下压贴合：低速下降至吸附面（低速位置到位，到设定位姿即判贴合）
+  - action_type: move_pose
+    delay_ms: 0
+    params:
+      arm_id: 0
+      frame_id: "base_link"
+      enable_collision_check: 2  # 自碰撞 + 外部点云
+      use_config_pose: false
+      use_force_control: false          # 力控贴合后续实现，暂 false
+      target_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]  # 占位（视觉结果 + 下压量；现场标定）
+      bound_size: [0.0, 0.0, 0.15]
+      speed: 0.1                        # 低速
+      hand_action_type: []
+      timeout_ms: 8000
+  # ④ P3 吸气吸附（左吸盘）
+  - action_type: control_suck
+    delay_ms: 500
+    params:
+      suck_id: 0                        # SUCK_LEFT
+      active: [true, true]
+      timeout_ms: 5000
+  # ⑤ P4 抬升出箱：吸附后提起（垂直出箱避免刮碰邻箱/层板）；抬升带箱包络。
+  #    建议写为固定高位姿（use_config_pose=true，现场标定；T2 pose_offset 落地后可改视觉位+偏移）
+  - action_type: move_pose
+    delay_ms: 0
+    params:
+      arm_id: 0
+      frame_id: "base_link"
+      enable_collision_check: 2  # 自碰撞 + 外部点云
+      use_config_pose: true             # 示例：抬升用固定高位姿（现场标定替换）
+      use_force_control: false
+      target_pose: [0.0, 0.0, 300.0, 0.0, 0.0, 0.0, 1.0]  # 占位，现场标定（吸盘+箱包络）
+      bound_size: [0.0, 0.0, 0.30]
+      speed: 0.2
+      hand_action_type: []
+      timeout_ms: 5000
+  # ⑥ P5 回缩至移动段姿态（导航前安全收纳）
+  - action_type: move_joints
+    delay_ms: 0
+    params:
+      arm_id: 0
+      joint_name: ["Joint1_L","Joint2_L","Joint3_L","Joint4_L","Joint5_L","Joint6_L","Joint7_L"]
+      position: [1.7, -1.2, -1.7, -1.6, 0.0, 0.0, 0.0]
+      synchronization_mode: 0
+      enable_collision_check: 1
+      speed: 0.3
+      timeout_ms: 30000

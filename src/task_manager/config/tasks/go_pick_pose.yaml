@@ -1,0 +1,27 @@
+# 单个任务的动作列表（触发寄存器与状态寄存器见主配置 task_config.yaml）
+# 本文件由主配置 tasks.go_pick_pose.config_file 外链加载（相对主配置目录解析）
+action_sequencenum: 2
+action_sequence1:
+  - action_type: move_joints
+    delay_ms: 0                    # 执行前延迟时间（毫秒），0 表示不延迟
+    params:
+      arm_id: 2
+      left_joint_name: ["Joint1_L","Joint2_L","Joint3_L","Joint4_L", "Joint5_L","Joint6_L","Joint7_L"]
+      left_position: [1.7, -1.2, -1.7, -1.6, 0.0, 0.0, 0.0]
+      right_joint_name: ["Joint1_R","Joint2_R","Joint3_R","Joint4_R","Joint5_R","Joint6_R","Joint7_R"]
+      right_position: [-1.7, -1.2, 1.7, -1.6,0.0, 0.0, 0.0]
+      synchronization_mode: 0
+      enable_collision_check: 0
+      speed: 0.3
+      timeout_ms: 30000
+action_sequence2:
+  - action_type: move_joints
+    delay_ms: 0                    # 执行前延迟时间（毫秒），0 表示不延迟
+    params:
+      arm_id: 4
+      joint_name: ["leg_joint1","leg_joint2","leg_joint3","body_joint"]
+      position: [-1.0, 2.0, -1.0, 0.0]
+      synchronization_mode: 0
+      enable_collision_check: 0
+      speed: 0.3
+      timeout_ms: 30000

@@ -1,0 +1,183 @@
+@startuml
+' ============================================================
+' 双机械臂移动机器人 ROS2 系统 · 业务架构图（业务分层 · 产业链视图）
+' 布局: 从上到下 5 层 = 业务接入层 / 用户层 / 平台层 / 数据层 / 资源层
+'       从左到右 3 列 = 上游产业 → 业务模型 → 下游产业
+' 视角: 以「产业链 + 业务分层」组织，区别于 system_architecture.puml(模块总览)
+'       与 system_dataflow_architecture.puml(数据流)。
+' 节点依据: motion_control_pkg / task_manager / safety_monitor /
+'           camera_sync / camera_driver / robot_time_sync_node /
+'           vision_py_node / ros2_vision_action 各包源码与 launch
+' 本文件为独立新增，不覆盖任何既有架构图；本图为纯分布布局，不含箭头连线
+' ============================================================
+title 双机械臂移动机器人 ROS2 系统 · 业务架构图（业务分层 · 产业链视图）
+caption 覆盖全部 ROS2 节点：motion_control_node · task_manager_node · safety_monitor_node<br/>camera_sync · camera_driver_node · time_sync_node<br/>vision_py(ros2_sender) · detection_pose_cloud_server
+
+' ---------- 全局样式 ----------
+hide circle
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Microsoft YaHei"
+skinparam defaultFontSize 12
+skinparam nodesep 8
+skinparam ranksep 12
+skinparam componentPadding 2
+skinparam component {
+  BackgroundColor #FBFCFD
+  BorderColor #2C3E50
+  FontColor #2C3E50
+  FontSize 11
+}
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #2C3E50
+  FontColor #2C3E50
+  FontSize 11
+}
+skinparam component<<external>> {
+  BackgroundColor #F4F6F7
+  BorderColor #85929E
+  FontColor #566573
+  FontStyle italic
+}
+skinparam component<<node>> {
+  BackgroundColor #E8F6F3
+  BorderColor #148F77
+  FontColor #0E6655
+}
+skinparam component<<service>> {
+  BackgroundColor #FEF9E7
+  BorderColor #B7950B
+  FontColor #7D6608
+}
+skinparam package {
+  BackgroundColor #F4F8FB
+  BorderColor #34495E
+  FontColor #1F618D
+  FontSize 12
+}
+skinparam legend {
+  BackgroundColor #FEF9E7
+  BorderColor #F1C40F
+  FontColor #7D6608
+  FontSize 11
+}
+
+legend right
+  【布局】
+  纵向 5 层: 业务接入 / 用户 / 平台 / 数据 / 资源
+  横向 3 列: 上游产业 → 业务模型 → 下游产业
+  ==
+  【角色图例】
+  ⬜ 灰底斜体 = 外部系统 / 上游产业
+  🟩 绿底 = ROS2 节点 / 业务模型
+  🟨 黄底 = 服务对象 / 下游产业
+  ==
+  【说明】
+  本图为纯分布布局（无箭头连线）
+  节点均来自本工程源码与 launch
+endlegend
+
+' ============================================================
+' 第 1 层 · 业务接入层（订单/任务如何进入系统）
+' ============================================================
+package "业务接入层\n[ 业务来源 / 任务接入 ]" as L1 {
+  ' --- 上游产业 ---
+  component "WMS\n仓储管理系统\n订单 / 任务来源" as WMS <<external>>
+  component "MES\n制造执行系统\n订单 / 任务来源" as MES <<external>>
+  component "协议转换模块\nHTTP / MQTT\n业务对接 · 任务转化" as PT <<external>>
+  component "M4 调度平台\n[ 仙工 ]\n多车调度 · 运单\n任务下发" as M4 <<external>>
+  component "SRC-1000 导航控制盒\n[ 上位主站 ]\n底盘导航 · 定位\nModbus TCP 主站\n任务指令下发" as SRC <<external>>
+  ' --- 业务模型 ---
+  component "任务接入\n[ task_manager_node ]\nModbus TCP 从站 :12000\nFC03/FC06\n任务指令 / 状态读写" as TM_MB <<node>>
+  ' --- 下游产业 ---
+  component "PLC 外设\nModbus TCP 从站\n外部 I/O 读写" as PLC <<external>>
+}
+
+' ============================================================
+' 第 2 层 · 用户层（面向人的交互与呈现）
+' ============================================================
+package "用户层\n[ 人机交互 / 状态呈现 ]" as L2 {
+  ' --- 上游产业 ---
+  component "上位监控 / 操作台\n外部监控系统\n系统状态查询" as MON <<external>>
+  ' --- 业务模型 ---
+  component "人机交互 HMI\n屏幕显示 · 485 灯光\n声音播报\n安全/运行状态呈现" as HMI_UI <<node>>
+  component "系统状态服务\n[ safety_monitor_node ]\nGetSystemStatus\n全局状态查询" as ST_SRV <<node>>
+  ' --- 下游产业 ---
+  component "操作者 / 产线用户\n[ 服务对象 ]" as USER <<service>>
+}
+
+' ============================================================
+' 第 3 层 · 平台层（核心业务平台 / 引擎）
+' ============================================================
+package "平台层\n[ 核心业务平台 ]" as L3 {
+  ' --- 业务模型：任务编排 / 安全监管 / 视觉检测 / 运动执行 ---
+  component "任务编排引擎\n[ task_manager_node ]\nFSM 状态机 · 行为树\n任务分解 · 动作编排\n动作客户端 ×9" as TASK <<node>>
+  component "安全监管平台\n[ safety_monitor_node ]\n心跳看门狗 · 节点监控\n整机安全 FSM · 故障处理" as SAFE <<node>>
+  component "视觉检测引擎\n[ vision_py + detection_pose_cloud_server ]\nYOLO 检测 / 分割\nRANSAC · 6D 位姿估计\nAction 服务" as VIS <<node>>
+  component "运动执行引擎\n[ motion_control_node ]\n双臂执行 · 夹爪 · 吸盘\n基座位姿 · 自检复位\n防碰撞轨迹规划" as MOT <<node>>
+}
+
+' ============================================================
+' 第 4 层 · 数据层（数据采集 / 对齐 / 融合 / 流转）
+' ============================================================
+package "数据层\n[ 数据采集 / 融合 / 流转 ]" as L4 {
+  ' --- 业务模型：数据节点 ---
+  component "camera_driver_node\nRGB-D 采集发布\n/camera/*" as CD_DRV <<node>>
+  component "camera_sync\n[ 相机驱动+时间融合 ]\n采集 · D2C 对齐\n电机-相机时间戳融合\n发布 SyncedRobotVision" as CAM_SYNC <<node>>
+  component "time_sync_node\n电机-相机时间戳\n对齐融合(独立包)" as TS_SYNC <<node>>
+  component "状态 / 心跳数据\nMotorStatus · HeartBeat\nNodeStatus · SafetyState\n末端位姿" as ST_DATA <<node>>
+}
+
+' ============================================================
+' 第 5 层 · 资源层（硬件 / 外设资源）
+' ============================================================
+package "资源层\n[ 硬件 / 外设资源 ]" as L5 {
+  component "EtherCAT 伺服驱动\n双臂关节驱动" as HW_ECAT
+  component "夹爪 ×2\nRS485 Jodell" as HW_GRIP
+  component "吸盘\nGPIO Neardi47" as HW_SUCK
+  component "Orbbec RGB-D\n相机" as HW_CAM
+  component "SRC-1000 底盘\n激光 · 舵轮 · IMU · 电池" as HW_SRC
+  component "HMI 外设\n485 灯光 · 屏幕 · 声音" as HW_HMI
+  component "产线 / 工件\n[ 作业服务对象 ]" as LINE <<service>>
+}
+
+' ============================================================
+' 布局控制（hidden 连线，仅排版，不显示箭头）
+' ============================================================
+' --- 5 层纵向脊柱（从上到下堆叠） ---
+L1 -[hidden]down- L2
+L2 -[hidden]down- L3
+L3 -[hidden]down- L4
+L4 -[hidden]down- L5
+' --- 业务接入层 内部（上游产业 → 任务接入 → 下游产业） ---
+WMS -[hidden]right- MES
+MES -[hidden]right- PT
+PT -[hidden]right- M4
+M4 -[hidden]right- SRC
+SRC -[hidden]right- TM_MB
+TM_MB -[hidden]right- PLC
+' --- 用户层 内部（上游 → 业务 → 下游） ---
+MON -[hidden]right- HMI_UI
+HMI_UI -[hidden]right- ST_SRV
+ST_SRV -[hidden]right- USER
+' --- 平台层 内部（任务编排 → 安全 → 视觉 → 运动执行） ---
+TASK -[hidden]right- SAFE
+SAFE -[hidden]right- VIS
+VIS -[hidden]right- MOT
+' --- 数据层 内部 ---
+CD_DRV -[hidden]right- CAM_SYNC
+CAM_SYNC -[hidden]right- TS_SYNC
+TS_SYNC -[hidden]right- ST_DATA
+' --- 资源层 内部 ---
+HW_ECAT -[hidden]right- HW_GRIP
+HW_GRIP -[hidden]right- HW_SUCK
+HW_SUCK -[hidden]right- HW_CAM
+HW_CAM -[hidden]right- HW_SRC
+HW_SRC -[hidden]right- HW_HMI
+HW_HMI -[hidden]right- LINE
+' --- 5 层纵向脊柱：仅 package 级堆叠（保证从上到下且整体左对齐） ---
+
+@enduml

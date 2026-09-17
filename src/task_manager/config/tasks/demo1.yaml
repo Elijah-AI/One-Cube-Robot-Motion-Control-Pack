@@ -1,0 +1,127 @@
+# 单个任务的动作列表（触发寄存器与状态寄存器见主配置 task_config.yaml）
+# 本文件由主配置 tasks.move_box.config_file 外链加载（相对主配置目录解析）
+action_sequencenum: 1
+action_sequence1:
+ 
+  - action_type: move_joints
+    delay_ms: 0                    # 执行前延迟时间（毫秒），0 表示不延迟
+    params:
+      arm_id: 4
+      joint_name: ['leg_joint1','leg_joint2','leg_joint3','body_joint']
+      position: [1.4, 2.9, -1.3, 0]
+      synchronization_mode: 0
+      enable_collision_check: 0
+      speed: 0.2
+      timeout_ms: 30000
+  - action_type: move_joints
+    delay_ms: 1                    # 执行前延迟时间（毫秒），0 表示不延迟
+    params:
+      arm_id: 1
+      joint_name: ['Joint1_R','Joint2_R','Joint3_R','Joint4_R', 'Joint5_R','Joint6_L','Joint7_L']
+      position: [-1.7, -1.2, 1.7, -1.6, 0.0, 0.0, 0.0]
+      synchronization_mode: 0
+      enable_collision_check: 0
+      speed: 0.2
+      timeout_ms: 30000
+  - action_type: move_pose
+    delay_ms: 0                      # 执行前延迟时间（毫秒），0 表示不延迟
+    params:
+      arm_id: 1
+      frame_id: "base_link"
+      enable_collision_check: 0
+      use_config_pose: true
+      target_pose: [0.9398, -0.2633, 0.4571, 1, 0, 0, 0]
+      bound_size: [0.0, 0.0, 0.0]
+      use_force_control: false
+      speed: 0.5
+      hand_action_type: []
+      timeout_ms: 5000
+  # - action_type: control_suck
+  #   delay_ms: 500                    # 执行前延迟时间（毫秒），示例：0.5 秒后执行
+  #   # ===== 结果分支演示（on_failure，取消注释即生效）=====
+  #   # 吸盘吸气失败时执行补偿动作：先关闭吸气泵（恢复），全部成功则本动作转为成功、主序列继续。
+  #   # on_failure:
+  #   #   branch_policy: "recover"
+  #   #   actions:
+  #   #     - action_type: control_suck
+  #   #       delay_ms: 0
+  #   #       params:
+  #   #         suck_id: 0
+  #   #         active: [false, false]
+  #   #         timeout_ms: 5000
+  #   params:
+  #     suck_id: 0
+  #     active: [true, true]
+  #     timeout_ms: 5000
+  # - action_type: move_pose
+  #   delay_ms: 0                      # 执行前延迟时间（毫秒），0 表示不延迟
+  #   params:
+  #     arm_id: 1
+  #     frame_id: "base_link"
+  #     enable_collision_check: 0
+  #     use_config_pose: true
+  #     target_pose: [0.096057, 0.048681, 0.81900, -0.895291, -0.164696, 0.407321, -0.0736177]
+  #     bound_size: [0.0, 0.0, 0.0]
+  #     use_force_control: false
+  #     speed: 0.5
+  #     hand_action_type: []
+  #     timeout_ms: 5000
+  
+  - action_type: move_joints
+    delay_ms: 1                    # 执行前延迟时间（毫秒），0 表示不延迟
+    params:
+      arm_id: 1
+      joint_name: ['Joint1_R','Joint2_R','Joint3_R','Joint4_R', 'Joint5_R','Joint6_L','Joint7_L']
+      position: [-1.7, -1.2, 1.7, -1.6, 0.0, 0.0, 0.0]
+      synchronization_mode: 0
+      enable_collision_check: 0
+      speed: 0.2
+      timeout_ms: 30000
+
+# ============================================================================
+# move_compound（复合动作）配置示例 —— 单个 action 内并行驱动多个单体动作
+# ----------------------------------------------------------------------------
+# 特性：
+#   1. 通过 sub_actions 列表指定多个单体动作，各动作 Server 相互独立，天然并行。
+#   2. 每个子动作的参数结构与普通 move_pose / move_joints 完全一致（复用同一解析器，
+#      参数控制保持一致），支持视觉结果注入、碰撞/点云检查、力控、手部动作等全部字段。
+#   3. 全部子动作成功才算成功；任一失败或整体 timeout_ms 超时即取消其余并判失败。
+#   4. 限制：同一 Server 内并发（如两个独立 move_pose）会被 Action Server 单执行语义拒绝；
+#      双臂并行请使用 arm_id: 2（ARM_BOTH）单 goal，再与腿部/头部 move_joints 并行。
+#
+# 典型场景：双臂同时抬举到位（move_pose ARM_BOTH）+ 腿部同时下蹲（move_joints LEG）
+#   使用方法：将下方列表项（含 action_type: move_compound 的对象）插入 action_sequence1，
+#             并删除每一行的行首 "# " 注释符即可启用。
+# 示例：
+#   - action_type: move_compound
+#     delay_ms: 0
+#     params:
+#       timeout_ms: 30000                     # 复合整体超时（毫秒），默认 30000
+#       sub_actions:                          # 并行执行的子动作列表（至少 1 个）
+#         # ---- 子动作 1：双臂 move_pose（arm_id: 2 = ARM_BOTH），字段与普通 move_pose 一致 ----
+#         - action_type: move_pose
+#           params:
+#             arm_id: 2
+#             frame_id: "head_pitch_link"
+#             enable_collision_check: 0
+#             use_config_pose: true            # true：使用下方 left/right_target_pose 配置位姿
+#             use_force_control: false
+#             left_target_pose: [542.807, -120.0, 840.761, -0.895291, -0.164696, 0.407321, -0.0736177]
+#             left_bound_size: [0.0, 0.0, 0.15]
+#             right_target_pose: [542.807, 120.0, 840.761, -0.895291, -0.164696, 0.407321, -0.0736177]
+#             right_bound_size: [0.0, 0.0, 0.15]
+#             synchronization_mode: 0
+#             speed: 0.3
+#             hand_action_type: []             # 双臂同时带动手部动作时在此填写（如 "left_suck"/"right_suck"）
+#             timeout_ms: 25000
+#         # ---- 子动作 2：腿部 move_joints（arm_id: 4 = LEG），字段与普通 move_joints 一致 ----
+#         - action_type: move_joints
+#           params:
+#             arm_id: 4
+#             joint_name: ['leg_joint1', 'leg_joint2', 'leg_joint3']
+#             position: [0.2, -0.1, 0.3]       # 关节角（rad）
+#             synchronization_mode: 0
+#             enable_collision_check: 0
+#             speed: 0.3
+#             timeout_ms: 25000
+# ============================================================================

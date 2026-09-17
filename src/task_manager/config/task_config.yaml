@@ -1,0 +1,51 @@
+# Entry point: external task files resolve relative to this file.
+# HHworkspace keeps 40001/50001 move_box and 40002/50002 control_suck_example.
+# develop go_pick_pose moves to free registers 40005/50005.
+node_id: 1
+modbus_slave:
+  slave_id: 1
+  listen_ip: 0.0.0.0
+  listen_port: 12000
+tasks:
+  move_box:
+    trigger_reg: 40001
+    status_reg: 50001
+    config_file: tasks/move_box.yaml
+  go_pick_pose:
+    trigger_reg: 40005
+    status_reg: 50005
+    config_file: tasks/go_pick_pose.yaml
+  go_idle_pose:
+    trigger_reg: 40003
+    status_reg: 50003
+    config_file: tasks/go_idle_pose.yaml
+  auto_calibrate:
+    trigger_reg: 40004
+    status_reg: 50004
+    config_file: tasks/auto_calibrate.yaml
+  depalletize_pick:
+    trigger_reg: 40101
+    status_reg: 50101
+    config_file: tasks/depalletize_pick.yaml
+  rack_place:
+    trigger_reg: 40102
+    status_reg: 50102
+    config_file: tasks/rack_place.yaml
+  rack_pick:
+    trigger_reg: 40103
+    status_reg: 50103
+    config_file: tasks/rack_pick.yaml
+  pallet_place:
+    trigger_reg: 40104
+    status_reg: 50104
+    config_file: tasks/pallet_place.yaml
+  demo1:
+    trigger_reg: 40105
+    status_reg: 50105
+    config_file: tasks/demo1.yaml
+  control_suck_example:
+    trigger_reg: 40002
+    status_reg: 50002
+    config_file: tasks/control_suck_example.yaml
+boot_task:
+  config_file: boot_task.yaml

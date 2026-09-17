@@ -1,0 +1,128 @@
+# ============================================================================
+# task_manager 单箱任务动作配置 —— B1 货架放箱（rack_place）
+# ============================================================================
+# 对应场景方案：task_manager/docs/scenario_palletizing_rack_transfer.md
+#   §7.2 放箱 SOP Q1~Q5 / §8.1（触发 40102 / 状态 50102）/ §8.2 B1
+# 触发/状态寄存器见主配置 task_config.yaml（tasks.rack_place.*）
+# 本文件由主配置 tasks.rack_place.config_file 外链加载（相对主配置目录解析）
+#
+# 【任务语义（单点检测，方案A）】
+#   本任务只放 1 箱（把 M4 从 A 区取来所持的 1 箱放入货架）。M4/SRC-1000 触发前须先
+#   导航/换站到目标格号 c 对应的子站点 RACK_B_*（3 层货架：下层格 1~4 → RACK_B_L1 /
+#   中层格 5~8 → RACK_B_L2 / 上层格 9~12 → RACK_B_L3）并到位停稳；目标格号 c
+#   （格号从小到大 格1→格12 逐格推进：先下层 1~4、再中层 5~8、再上层 9~12）由 M4
+#   作为 target_no 注入。视觉只对 target_no=格 c 做单点空/占检测（type=3 货架空位）：
+#     命中（该格空闲）→ 返回该格放置 6D，进入下放；
+#     未命中（已占用）→ detected_targets 为空（total_detected_count=0），
+#                       本任务不放箱，由主站按顺序/异常核对（见方案 9.3）。
+#   不扫描全架、不整架编号、不做左→右排序（方案A）。
+#
+# 【执行约定（固定点位执行、无视觉伺服）】与 depalletize_pick.yaml 相同：
+#   - 放/退开各 move_pose 段按动作前视觉一次定位给出的固定位姿执行，不实时跟视觉；
+#   - 贴合到位判定暂以"低速位置到位"为准（下放到设定位姿即判到位）；
+#   - use_force_control 力控贴合确认为后续实现项（此处统一 false）；
+#   - 放/退开各 move_pose 段开启 自身避障 + 环境避障（enable_collision_check /
+#     enable_collision_check=2），bound_size 按吸盘+所持箱包络逐段下发（现场标定）；
+#   - enable_move_line（垂直直线进出）为运控侧建议能力，当前运行版本未开放，支持后按需开启。
+#
+# 【字段说明】
+#   - use_config_pose=false 的 move_pose：target_pose 为占位值（现场标定替换），
+#     运行期由同 action_sequence 的 vision_detect 结果（detected_targets[0].pose）注入；
+#   - 退开等"人工固定高位姿"段建议 use_config_pose=true 并按现场写死目标位姿
+#     （扩展点 T2 pose_offset 落地后可改回视觉位 + 相对偏移，见方案 8.3 T2）；
+#   - vision_detect 的 type / target_no 为本场景按 target_no 扩展的单点检测字段
+#     （现行解析器仅读取 目标名/坐标系/优先级，其余键安全忽略；type/target_no 待代码支持后生效）。
+# ============================================================================
+action_sequencenum: 1
+action_sequence1:
+  # ① 放箱前询问视觉：对 target_no=格 c 单点空/占检测（type=3 货架空位）
+  #   命中（该格空闲）→ 返回放置 6D；未命中（已占用）→ detected_targets 为空，不放箱
+  - action_type: vision_detect
+    delay_ms: 0
+    params:
+      target_obj_name: "rack_slot"      # 货架空位
+      expected_frame_id: "base_link"    # 视觉 6D 输出系（按手眼/车体外参标定结果）
+      type: 3                           # 3=货架空/占位单点检测（扩展字段，代码支持后生效）
+      target_no: 1                      # 目标格号 c（示例 格1；M4 按 格1→格12 递增注入，扩展字段）
+      priority: 1
+    feedback_check:                     # 置信度过低 → 视角微调后重测（见方案 6.4）
+      enable: true
+      check_field: "detected_targets[0].confidence"
+      operator: ">="
+      threshold: 0.6
+      max_retries: 2
+      on_exhaust: "fail"
+      retry_actions:
+        # 兜底微调：头部 move_pose 回正视作业面的标定视角（现场标定替换）
+        - action_type: move_pose
+          params:
+            arm_id: 3                   # HEAD
+            frame_id: "base_link"
+            enable_collision_check: 0
+            use_config_pose: true
+            use_force_control: false
+            target_pose: [520.0, 0.0, 830.0, 0.0, 0.0, 0.0, 1.0]  # 占位，现场标定
+            bound_size: [0.0, 0.0, 0.0]
+            speed: 0.2
+            hand_action_type: []
+            timeout_ms: 5000
+  # ② Q1 转运：伸向放置格上方（use_config_pose=false，占位位姿由 ① 视觉结果注入）
+  - action_type: move_pose
+    delay_ms: 0
+    params:
+      arm_id: 0                         # ARM_LEFT
+      frame_id: "base_link"
+      enable_collision_check: 2  # 自碰撞 + 外部点云
+      use_config_pose: false            # false：运行期使用同序列 ① 的视觉位姿
+      use_force_control: false
+      target_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]  # 占位（视觉结果注入；现场标定）
+      bound_size: [0.0, 0.0, 0.30]      # 转运段带箱包络
+      speed: 0.3
+      hand_action_type: []
+      timeout_ms: 8000
+  # ③ Q2 下放：低速下放至格位放置面（低速位置到位，避免碰撞层板/邻箱）
+  - action_type: move_pose
+    delay_ms: 0
+    params:
+      arm_id: 0
+      frame_id: "base_link"
+      enable_collision_check: 2  # 自碰撞 + 外部点云
+      use_config_pose: false
+      use_force_control: false          # 力控贴合后续实现，暂 false
+      target_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]  # 占位（视觉结果 + 下放量；现场标定）
+      bound_size: [0.0, 0.0, 0.30]      # 带箱包络
+      speed: 0.1                        # 低速
+      hand_action_type: []
+      timeout_ms: 8000
+  # ④ Q3 断气释放（左吸盘）
+  - action_type: control_suck
+    delay_ms: 500
+    params:
+      suck_id: 0                        # SUCK_LEFT
+      active: [false, false]
+      timeout_ms: 5000
+  # ⑤ Q4 退开：垂直后退退出货架区（建议固定退高位姿，use_config_pose=true，现场标定）
+  - action_type: move_pose
+    delay_ms: 0
+    params:
+      arm_id: 0
+      frame_id: "base_link"
+      enable_collision_check: 2  # 自碰撞 + 外部点云
+      use_config_pose: true             # 示例：退开用固定安全位姿（现场标定替换）
+      use_force_control: false
+      target_pose: [0.0, 0.0, 300.0, 0.0, 0.0, 0.0, 1.0]  # 占位，现场标定
+      bound_size: [0.0, 0.0, 0.0]
+      speed: 0.2
+      hand_action_type: []
+      timeout_ms: 5000
+  # ⑥ Q5 回缩至移动段姿态（导航前安全收纳）
+  - action_type: move_joints
+    delay_ms: 0
+    params:
+      arm_id: 0
+      joint_name: ["Joint1_L","Joint2_L","Joint3_L","Joint4_L","Joint5_L","Joint6_L","Joint7_L"]
+      position: [1.7, -1.2, -1.7, -1.6, 0.0, 0.0, 0.0]
+      synchronization_mode: 0
+      enable_collision_check: 1
+      speed: 0.3
+      timeout_ms: 30000

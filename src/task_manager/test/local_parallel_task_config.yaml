@@ -1,0 +1,47 @@
+node_id: 1
+modbus_slave:
+  listen_ip: "0.0.0.0"
+  listen_port: 12000
+
+tasks:
+  local_parallel_task:
+    trigger_reg: 41001
+    status_reg: 51001
+    action_sequencenum: 1
+    action_sequence1:
+      - parallel_actions:
+          - action_type: move_joints
+            params:
+              arm_id: "4"
+              joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint]
+              position: [-1.0, 2.2, -1.2, -1.57]
+              enable_collision_check: false
+              speed: 0.3
+              timeout_ms: 15000
+          - action_type: move_joints
+            params:
+              arm_id: "0"
+              joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L]
+              position: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+              enable_collision_check: false
+              speed: 0.15
+              timeout_ms: 45000
+      - action_type: move_pose
+        params:
+          arm_id: "0"
+          frame_id: base_link
+          target_pose: [0.2, 0.4, 0.8, 0.0, 0.0, 0.0, 1.0]
+          bound_size: [0.0, 0.0, 0.0]
+          use_config_pose: true
+          enable_collision_check: false
+          use_force_control: false
+          enable_move_line: true
+          speed: 0.15
+          hand_action_type: []
+          timeout_ms: 45000
+
+boot_task:
+  self_check:
+    action_sequence: []
+  reset:
+    action_sequence: []

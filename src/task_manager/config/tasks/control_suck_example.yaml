@@ -1,0 +1,10 @@
+# HHworkspace task: motion parameters and order preserved.
+action_sequencenum: 1
+action_sequence1:
+- action_type: control_suck
+  params:
+    suck_id: '0'
+    active:
+    - true
+    - false
+    timeout_ms: 5000
