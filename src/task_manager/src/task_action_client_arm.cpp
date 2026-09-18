@@ -1,5 +1,6 @@
 #include "task_manager/task_action_client.hpp"
 #include "task_manager/log_helper.hpp"
+#include "task_manager/vision_pose_utils.hpp"
 #include <algorithm>
 #include <random>
 #include <sstream>
@@ -44,6 +45,15 @@ ActionCallResult TaskActionClient::call_move_pose(
   {
     LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "invalid arm_id: " << static_cast<int>(param.arm_id));
     return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+
+  geometry_msgs::msg::PoseStamped offset_target;
+  if (param.vision_pose_offset.enabled) {
+    std::string error;
+    if (!offset_vision_pose(target_pose, param, offset_target, error)) {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, error);
+      return ActionCallResult::FAIL_PARAM_INVALID;
+    }
   }
 
   auto goal = MovePose::Goal();
@@ -140,7 +150,7 @@ ActionCallResult TaskActionClient::call_move_pose(
     }
     else
     {
-      goal.target_pose = target_pose;
+      goal.target_pose = param.vision_pose_offset.enabled ? offset_target : target_pose;
     }
     // 若配置文件中定义了 frame_id 则强制使用，否则保留 target_pose 自带的 frame_id
     if (!param.frame_id.empty())

@@ -1,0 +1,64 @@
+# Usage reference only. Not included by the production task_config.yaml.
+# The fixed pose and tool settings are examples, not measured robot targets.
+node_id: 1
+modbus_slave:
+  slave_id: 1
+  listen_ip: "0.0.0.0"
+  listen_port: 12000
+tasks:
+  vision_only:
+    trigger_reg: 40006
+    status_reg: 50006
+    action_sequencenum: 1
+    action_sequence1:
+      - action_type: vision_detect
+        params:
+          target_obj_name: "lefta"
+          expected_frame_id: "base_link"
+          priority: 10
+          type: 0
+  fixed_pose_example:
+    trigger_reg: 40007
+    status_reg: 50007
+    action_sequencenum: 1
+    action_sequence1:
+      - action_type: move_pose
+        params:
+          arm_id: 0
+          frame_id: "base_link"
+          use_config_pose: true
+          target_pose: [0.35, 0.25, 0.80, 0.0, 0.0, 0.0, 1.0]
+          bound_size: [0.0, 0.0, 0.0]
+          enable_collision_check: 1
+          enable_move_line: false
+          use_force_control: false
+          hand_action_type: []
+          speed: 0.1
+          acceleration_scale: 0.5
+          jerk_scale: 0.5
+          timeout_ms: 45000
+  tools_example:
+    trigger_reg: 40008
+    status_reg: 50008
+    action_sequencenum: 1
+    action_sequence1:
+      - parallel_actions:
+          - action_type: gripper_ctrl
+            params:
+              gripper_id: 0
+              comport: [2, 2]
+              position: [120, 0]
+              speed: [30, 0]
+              max_torque: [40, 0]
+              block: true
+              timeout_ms: 10000
+          - action_type: control_suck
+            params:
+              suck_id: 1
+              active: [false, true]
+              timeout_ms: 5000
+boot_task:
+  self_check:
+    action_sequence: []
+  reset:
+    action_sequence: []

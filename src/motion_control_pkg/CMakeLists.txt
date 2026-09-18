@@ -17,22 +17,31 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # 2. 查找 ROS 2 及第三方依赖
+option(WBC_MODEL_ONLY "Build the URDF model and read-only observer without hardware drivers" OFF)
 find_package(ament_cmake REQUIRED)
-find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(rclcpp_action REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(urdfdom REQUIRED)
+find_package(pinocchio REQUIRED)
+find_package(jsoncpp REQUIRED)
+find_package(Threads REQUIRED)
+include(cmake/wbc_model.cmake)
+if(WBC_MODEL_ONLY)
+    ament_package()
+    return()
+endif()
+find_package(ament_index_cpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(com_interfaces REQUIRED)
-find_package(Threads REQUIRED)
 # --- 查找可通过 apt 安装的第三方库 ---
-find_package(Eigen3 REQUIRED)
 # find_package(glfw3 REQUIRED)
-find_package(urdfdom REQUIRED)
 # find_package(console_bridge REQUIRED)
 # find_package(TinyXML REQUIRED)
 find_package(fcl REQUIRED)
@@ -41,14 +50,12 @@ find_package(ccd REQUIRED)
 find_package(octomap REQUIRED PATHS /usr NO_DEFAULT_PATH)
 
 find_package(ompl REQUIRED)
-find_package(pinocchio REQUIRED)
 # 新整机框架统一使用 Coal，并与 Pinocchio 的发行版本保持一致。
 find_package(coal REQUIRED CONFIG)
 find_package(ruckig REQUIRED)
 # find_package(glfw3 REQUIRED)
 # find_package(console_bridge REQUIRED)
 # find_package(TinyXML REQUIRED)
-find_package(jsoncpp REQUIRED) 
 
 find_package(PCL 1.12 REQUIRED COMPONENTS common)
 find_package(pcl_conversions REQUIRED)
@@ -209,6 +216,7 @@ target_include_directories(motion_planning_core PUBLIC
 target_compile_definitions(motion_planning_core PUBLIC BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS)
 ament_target_dependencies(motion_planning_core rclcpp sensor_msgs pcl_conversions)
 target_link_libraries(motion_planning_core
+    wbc_model
     Eigen3::Eigen pinocchio::pinocchio coal::coal ompl::ompl ruckig::ruckig
     toppra_lib ${sysCoreLibs} octomap octomath jsoncpp ${PCL_LIBRARIES})
 
@@ -256,7 +264,7 @@ target_link_options(motion_control_node PRIVATE "-Wl,--disable-new-dtags")
 # endif()
 
 set_target_properties(motion_control_node PROPERTIES
-    INSTALL_RPATH "\$ORIGIN"
+    INSTALL_RPATH "\$ORIGIN;\$ORIGIN/.."
 )
 # 链接库
 # 1. ROS 2 依赖
@@ -377,6 +385,16 @@ if(BUILD_TESTING)
   ament_add_gtest(test_collision_modes test/test_collision_modes.cpp)
   target_compile_definitions(test_collision_modes PRIVATE TEST_URDF="${CMAKE_CURRENT_SOURCE_DIR}/test/collision_modes.urdf")
   target_link_libraries(test_collision_modes motion_planning_core)
+  ament_add_gtest(test_wbc_model test/test_wbc_model.cpp)
+  target_compile_definitions(test_wbc_model PRIVATE
+    WBC_TEST_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../onecube_robot_description/urdf/onecube_robot_description.urdf")
+  target_link_libraries(test_wbc_model wbc_model urdfdom::urdfdom_model)
+  ament_add_gtest(test_wbc_tracking test/test_wbc_tracking.cpp)
+  target_link_libraries(test_wbc_tracking wbc_model)
+  ament_add_gtest(test_wbc_collision_compat test/test_wbc_collision_compat.cpp)
+  target_compile_definitions(test_wbc_collision_compat PRIVATE
+    WBC_TEST_DESCRIPTION="${CMAKE_CURRENT_SOURCE_DIR}/../onecube_robot_description")
+  target_link_libraries(test_wbc_collision_compat motion_planning_core)
 endif()
 
 ament_package()

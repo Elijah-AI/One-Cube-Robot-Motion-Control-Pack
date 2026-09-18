@@ -1,0 +1,15 @@
+wbc_model:
+  ros__parameters:
+    # Only semantic support roles and observer policies belong here.
+    # Mass, inertia, limits, collision dimensions and origins come from URDF.
+    support_links:
+      - base_front_wheel_1_pitch_link
+      - base_rear_wheel_1_pitch_link
+      - base_front_wheel_2_link
+      - base_rear_wheel_2_link
+    joint_state_topics: ["/joint_states"]
+    max_state_age_sec: 0.1
+    max_state_skew_sec: 0.02
+    publish_rate_hz: 20.0
+    support_inset_m: 0.02
+    support_coplanarity_tolerance_m: 0.002

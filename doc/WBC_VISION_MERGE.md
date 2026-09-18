@@ -1,0 +1,83 @@
+# WBC 与视觉兼容工作区
+
+此工作区保存于 `/home/elijah/ylf_wbc`。本次仅本地合并和离线验证，
+没有上传机器人、修改机器人运行配置或启动硬件节点。
+
+## 合并来源
+
+- WBC：原 `/home/elijah/ylf_wbc`，Git 基线 `9d18a86` 加 COM/ZMP
+  功能，304 个交付文件与 2026-09-15 WBC 清单一致。
+- 视觉与任务：`/home/elijah/ylfrobot`，`HHworkspace` 提交 `96de196`
+  加当前未提交的视觉坐标校验、插槽任务和视觉位姿偏移更新。
+- 原 WBC 全量保留于 `/home/elijah/ylf_wbc_merge_20260918/original_wbc`。
+  原 `ylfrobot` 保持不变。
+- 采用三方合并，将 ROS 包统一放在 `src/`，保留最新视觉与任务所需的全部接口。
+- 相机节点已内置原时间同步功能并直接发布点云融合消息，因此沿用
+  `ylfrobot` 的架构，不引入使用旧深度图消息的 `robot_time_sync_node`。
+  该旧节点完整保留在原 WBC 备份中。
+
+## 保留和兼容的行为
+
+- WBC 的 URDF 质量/惯量/限位模型、静态 COM 约束、动态 ZMP 参考、
+  反馈新鲜度检查、位置跟踪检查与双阶段同步下发。
+- 新视觉的 `DetectionPoseCloud`、`TargetDetection`、标定、相机和
+  点云接口；视觉目标保持真实 `base_link` 坐标，保留坐标系、
+  四元数、有限值与唯一目标校验以及视觉位姿偏移任务。
+- `enable_collision_check` 三种模式：0 关闭几何碰撞、1 自碰撞、
+  2 自碰撞加环境点云。模式 2 缺少可用点云时拒绝规划。
+- 碰撞开关不关闭已启用的 WBC COM 约束；IK 同时保留 COM 不等式
+  和所选碰撞约束。
+- 原 MoveP/MoveL 平滑规划、夹爪并发、任务计时与资源互斥不变。
+
+WBC 静态/动态开关沿用原来的默认关闭状态。动态 ZMP 仍要求完整、
+新鲜的实测关节反馈，包括转向关节；本次合并没有补造反馈。
+运行配置仍由原 launch 选择 `/opt/onecube` 下的 YAML，
+仅保存源码不会切换任何机器人环境。
+
+## 本地构建和验证
+
+本机为 x86_64。相机、标定、接口、任务和 WBC 可在本机构建；
+视觉检测携带的 `libsort_detection.so`/RKNN 为 ARM64 平台库，
+本机只能验证该服务的 C++ 对象编译，不能验证 NPU 链接或推理运行。
+
+构建日志、测试结果、源码保留审计和最终验证结论记录于
+`/home/elijah/ylf_wbc_merge_20260918/`。本机运控构建使用 x86
+离线驱动后端，离线通过不代表 ARM64 构建或实机运动验收。
+
+本机 colcon 在接口编译完成后的收尾阶段停滞，因此改用逐包 CMake
+配置、编译和安装。可复现脚本为
+`/home/elijah/ylf_wbc_merge_20260918/build_native.sh`；每次构建显式使用
+`cmake --build ... --parallel 1`，本地验证优化级别为 Release/O1。
+`setup_local.bash` 负责加载这些独立安装前缀，不启动节点。
+本机缺少系统 libmodbus 开发包，构建复用已有隔离依赖前缀
+`/home/elijah/ros2_ws/.smooth_validation/deps/usr`，运行库与许可证另复制到
+`install/native_deps/`，由 `setup_local.bash` 加载；没有修改系统依赖。
+
+重新执行已有离线测试：
+
+```bash
+source /home/elijah/ylf_wbc/setup_local.bash
+cd /home/elijah/ylf_wbc
+ctest --test-dir build/com_interfaces --output-on-failure
+ctest --test-dir build/motion_control_pkg --output-on-failure
+ctest --test-dir build/task_manager --output-on-failure
+colcon test-result --test-result-base build --verbose
+```
+
+不得将旧安装目录生成的 `com_interfaces` 与本工作区的消费者混用。
+本次接口、运控和任务消费者在同一独立安装目录中重新生成和编译。
+
+## 本次验证结果（2026-09-18）
+
+- 7 个包完整编译安装：接口、机器人描述、相机、WBC 运控、安全监控、
+  任务管理和视觉标定。
+- 视觉检测服务的 3 个 C++ 对象编译通过；未进行 ARM64 NPU 链接或推理测试。
+- 65 个 GTest 用例全部通过，0 错误、0 失败、0 跳过；其中包含新增的
+  WBC 与碰撞模式兼容测试以及原视觉位姿偏移/任务测试。
+- 8 个本地安装的可执行文件动态库依赖全部可解析；运控主程序确认链接
+  本工作区的 WBC 模型库和新接口库。
+- 22 个安装后的接口文件、全部任务 YAML 与本工作区源码一致。
+- 静态工作区检查：0 errors、55 warnings、1 info；保留了既有的
+  依赖声明/安装规则等警告，不宣称零警告。
+- 原 `ylfrobot` 输入 896 项中 889 项不变，7 个运控文件有意合并；
+  21 个 WBC 新文件完整保留。原始输入工作区和机器人均未修改。

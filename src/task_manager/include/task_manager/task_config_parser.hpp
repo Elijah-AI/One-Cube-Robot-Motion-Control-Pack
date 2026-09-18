@@ -32,6 +32,16 @@ struct VisionActionParam
   std::string expected_frame_id;     ///< 期望的坐标系 ID
   int8_t  type;                      ///< 视觉检测类型
   int32_t priority;                  ///< 任务优先级
+  bool require_single_target{false}; ///< 要求本次检测恰好返回一个目标
+  bool require_expected_frame{false}; ///< 检查目标实际坐标系；不执行坐标变换
+};
+
+/// 平移沿 frame_id 轴相加，姿态右乘局部四元数；仅用于单臂视觉目标。
+struct VisionPoseOffset
+{
+  bool enabled{false};
+  std::vector<double> translation{0.0, 0.0, 0.0};
+  std::vector<double> rotation{0.0, 0.0, 0.0, 1.0}; ///< [x,y,z,w]
 };
 
 /// @brief 机械臂位姿移动动作参数（对应 MovePose.action）
@@ -41,6 +51,7 @@ struct MovePoseParam
   uint8_t enable_collision_check{0};            ///< 是否启用碰撞检测
   std::vector<float> config_pose;         ///< 目标位姿 [x, y, z, qx, qy, qz, qw]（对应 YAML target_pose；ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
   bool use_config_pose;                   ///< 是否使用配置中的位姿
+  VisionPoseOffset vision_pose_offset;    ///< 可选：基于同序列视觉原始位姿计算目标
   std::vector<float> bound_size;          ///< 包围盒尺寸 [x, y, z]（ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
   /// @name ARM_BOTH 专用字段（与 com_interfaces/action/MovePose.action 一致）
   /// @{

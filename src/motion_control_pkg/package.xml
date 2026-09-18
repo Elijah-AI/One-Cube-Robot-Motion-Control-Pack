@@ -12,6 +12,7 @@
   <!-- 运行时和编译时依赖 -->
   <depend>ament_index_cpp</depend>
   <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
   <depend>rclcpp_action</depend>
   <depend>com_interfaces</depend>
   <depend>std_msgs</depend>

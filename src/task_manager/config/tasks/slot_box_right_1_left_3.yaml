@@ -1,0 +1,148 @@
+# 插槽盒：右臂一号槽完成后，左臂三号槽。单位：m / rad；四元数 [x,y,z,w]。
+# 视觉必须返回唯一的右下角点，且其 pose 已真实转换到 base_link。
+# 六槽相对右下角的基坐标偏移：x=0.204，y=[0.017,0.0435,0.0665,0.0915,0.1225,0.1495]。
+# p_tcp = p_corner + translation；q_tcp = normalize(q_corner * rotation)。
+# 预抓关节角取自 task_config.yaml -> tasks/move_box.yaml 的第一组左右臂位置。
+# 碰撞模式：0=关闭，1=自碰撞，2=自碰撞+外部碰撞；本任务默认 1。
+action_sequencenum: 1
+action_sequence1:
+  # 1. 每次触发重新检测；整轮左右臂共用这一份原始位姿。
+  - action_type: vision_detect
+    params:
+      target_obj_name: slot_box_corner
+      expected_frame_id: base_link
+      priority: 10
+      type: 0
+      require_single_target: true
+      require_expected_frame: true
+
+  # 2. 双臂到预抓点；不改变腰腿或夹爪状态。
+  - action_type: move_joints
+    params:
+      arm_id: 2
+      left_joint_name: &left_joints [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L]
+      right_joint_name: &right_joints [Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R]
+      left_position: &left_pregrasp [-0.3570031357117381, -0.9126436008072708, 0.3374029025895138, -1.8517995028984984, -0.9134245727969366, 0.9415111351802664, -0.8714162692361901]
+      right_position: &right_pregrasp [0.6397361681014009, -0.5832027176392532, -0.8220328736686873, -1.884303783477079, 0.9503200065388943, 0.5485912108481474, 0.8430800355006652]
+      synchronization_mode: 0
+      enable_collision_check: 1
+      speed: 0.2
+      timeout_ms: 45000
+
+  # 3. 右臂 MoveP 到一号槽上方 25 cm。
+  - action_type: move_pose
+    params: &right_slot1_high
+      arm_id: 1
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: [0, 0, 0, 0, 0, 0, 1]  # 兼容解析器的占位；实际使用本次视觉结果
+      bound_size: [0, 0, 0]
+      vision_pose_offset:
+        translation: [0.204, 0.017, 0.25]
+        rotation: [0.707107, 0.707107, 0, 0]
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.2
+      timeout_ms: 45000
+
+  # 4. 右臂 MoveP 下降到一号槽上方 10 cm。
+  - action_type: move_pose
+    params:
+      arm_id: 1
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: [0, 0, 0, 0, 0, 0, 1]
+      bound_size: [0, 0, 0]
+      vision_pose_offset:
+        translation: [0.204, 0.017, 0.10]
+        rotation: [0.707107, 0.707107, 0, 0]
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.2
+      timeout_ms: 45000
+
+  # 5. 右夹爪全开，等待完成。数组顺序 [左,右]；0=全开，255=全闭。
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 1
+      comport: [2, 2]
+      position: [0, 0]
+      speed: [0, 255]
+      max_torque: [0, 60]
+      block: true
+      timeout_ms: 10000
+
+  # 6. 右臂 MoveP 回到同一个 25 cm 高点；偏置不会累计。
+  - action_type: move_pose
+    params: *right_slot1_high
+
+  # 7. 右臂回到原预抓关节位置。
+  - action_type: move_joints
+    params:
+      arm_id: 1
+      joint_name: *right_joints
+      position: *right_pregrasp
+      enable_collision_check: 1
+      speed: 0.2
+      timeout_ms: 45000
+
+  # 8a. 左臂 MoveP 到三号槽上方 25 cm。
+  - action_type: move_pose
+    params: &left_slot3_high
+      arm_id: 0
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: [0, 0, 0, 0, 0, 0, 1]
+      bound_size: [0, 0, 0]
+      vision_pose_offset:
+        translation: [0.204, 0.0665, 0.25]
+        rotation: [0.707107, -0.707107, 0, 0]
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.2
+      timeout_ms: 45000
+
+  # 8b. 左臂 MoveP 下降到三号槽上方 10 cm。
+  - action_type: move_pose
+    params:
+      arm_id: 0
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: [0, 0, 0, 0, 0, 0, 1]
+      bound_size: [0, 0, 0]
+      vision_pose_offset:
+        translation: [0.204, 0.0665, 0.10]
+        rotation: [0.707107, -0.707107, 0, 0]
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.2
+      timeout_ms: 45000
+
+  # 8c. 左夹爪全开，等待完成。
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 0
+      comport: [2, 2]
+      position: [0, 0]
+      speed: [255, 0]
+      max_torque: [60, 0]
+      block: true
+      timeout_ms: 10000
+
+  # 8d. 左臂 MoveP 回到同一个 25 cm 高点。
+  - action_type: move_pose
+    params: *left_slot3_high
+
+  # 8e. 左臂回到原预抓关节位置。
+  - action_type: move_joints
+    params:
+      arm_id: 0
+      joint_name: *left_joints
+      position: *left_pregrasp
+      enable_collision_check: 1
+      speed: 0.2
+      timeout_ms: 45000

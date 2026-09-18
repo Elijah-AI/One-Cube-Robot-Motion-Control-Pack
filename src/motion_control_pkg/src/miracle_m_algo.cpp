@@ -676,21 +676,8 @@ bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
         }
     }
 
-    // The mobile base must not pitch beyond the configured 30 degree safety
-    // limit.  Keep this check in the common full-state validator so that
-    // sampled OMPL and time-parameterized states use the same constraint.
-    // if (model_.existFrame("body_link")) {
-    //     pinocchio::forwardKinematics(model_, *data_, full_q);
-    //     pinocchio::updateFramePlacements(model_, *data_);
-    //     const Eigen::Matrix3d& rotation =
-    //         data_->oMf[model_.getFrameId("body_link")].rotation();
-    //     const double pitch = std::atan2(
-    //         -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
-    //     if (pitch > 30.0 * 0.017453292519943295) {   // 只关注正方向
-    //         return false;
-    //     }
-    // }
-
+    // No additional torso-angle cap: joint limits come from the URDF.
+    // Collision validity remains independent of the COM/ZMP path checks.
     pinocchio::updateGeometryPlacements(model_, *data_, geom_model_, *geom_data_, full_q);
     applyCollisionCheckMode();
     if (pinocchio::computeCollisions(geom_model_, *geom_data_, false)) {
@@ -716,7 +703,7 @@ bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
 
 std::shared_ptr<ompl::geometric::SimpleSetup> MiracleMAlgo::createPlannerSetup(
     const std::vector<size_t>& active_indices, 
-    const Eigen::VectorXd& fixed_full_q) {
+    const Eigen::VectorXd& fixed_full_q, bool balance) {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     
     int dim = active_indices.size();
@@ -738,8 +725,8 @@ std::shared_ptr<ompl::geometric::SimpleSetup> MiracleMAlgo::createPlannerSetup(
     space->setBounds(bounds);
 
     auto ss = std::make_shared<ompl::geometric::SimpleSetup>(space);
-    ss->setStateValidityChecker([this, active_indices, fixed_full_q](const ompl::base::State* state) { 
-        return isStateValid(state, active_indices, fixed_full_q); 
+    ss->setStateValidityChecker([this, active_indices, fixed_full_q, balance](const ompl::base::State* state) {
+        return isStateValid(state, active_indices, fixed_full_q, balance);
     });
     
     auto planner(std::make_shared<ompl::geometric::RRTConnect>(ss->getSpaceInformation()));
@@ -752,7 +739,7 @@ std::shared_ptr<ompl::geometric::SimpleSetup> MiracleMAlgo::createPlannerSetup(
 
 bool MiracleMAlgo::isStateValid(const ompl::base::State* state, 
                                    const std::vector<size_t>& active_indices, 
-                                   const Eigen::VectorXd& fixed_full_q) {
+                                   const Eigen::VectorXd& fixed_full_q, bool balance) {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     const auto* rs = state->as<ompl::base::RealVectorStateSpace::StateType>();
     Eigen::VectorXd q = fixed_full_q;
@@ -793,17 +780,7 @@ bool MiracleMAlgo::isStateValid(const ompl::base::State* state,
         }
     }
 
-    // if (model_.existFrame("body_link")) {
-    //     pinocchio::forwardKinematics(model_, *data_, q);
-    //     pinocchio::updateFramePlacements(model_, *data_);
-    //     const Eigen::Matrix3d& rotation =
-    //         data_->oMf[model_.getFrameId("body_link")].rotation();
-    //     const double pitch = std::atan2(
-    //         -rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
-    //     if (std::abs(pitch) > 30.0 * 0.017453292519943295) {
-    //         return false;
-    //     }
-    // }
+    if (balance && !isStaticBalanceValid(q)) return false;
     
     return !collision;
 }
@@ -896,15 +873,15 @@ bool MiracleMAlgo::planWholeBodyJointSpace(
         active_indices.end(), leg_q_indices_.begin(), leg_q_indices_.end());
 
     const Eigen::VectorXd fixed_full_q = toEigenConfig(start_q);
-    auto setup = createPlannerSetup(active_indices, fixed_full_q);
+    auto setup = createPlannerSetup(active_indices, fixed_full_q, true);
     ompl::base::ScopedState<> start(setup->getStateSpace());
     ompl::base::ScopedState<> target(setup->getStateSpace());
     for (std::size_t index = 0; index < active_indices.size(); ++index) {
         start[index] = start_q[active_indices[index]];
         target[index] = goal_q[active_indices[index]];
     }
-    const bool start_valid = isStateValid(start.get(), active_indices, fixed_full_q);
-    const bool target_valid = isStateValid(target.get(), active_indices, fixed_full_q);
+    const bool start_valid = isStateValid(start.get(), active_indices, fixed_full_q, true);
+    const bool target_valid = isStateValid(target.get(), active_indices, fixed_full_q, true);
     if (!start_valid || !target_valid) {
         const auto report_invalid_state = [&](const char* label,
                                                const ompl::base::State* state) {
@@ -1607,13 +1584,84 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
 // 单臂模式仅激活对应手臂 + 腿部；双臂模式激活双臂 + 腿部。
 // 采用 qpOASES 求解；并以回溯线搜索保证关节限位/自碰撞不被违反(线性化安全网)。
 // =============================================================================
+void MiracleMAlgo::configureStaticBalance(const motion_control_pkg::wbc::StaticBalanceOptions& options) {
+    std::lock_guard<std::recursive_mutex> lock(pinocchio_data_mutex_);
+    static_balance_ = std::make_unique<motion_control_pkg::wbc::StaticBalance>(urdf_path_, options);
+}
+
+bool MiracleMAlgo::balanceStateToFullQ(const motion_control_pkg::wbc::JointSnapshot& state,
+                                     std::vector<double>& q) const {
+    if (!state.position_valid || state.names.size() != state.positions.size()) return false;
+    q.assign(model_.nq, std::numeric_limits<double>::quiet_NaN());
+    for (std::size_t i = 0; i < state.names.size(); ++i) {
+        if (!model_.existJointName(state.names[i])) return false;
+        const auto& joint = model_.joints[model_.getJointId(state.names[i])];
+        if (joint.nq() != 1) return false;
+        q[joint.idx_q()] = state.positions[i];
+    }
+    return std::all_of(q.begin(), q.end(), [](double x) { return std::isfinite(x); });
+}
+
+motion_control_pkg::wbc::BalanceEvaluation MiracleMAlgo::evaluateStaticBalance(const Eigen::VectorXd& q) const {
+    if (!static_balance_ || q.size() != model_.nq || !q.allFinite())
+        throw std::invalid_argument("invalid static COM configuration");
+    auto state = static_balance_->model().neutralSnapshot();
+    for (std::size_t i = 0; i < state.names.size(); ++i)
+        state.positions[i] = q[model_.joints[model_.getJointId(state.names[i])].idx_q()];
+    auto result = static_balance_->evaluate(state);
+    Eigen::MatrixXd jac = Eigen::MatrixXd::Zero(3, model_.nv);
+    for (std::size_t i = 0; i < state.names.size(); ++i)
+        jac.col(model_.joints[model_.getJointId(state.names[i])].idx_v()) = result.jacobian.col(i);
+    result.jacobian = std::move(jac);
+    return result;
+}
+
+bool MiracleMAlgo::isStaticBalanceValid(const Eigen::VectorXd& q) const {
+    if (!static_balance_) return true;
+    try { return evaluateStaticBalance(q).margin >= 0.0; }
+    catch (const std::exception&) { return false; }
+}
+
+bool MiracleMAlgo::validateStaticBalancePath(const std::vector<std::vector<double>>& path,
+                                            std::string& error, double sample_period) const {
+    if (!static_balance_) return true;
+    if (!std::isfinite(sample_period) || sample_period < 0) { error = "invalid trajectory period"; return false; }
+    if (path.empty()) { error = "empty static COM path"; return false; }
+    Eigen::VectorXd previous;
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        const Eigen::VectorXd q = Eigen::Map<const Eigen::VectorXd>(path[i].data(), path[i].size());
+        if (q.size() != model_.nq || !q.allFinite()) { error = "invalid static COM path sample"; return false; }
+        const double distance = i ? (q-previous).cwiseAbs().maxCoeff() : 0;
+        if (i && sample_period > 0) {
+            for (std::size_t id = 1; id < model_.joints.size(); ++id) {
+                const auto& joint = model_.joints[id];
+                if (std::abs(q[joint.idx_q()]-previous[joint.idx_q()]) >
+                    sample_period*model_.velocityLimit[joint.idx_v()]+1e-8) {
+                    error = "time-parameterized WBC path exceeds URDF velocity: " + model_.names[id];
+                    return false;
+                }
+            }
+        }
+        if (distance > 100) { error = "static COM path discontinuity"; return false; }
+        const int steps = std::max(1, static_cast<int>(std::ceil(distance / 0.005)));
+        for (int k = 0; k <= steps; ++k) {
+            const Eigen::VectorXd sample = i ? Eigen::VectorXd(previous + (q-previous)*(double(k)/steps)) : q;
+            if (!isStaticBalanceValid(sample)) {
+                error = "static COM constraint violated at path segment " + std::to_string(i);
+                return false;
+            }
+        }
+        previous = q;
+    }
+    return true;
+}
+
 bool MiracleMAlgo::solveWholeBodyIKOnce(
     const Eigen::VectorXd& q_init,
     const std::optional<Eigen::Isometry3d>& left_goal,
     const std::optional<Eigen::Isometry3d>& right_goal,
     Eigen::VectorXd& q_res,
     const std::array<double, 4>& leg_weights,
-    double body_pitch_limit_rad,
     std::chrono::steady_clock::time_point deadline,
     bool enable_collision_avoidance)
 {
@@ -1699,18 +1747,11 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
         if (!is_leg) W[j] = arm_reg;
     }
 
-    // body_joint(躯干俯仰)索引(leg_v_indices_ 末项按构造顺序为 body_joint)
-    int body_q_idx = -1;
-    if (!leg_v_indices_.empty()) {
-        const int body_v_idx = leg_v_indices_.back();
-        for (int j = 0; j < n_active; ++j) {
-            if (active_v[j] == body_v_idx) { body_q_idx = active_q[j]; break; }
-        }
-    }
-
     // --- 迭代参数 ---
     const double eps = 1.4e-4;     // 收敛阈值(6D误差范数: 均匀分布时 ~0.1mm + ~0.008°)
-    const int IT_MAX = 600;          // 最大迭代次数
+    // Constrained mode has no unchecked DLS/step fallback. Allow more damped
+    // iterations while retaining the caller's unchanged wall-clock deadline.
+    const int IT_MAX = static_balance_ ? 1200 : 600;
     // 自适应步长: 接近目标时误差小、二阶非线性占比大，大步长会过冲形成极限环
     // (表现为 err 在 mm 级震荡不收敛)，按误差分级收紧步长。
     auto step_limit = [](double err_norm) {
@@ -1834,12 +1875,30 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
                         iter, err.norm());
         }
 
+        if (!isStaticBalanceValid(q)) return false;
         if (err.norm() < eps) { success = true; break; }
 
         // 3) 更新几何体位姿并计算自碰撞距离(若启用)
         //    仅对距离 < d_safe 的碰撞对构造不等式约束，保证 QP 规模精简。
         std::vector<Eigen::RowVectorXd> A_rows;  // 每行 1 x n_active
         std::vector<double> lbA_rows, ubA_rows;
+        Eigen::MatrixXd com_J;
+        Eigen::Vector2d com_error = Eigen::Vector2d::Zero();
+        if (static_balance_) {
+            const auto balance = evaluateStaticBalance(q);
+            const auto& region = static_balance_->region();
+            com_J.resize(2, n_active);
+            for (int j = 0; j < n_active; ++j) com_J.col(j) = balance.jacobian.col(active_v[j]).head<2>();
+            Eigen::Vector2d center = Eigen::Vector2d::Zero();
+            for (const auto& p : region.polygon) center += p;
+            center /= region.polygon.size();
+            com_error = center - balance.com.head<2>();
+            for (int r = 0; r < region.A.rows(); ++r) {
+                A_rows.push_back(region.A.row(r) * com_J);
+                lbA_rows.push_back(-std::numeric_limits<double>::infinity());
+                ubA_rows.push_back(region.b[r] - region.A.row(r).dot(balance.com.head<2>()));
+            }
+        }
         if (enable_collision_avoidance && collision_check_mode_ != 0) {
             pinocchio::updateGeometryPlacements(model_, *data_, geom_model_,
                                                 *geom_data_, q);
@@ -1944,6 +2003,11 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
         H.diagonal().array() += 2.0 * W.array();
         H.diagonal().array() += 2.0e-9;  // 数值稳定，保证正定
         Eigen::VectorXd g = -2.0 * (J_full.transpose() * err);
+        if (static_balance_) {
+            const double weight = static_balance_->options().com_weight * std::min(1.0, err.squaredNorm());
+            H += 2.0 * weight * com_J.transpose() * com_J;
+            g -= 2.0 * weight * com_J.transpose() * com_error;
+        }
 
         // 5) 盒约束(关节位置限位 -> 对 dq 的位移边界)
         const double step_now = step_limit(err.norm());
@@ -1955,23 +2019,14 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             double up = upper_pos[j] - safety_margin - qj;
             lo = std::max(lo, -step_now);
             up = std::min(up,  step_now);
-            if (lo > up) { const double mid = 0.5 * (lo + up); lo = mid; up = mid; }
+            if (lo > up) {
+                if (static_balance_) return false;
+                const double mid = 0.5 * (lo + up); lo = mid; up = mid;
+            }
             lb[j] = lo; ub[j] = up;
         }
-        // body_joint 俯仰限位：将躯干关节角度限制在 [-body_pitch_limit, +body_pitch_limit]
-        // if (body_q_idx >= 0) {
-        //     for (int j = 0; j < n_active; ++j) {
-        //         if (active_q[j] != body_q_idx) continue;
-        //         const double qj = q[body_q_idx];
-        //         double lo = std::max(-body_pitch_limit_rad, lower_pos[j]) - qj;
-        //         double up = std::min( body_pitch_limit_rad, upper_pos[j]) - qj;
-        //         lo = std::max(lo, lb[j]);
-        //         up = std::min(up, ub[j]);
-        //         if (lo > up) { const double mid = 0.5 * (lo + up); lo = mid; up = mid; }
-        //         lb[j] = lo; ub[j] = up;
-        //         break;
-        //     }
-        // }
+        // body_joint is yaw in this URDF, not a surrogate torso-pitch joint.
+        // The same URDF box constraints above apply to every active joint.
 
         // 6) 求解 QP(qpOASES)。激活的碰撞对数随位形动态变化，逐次重建 QP。
         Eigen::VectorXd dq = Eigen::VectorXd::Zero(n_active);
@@ -2032,6 +2087,14 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             qp_ok = false;
         }
 
+        if (static_balance_ && qp_ok) {
+            qp_ok = dq.allFinite() && (dq.array() >= lb.array()-1e-8).all() && (dq.array() <= ub.array()+1e-8).all();
+            for (int r = 0; r < nC && qp_ok; ++r) {
+                const double value = A_rows[r].dot(dq);
+                qp_ok = value >= lbA_rows[r]-1e-8 && value <= ubA_rows[r]+1e-8;
+            }
+        }
+        if (static_balance_ && !qp_ok) return false;
         if (!qp_ok) {
             // QP 不可行(约束冲突/奇异位形)：以阻尼最小二乘回退，保证鲁棒性
             Eigen::MatrixXd JJt = J_full * J_full.transpose();
@@ -2074,9 +2137,11 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
             if (valid && right_goal &&
                 !passesSimplifiedCcsJoint67Constraint(q_next, right_arm_q_indices_))
                 valid = false;
+            if (valid && !isStaticBalanceValid(q_next)) valid = false;
             if (valid) { accepted = true; break; }
         }
         if (!accepted) {
+            if (static_balance_) return false;
             // 所有 8 级步长均碰撞，仍向前走一小步(1/256 倍率)，以渡过暂时性的自碰撞。
             Eigen::VectorXd dq_full = Eigen::VectorXd::Zero(model_.nv);
             const double alpha_min = alpha;  // 此时 alpha = (0.5)^8 = 1/256
@@ -2090,23 +2155,10 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
         }
         q = q_next;
 
-        // 8) 躯干俯仰安全检查：若 FK 俯仰超限，将 body_joint 回退(保守)
-        // if (body_q_idx >= 0 && model_.existFrame("body_link")) {
-        //     pinocchio::forwardKinematics(model_, *data_, q);
-        //     pinocchio::updateFramePlacements(model_, *data_);
-        //     const Eigen::Matrix3d& R =
-        //         data_->oMf[model_.getFrameId("body_link")].rotation();
-        //     const double pitch = std::atan2(-R(2, 0),
-        //                                     std::hypot(R(0, 0), R(1, 0)));
-        //     if (std::abs(pitch) > body_pitch_limit_rad) {
-        //         q[body_q_idx] = std::clamp(q[body_q_idx],
-        //                                    -body_pitch_limit_rad,
-        //                                     body_pitch_limit_rad);
-        //     }
-        // }
     }
 
     q_res = q;
+    if (success && !isStaticBalanceValid(q)) success = false;
 
     // 终点有效性检查：收敛后若仍处自碰撞，视为失败(已含可重入锁)
     if (success && enable_collision_avoidance) {
@@ -2142,7 +2194,7 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
 // 全身逆解对外接口：多种子 + 超时控制 + 错误处理
 // -----------------------------------------------------------------------------
 // 输入：q_init 初始关节状态；left_goal/right_goal 目标位姿(至少其一)；
-//       leg_weights 腿部姿态权重；body_pitch_limit_rad 躯干俯仰限位；
+//       leg_weights 腿部姿态权重；legacy_body_pitch_limit_rad 仅保留旧接口参数位，不生效；
 //       timeout_seconds 超时；max_seed_attempts 额外随机种子次数；
 //       enable_collision_avoidance 是否启用自碰撞避免约束。
 // 输出：q_res 求得的关节角度；返回 true=有效解，false=无解/奇异/超时。
@@ -2153,11 +2205,14 @@ bool MiracleMAlgo::solveWholeBodyIK(
     const std::optional<Eigen::Isometry3d>& right_goal,
     Eigen::VectorXd& q_res,
     const std::array<double, 4>& leg_weights,
-    double body_pitch_limit_rad,
+    double legacy_body_pitch_limit_rad,
     double timeout_seconds,
     std::size_t max_seed_attempts,
     bool enable_collision_avoidance)
 {
+    // Retain the public call signature for existing callers, but never impose
+    // a non-URDF torso angle cap, even if an old caller still supplies 30 deg.
+    (void)legacy_body_pitch_limit_rad;
     // --- 输入校验 ---
     if (q_init.size() != model_.nq) {
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
@@ -2184,7 +2239,7 @@ bool MiracleMAlgo::solveWholeBodyIK(
 
     // 种子 0：初始关节状态
     if (solveWholeBodyIKOnce(q_init, left_goal, right_goal, q_res,
-                             leg_weights, body_pitch_limit_rad,
+                             leg_weights,
                              deadline, enable_collision_avoidance)) {
         return true;
     }
@@ -2244,7 +2299,7 @@ bool MiracleMAlgo::solveWholeBodyIK(
             seed[q_idx] = sample;  // 已在 [lo, up] 内，无需 clamp
         }
         if (solveWholeBodyIKOnce(seed, left_goal, right_goal, q_res,
-                                leg_weights, body_pitch_limit_rad,
+                                leg_weights,
                                 deadline, enable_collision_avoidance)) {
             return true;
         }

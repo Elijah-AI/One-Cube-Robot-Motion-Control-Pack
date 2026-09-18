@@ -18,6 +18,11 @@
 
 namespace vision_detection_pose_cloud
 {
+namespace
+{
+// 视觉接口约定：算法返回的位姿已在基坐标系，无需再次做手眼变换。
+constexpr const char* kDetectionFrame = "base_link";
+}
 
 // ============================================================================
 // 构造函数
@@ -109,9 +114,13 @@ DetectionPoseCloudServer::execute(const std::shared_ptr<GoalHandleDPC> goal_hand
   auto is_canceling = [&]() -> bool {
     return goal_handle->is_canceling();
   };
-  auto frame_id = [&]() -> std::string {
-    return goal->expected_frame_id.empty() ? std::string("camera_link") : goal->expected_frame_id;
+  auto frame_id = []() -> std::string {
+    return kDetectionFrame;
   };
+  if (!goal->expected_frame_id.empty() && goal->expected_frame_id != kDetectionFrame) {
+    RCLCPP_WARN(logger, "视觉输出固定为 %s，无法转换到请求坐标系 %s",
+      kDetectionFrame, goal->expected_frame_id.c_str());
+  }
 
   const int prev_count = active_tasks_count_.fetch_add(1) + 1;
   RCLCPP_INFO(
@@ -198,7 +207,7 @@ DetectionPoseCloudServer::execute(const std::shared_ptr<GoalHandleDPC> goal_hand
 
   // ---------- STAGE 1: DETECTING + ESTIMATING_POSE ----------
   // detect_target 内部完成: RKNN 检测 + 点云拟合 + 6D 位姿 + 手眼变换
-  // 输出 results: 多目标 6D 位姿 (gripper 系, m, ZYX rad)
+  // 输出 results: 多目标 6D 位姿 (base_link, m, ZYX rad)
   std::vector<Result6D> detect_results;
   if (!detect_target(goal->target_obj_name, cur_image, cur_cloud, detect_results, info)) {
     finish_fail(static_cast<uint8_t>(StatusCode::TIMEOUT), "检测失败: " + info);
@@ -252,7 +261,7 @@ DetectionPoseCloudServer::publish_feedback(
   fb->progress_rate = progress;
   fb->current_step_info = info;
   fb->header.stamp = this->now();
-  fb->header.frame_id = status;
+  fb->header.frame_id = kDetectionFrame;
   gh->publish_feedback(fb);
 }
 
@@ -261,7 +270,7 @@ DetectionPoseCloudServer::make_header(const std::string & frame_id) const
 {
   std_msgs::msg::Header h;
   h.stamp = this->now();
-  h.frame_id = frame_id.empty() ? std::string("camera_link") : frame_id;
+  h.frame_id = frame_id.empty() ? std::string(kDetectionFrame) : frame_id;
   return h;
 }
 
@@ -279,7 +288,7 @@ DetectionPoseCloudServer::build_detection_msg(
   return det;
 }
 
-// 由 Result6D (gripper 系, m, ZYX rad) 构造 TargetDetection 消息
+// 由 Result6D (base_link, m, ZYX rad) 构造 TargetDetection 消息
 // ZYX 欧拉角 -> 四元数：q = Rz(yaw)*Ry(pitch)*Rx(roll) 对应的四元数
 com_interfaces::msg::TargetDetection
 DetectionPoseCloudServer::build_detection_msg(
@@ -289,9 +298,9 @@ DetectionPoseCloudServer::build_detection_msg(
   com_interfaces::msg::TargetDetection det;
   det.obj_name = goal->target_obj_name;
 
-  // 位置 (m, gripper 系)
+  // 位置 (m, base_link)：数值已经是基坐标，仅填写正确的坐标系标签。
   det.pose.header.stamp = this->now();
-  det.pose.header.frame_id = "gripper_link";
+  det.pose.header.frame_id = kDetectionFrame;
   det.pose.pose.position.x = result6d.pose_xyz.x();
   det.pose.pose.position.y = result6d.pose_xyz.y();
   det.pose.pose.position.z = result6d.pose_xyz.z();
@@ -392,7 +401,7 @@ DetectionPoseCloudServer::detect_target(
 
   // -------------------- 4. 解析结果 --------------------
   // decode_info.loc_ok      : 1=定位成功, 0=失败
-  // decode_info.output_result: vector<Result6D>, 每个含 id/confidence/pose_xyz[m, griper 系]/pose_rpy[rad, ZYX]
+  // decode_info.output_result: vector<Result6D>, 每个含 id/confidence/pose_xyz[m, base_link]/pose_rpy[rad, ZYX]
   // decode_info.relia        : 可靠性标志
   if (decode_info.loc_ok != 1) {
     info = "slotDetection 定位失败 (loc_ok=" + std::to_string(decode_info.loc_ok) +

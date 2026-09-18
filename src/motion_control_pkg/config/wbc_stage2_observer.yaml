@@ -1,0 +1,12 @@
+wbc_model:
+  ros__parameters:
+    support_links: [base_front_wheel_1_pitch_link, base_rear_wheel_1_pitch_link, base_front_wheel_2_link, base_rear_wheel_2_link]
+    joint_state_topics: ["/wbc/joint_states"]
+    unknown_steering_joints: [base_front_wheel_1_yaw_joint, base_rear_wheel_1_yaw_joint]
+    differentiate_joints: [leg_joint1, leg_joint2, leg_joint3, body_joint]
+    velocity_filter_tau_sec: 0.03
+    max_state_age_sec: 0.15
+    max_state_skew_sec: 0.06
+    publish_rate_hz: 20.0
+    support_inset_m: 0.02
+    support_coplanarity_tolerance_m: 0.002

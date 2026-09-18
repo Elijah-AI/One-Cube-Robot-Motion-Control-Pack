@@ -240,6 +240,10 @@ private:
         }
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received movement request for part_id: %u", goal->arm_id);
+        if (miracleAlgo_ptr_->staticBalance() && !whole_body_module_->is_idle()) {
+            RCLCPP_WARN(this->get_logger(), "Static COM whole-body operation owns all movable body joints");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (!goal->via_poses.empty()) {
             if (goal->arm_id > ARM_RIGHT || goal->enable_move_line || goal->via_poses.size() > 64) {
                 RCLCPP_WARN(this->get_logger(), "via_poses supports single-arm MoveP only, at most 64 poses");
@@ -399,6 +403,12 @@ private:
                 goal->arm_id == WHOLE_BODY_BOTH;
             const bool needs_right = goal->arm_id == WHOLE_BODY_RIGHT ||
                 goal->arm_id == WHOLE_BODY_BOTH;
+            if (miracleAlgo_ptr_->staticBalance() &&
+                (!head_module_->is_idle(ID_HEAD) || !dual_arm_module_->is_idle(ID_LEFT_ARM) ||
+                 !dual_arm_module_->is_idle(ID_RIGHT_ARM))) {
+                RCLCPP_WARN(this->get_logger(), "Static COM requires head and both arms idle before planning");
+                return rclcpp_action::GoalResponse::REJECT;
+            }
             if ((needs_left && !dual_arm_module_->is_idle(ID_LEFT_ARM)) ||
                 (needs_right && !dual_arm_module_->is_idle(ID_RIGHT_ARM)) ||
                 !lower_body_module_->is_idle(ID_LEG))
@@ -513,6 +523,10 @@ private:
         }
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received move joints request for part_id: %u", goal->arm_id);
+        if (miracleAlgo_ptr_->staticBalance() && !whole_body_module_->is_idle()) {
+            RCLCPP_WARN(this->get_logger(), "Joint command rejected during static COM whole-body operation");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (!std::isfinite(goal->acceleration_scale) || goal->acceleration_scale < 0 || goal->acceleration_scale > 1 ||
             !std::isfinite(goal->jerk_scale) || goal->jerk_scale < 0 || goal->jerk_scale > 1 ||
             (goal->arm_id > ARM_BOTH && (goal->acceleration_scale != 0 || goal->jerk_scale != 0))) {

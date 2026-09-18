@@ -35,6 +35,7 @@
 #include <functional>
 #include <cstdint>
 #include <chrono>
+#include "motion_control_pkg/wbc/static_balance.hpp"
 #include <string>
 #include <vector>
 #include <memory>
@@ -258,6 +259,15 @@ public:
      * @param description_path 
      */
     MiracleMAlgo(const std::string& urdf_path, const std::string& mesh_dir);
+    // Startup-only, whole-body mode only; standalone arm IK is unchanged.
+    void configureStaticBalance(const motion_control_pkg::wbc::StaticBalanceOptions& options);
+    const motion_control_pkg::wbc::StaticBalance* staticBalance() const { return static_balance_.get(); }
+    bool balanceStateToFullQ(const motion_control_pkg::wbc::JointSnapshot& state,
+                             std::vector<double>& q) const;
+    motion_control_pkg::wbc::BalanceEvaluation evaluateStaticBalance(const Eigen::VectorXd& q) const;
+    bool isStaticBalanceValid(const Eigen::VectorXd& q) const;
+    bool validateStaticBalancePath(const std::vector<std::vector<double>>& path,
+                                   std::string& error, double sample_period = 0.0) const;
 
     ~MiracleMAlgo() = default;
     /*
@@ -398,7 +408,8 @@ public:
     // 全身位置逆解：只激活请求的手臂和腿部关节，腿部通过加权最小二乘
     // 尽量保持在 q_init 附近。leg_weights 顺序为
     // leg_joint1、leg_joint2、leg_joint3、body_joint；left_goal/right_goal
-    // 至少提供一个。
+    // 至少提供一个。关节范围以 URDF 为准，不另设躯干俯仰角阈值。
+    // legacy_body_pitch_limit_rad 仅为调用兼容保留，传入任何值均不施加限制。
     bool solveWholeBodyIK(
         const Eigen::VectorXd& q_init,
         const std::optional<Eigen::Isometry3d>& left_goal,
@@ -406,7 +417,7 @@ public:
         Eigen::VectorXd& q_res,
         const std::array<double, 4>& leg_weights =
             std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
-        double body_pitch_limit_rad = 30.0 * 0.017453292519943295,
+        double legacy_body_pitch_limit_rad = 0.0,
         double timeout_seconds = 10.0,
         std::size_t max_seed_attempts = 10U,
         bool enable_collision_avoidance = true);
@@ -845,13 +856,13 @@ private:
         const std::optional<Eigen::Isometry3d>& right_goal,
         Eigen::VectorXd& q_res,
         const std::array<double, 4>& leg_weights,
-        double body_pitch_limit_rad,
         std::chrono::steady_clock::time_point deadline,
         bool enable_collision_avoidance);
 
     // Helper to create OMPL setup dynamically based on active joints
     std::shared_ptr<ompl::geometric::SimpleSetup> createPlannerSetup(const std::vector<size_t>& active_indices, 
-                                                                     const Eigen::VectorXd& fixed_full_q);
+                                                                     const Eigen::VectorXd& fixed_full_q,
+                                                                     bool balance = false);
     /**
      * @brief 检查OMPL状态是否有效
      * 
@@ -863,7 +874,7 @@ private:
      */
     bool isStateValid(const ompl::base::State* state, 
                       const std::vector<size_t>& active_indices, 
-                      const Eigen::VectorXd& fixed_full_q);
+                      const Eigen::VectorXd& fixed_full_q, bool balance = false);
 
     // Solve Inverse Kinematics (mode: 0=left, 1=right, 3=head, 4=leg)
     bool solveIK(const Eigen::VectorXd& q_init,
@@ -887,6 +898,7 @@ private:
                                     const Eigen::Quaterniond& q1,
                                     double t);
     std::string urdf_path_;
+    std::unique_ptr<motion_control_pkg::wbc::StaticBalance> static_balance_;
     std::string mesh_dir_;
 
     pinocchio::Model model_;

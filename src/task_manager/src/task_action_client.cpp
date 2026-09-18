@@ -156,6 +156,7 @@ ActionCallResult TaskActionClient::dispatch_action(
         geometry_msgs::msg::PoseStamped target_pose = pose;
         sensor_msgs::msg::PointCloud2 env_cloud = cloud;
         std::string cloud_frame = "base_link";
+        bool has_vision_target = false;
 
         std::string seq_key = derive_seq_key(state_key);
         if (!seq_key.empty())
@@ -168,6 +169,7 @@ ActionCallResult TaskActionClient::dispatch_action(
                 if (!vis_res.detected_targets.empty())
                 {
                     target_pose = vis_res.detected_targets[0].pose;
+                    has_vision_target = vis_res.success;
                     cloud_frame = target_pose.header.frame_id;
                 }
                 // 新接口 DetectionPoseCloud 不再输出环境点云，env_cloud 保持为空
@@ -179,6 +181,13 @@ ActionCallResult TaskActionClient::dispatch_action(
             }
         }
 
+        if (act.arm_param.vision_pose_offset.enabled && !has_vision_target) {
+            LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION,
+                "vision_pose_offset needs a successful vision_detect in the same sequence");
+            ctx.state = ActionRunState::FAILURE;
+            ctx.call_result = ActionCallResult::FAIL_PARAM_INVALID;
+            return ctx.call_result;
+        }
         ActionCallResult res = call_move_pose(task_id, act.arm_param, target_pose, env_cloud, cloud_frame, state_key);
         if (action_call_result_is_ok(res))
         {

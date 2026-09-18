@@ -114,6 +114,7 @@ if(BUILD_TESTING)
   # ----- test_task_config_parser：验证主级+次级配置分级加载 -----
   ament_add_gtest(test_task_config_parser
     test/test_task_config_parser.cpp
+    test/test_vision_pose_offset.cpp
     src/task_config_parser.cpp
   )
   target_include_directories(test_task_config_parser PRIVATE include)

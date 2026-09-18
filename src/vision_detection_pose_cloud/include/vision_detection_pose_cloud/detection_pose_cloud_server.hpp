@@ -69,7 +69,7 @@ private:
     const std::shared_ptr<const DetectionPoseCloud::Goal> & goal,
     const geometry_msgs::msg::PoseStamped & pose,
     float confidence);
-  // 由 Result6D (gripper 系, m, rad) 构造 TargetDetection 消息
+  // 由 Result6D (base_link, m, rad) 构造 TargetDetection 消息
   com_interfaces::msg::TargetDetection build_detection_msg(
     const std::shared_ptr<const DetectionPoseCloud::Goal> & goal,
     const Result6D & result6d);

@@ -123,6 +123,7 @@ void TaskActionClient::compound_move_worker(
       geometry_msgs::msg::PoseStamped target_pose = pose;
       sensor_msgs::msg::PointCloud2 env_cloud = cloud;
       std::string cloud_frame = "base_link";
+      bool has_vision_target = false;
       const std::string seq_key = derive_seq_key(state_key);
       if (!seq_key.empty())
       {
@@ -134,12 +135,14 @@ void TaskActionClient::compound_move_worker(
           if (!vis_res.detected_targets.empty())
           {
             target_pose = vis_res.detected_targets[0].pose;
+            has_vision_target = vis_res.success;
             cloud_frame = target_pose.header.frame_id;
           }
         }
       }
 
-      ActionCallResult r = call_move_pose(task_id, sub.move_pose_param,
+      ActionCallResult r = sub.move_pose_param.vision_pose_offset.enabled && !has_vision_target ?
+          ActionCallResult::FAIL_PARAM_INVALID : call_move_pose(task_id, sub.move_pose_param,
           target_pose, env_cloud, cloud_frame, sub_key);
       if (action_call_result_is_ok(r))
       {

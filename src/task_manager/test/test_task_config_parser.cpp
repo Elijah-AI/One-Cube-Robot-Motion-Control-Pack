@@ -36,8 +36,8 @@ TEST(TaskConfigParserTest, LoadAllMainAndSecondary)
   EXPECT_EQ(cfg.modbus_port, 12000);
   EXPECT_EQ(cfg.modbus_listen_ip, "0.0.0.0");
 
-  // ---- 合并后的十个任务（主配置外链 → 次级动作文件）----
-  ASSERT_EQ(cfg.task_dict.size(), 10u);
+  // ---- 合并任务及新增插槽任务（主配置外链 → 次级动作文件）----
+  ASSERT_EQ(cfg.task_dict.size(), 11u);
   EXPECT_TRUE(cfg.task_dict.count("move_box") == 1);
   EXPECT_TRUE(cfg.task_dict.count("go_pick_pose") == 1);
   EXPECT_TRUE(cfg.task_dict.count("go_idle_pose") == 1);

@@ -543,6 +543,13 @@ bool TaskConfigParser::parse_vision_detect_params(YAML::Node p, AtomicAction& ac
   act.vision_param.expected_frame_id = p["expected_frame_id"].as<std::string>();
   act.vision_param.priority = p["priority"].as<int32_t>();
   act.vision_param.type = p["type"] ? p["type"].as<int8_t>() : 0;
+  act.vision_param.require_single_target = p["require_single_target"] ?
+    p["require_single_target"].as<bool>() : false;
+  act.vision_param.require_expected_frame = p["require_expected_frame"] ?
+    p["require_expected_frame"].as<bool>() : false;
+  if (act.vision_param.require_expected_frame && act.vision_param.expected_frame_id.empty()) {
+    throw std::invalid_argument("require_expected_frame needs a nonempty expected_frame_id");
+  }
   return true;
 }
 
@@ -601,6 +608,33 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
   {
     act.arm_param.config_pose = p["target_pose"].as<std::vector<float>>();
     act.arm_param.bound_size = p["bound_size"].as<std::vector<float>>();
+  }
+  if (p["vision_pose_offset"]) {
+    auto& offset = act.arm_param.vision_pose_offset;
+    offset.enabled = true;
+    offset.translation = p["vision_pose_offset"]["translation"].as<std::vector<double>>();
+    offset.rotation = p["vision_pose_offset"]["rotation"].as<std::vector<double>>();
+    if (act.arm_param.use_config_pose || act.arm_param.arm_id > 1 ||
+        act.arm_param.frame_id.empty() || offset.translation.size() != 3 ||
+        offset.rotation.size() != 4) {
+      throw std::invalid_argument(
+        "vision_pose_offset requires single-arm vision pose, explicit frame_id, translation[3], rotation[4]");
+    }
+    for (double v : offset.translation) {
+      if (!std::isfinite(v)) {throw std::invalid_argument("non-finite vision translation");}
+    }
+    double norm = 0.0;
+    for (double v : offset.rotation) {
+      if (!std::isfinite(v)) {throw std::invalid_argument("non-finite vision rotation");}
+      norm += v * v;
+    }
+    if (!std::isfinite(norm) || norm < 1e-12) {
+      throw std::invalid_argument("invalid vision offset quaternion");
+    }
+    // bound_size 在运控中还会叠加平移，禁止重复偏移。
+    for (float v : act.arm_param.bound_size) {
+      if (v != 0.0f) {throw std::invalid_argument("vision_pose_offset needs zero bound_size");}
+    }
   }
   return true;
 }

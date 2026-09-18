@@ -1,5 +1,6 @@
 #include "task_manager/task_action_client.hpp"
 #include "task_manager/log_helper.hpp"
+#include "task_manager/vision_pose_utils.hpp"
 #include <algorithm>
 #include <random>
 #include <sstream>
@@ -108,14 +109,16 @@ TaskActionClient::call_vision_detect(
     
   // 结果回调：使用 lambda 捕获 state_key，更新正确的 context
   send_goal_options.result_callback =
-    [this, state_key](const GoalHandleVisionDetection::WrappedResult & result)
+    [this, state_key, param](const GoalHandleVisionDetection::WrappedResult & result)
     {
       {
         std::lock_guard<std::mutex> lock(active_goal_mutex_);
         active_vision_goal_.erase(state_key);
       }
 
-      const bool succeeded = result.result && result.result->success;
+      std::string validation_error;
+      const bool succeeded = result.code == rclcpp_action::ResultCode::SUCCEEDED &&
+        result.result && validate_vision_result(*result.result, param, validation_error);
       finish_action_timing(
         state_key, succeeded ? "SUCCESS" : "FAILURE");
       if (!result.result)
@@ -129,7 +132,7 @@ TaskActionClient::call_vision_detect(
       }
       auto& ctx = get_ctx(state_key);
 
-      if(result.result->success)
+      if (succeeded)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION, "Vision detect succeeded [" << state_key << "]");
         print_vision_result(node_->get_logger(), *result.result);
@@ -145,6 +148,10 @@ TaskActionClient::call_vision_detect(
       {
         // 失败时标记无有效结果
         ctx.has_vision_result = false;
+        if (!validation_error.empty()) {
+          LOG_ERROR(node_->get_logger(), task_log::Tag::VISION,
+            "Vision result rejected [" << state_key << "]: " << validation_error);
+        }
 
         if (result.result->status_code == 3)
         {

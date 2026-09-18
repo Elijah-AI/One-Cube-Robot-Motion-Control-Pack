@@ -7,6 +7,10 @@ modbus_slave:
   listen_ip: 0.0.0.0
   listen_port: 12000
 tasks:
+  slot_box_right_1_left_3:
+    trigger_reg: 40009
+    status_reg: 50009
+    config_file: tasks/slot_box_right_1_left_3.yaml
   move_box:
     trigger_reg: 40001
     status_reg: 50001
