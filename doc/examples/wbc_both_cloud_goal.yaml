@@ -1,0 +1,24 @@
+# 仅为接口格式示例；执行前替换左右 TCP 目标。模式 2 需要持续发布环境点云。
+task_id: wbc_both_cloud_example
+arm_id: 7
+control_mode: 0
+left_target_pose:
+  header: {frame_id: base_link}
+  pose:
+    position: {x: 0.40, y: 0.25, z: 1.00}
+    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+right_target_pose:
+  header: {frame_id: base_link}
+  pose:
+    position: {x: 0.40, y: -0.25, z: 1.00}
+    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+left_bound_size: [0.0, 0.0, 0.0]
+right_bound_size: [0.0, 0.0, 0.0]
+synchronization_mode: 0
+enable_move_line: false
+enable_collision_check: 2
+use_force_control: false
+speed: 0.10
+acceleration_scale: 0.0
+jerk_scale: 0.0
+timeout_ms: 60000

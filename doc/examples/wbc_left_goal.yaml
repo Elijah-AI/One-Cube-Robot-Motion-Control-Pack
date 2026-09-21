@@ -1,0 +1,17 @@
+# 仅为接口格式示例；执行前替换成已核实可达、符合现场条件的 TCP 目标。
+task_id: wbc_left_example
+arm_id: 5
+control_mode: 0
+target_pose:
+  header: {frame_id: base_link}
+  pose:
+    position: {x: 0.40, y: 0.25, z: 1.00}
+    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+bound_size: [0.0, 0.0, 0.0]
+enable_move_line: false
+enable_collision_check: 1
+use_force_control: false
+speed: 0.10
+acceleration_scale: 0.0
+jerk_scale: 0.0
+timeout_ms: 60000

@@ -9,10 +9,12 @@ StaticBalance::StaticBalance(const std::string& path, StaticBalanceOptions optio
   : options_(std::move(options)), model_(path), support_(path, options_.support_links, dirs) {
   if (!std::isfinite(options_.com_weight) || options_.com_weight < 0)
     throw std::invalid_argument("invalid COM weight");
+  if (!std::isfinite(options_.inset) || options_.inset < 0)
+    throw std::invalid_argument("invalid COM support inset");
   bounds_ = support_.steeringBounds(model_, options_.unknown_steering);
   region_ = support_.evaluate(model_.evaluate(model_.neutralSnapshot()),
-    options_.inset + bounds_.com_xy + bounds_.support_xy);
-  if (!region_.geometry_valid) throw std::invalid_argument("invalid conservative support: " + region_.error);
+    effectiveInset());
+  if (!region_.geometry_valid) throw std::invalid_argument("invalid configured support: " + region_.error);
 }
 StatePolicy StaticBalance::statePolicy() const {
   StatePolicy policy;

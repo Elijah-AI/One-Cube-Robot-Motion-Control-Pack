@@ -394,7 +394,6 @@ motion_control_pkg/
 │   └── sdk/                           # 厂商无关设备接口
 ├── launch/                            # bringup 与示例参数
 ├── config/                            # Marvin 运动学配置
-├── test/                              # 厂商无关离线单元测试
 ├── 3rdparty/                          # qpOASES、TOPPRA、Quill、TRAC-IK 文件
 └── lib/{aarch64,x64}/                 # 预编译 MarvinSDK/Kine 库
 ```
@@ -429,21 +428,7 @@ motion_control_pkg/
 - launch 参数文件路径、双臂控制器 IP 和部分设备路径为固定值，部署可移植性受限。
 - 包版本仍为 `0.0.0`，`package.xml` 中 license 尚为 `TODO`。
 
-## 14. 测试覆盖
-
-当前 CMake 注册的离线测试包括：
-
-- `test_sdk_command_gate`：SDK 事务顺序、失败传播、阻抗切换及并发串行化。
-- `test_dual_arm_pose_transforms`：左右目标独立转换、缺失 Frame 失败和 TCP 偏移往返。
-- `test_cartesian_line_sampling`：直线采样、偏差度量及 TOPPRA 路径准备。
-- `test_gripper_worker_threads`：左右夹爪线程并行和同侧复用等待。
-- `test_toppra_stable_solver`：正向/反向路径的稳定求解。
-- `test_merged_planning`：整机状态、点云转换/碰撞、全身 IK 和消息序列化。
-- `test_preplanned_dispatch`：全身轨迹拆分、同步起点、取消与子任务失败联动。
-
-这些测试重点覆盖厂商无关核心逻辑。当前没有自动化测试完整启动 `motion_control_node`、连接真实硬件或端到端调用四个 Action；真机通信、制动释放、到位精度和急停链路仍需单独验收。
-
-## 15. 推荐阅读顺序
+## 14. 推荐阅读顺序
 
 1. [`src/main_node.cpp`](../src/main_node.cpp)：理解初始化、接口和路由。
 2. [`include/motion_control_pkg/dual_arm_module.hpp`](../include/motion_control_pkg/dual_arm_module.hpp) 与 [`src/dual_arm_module.cpp`](../src/dual_arm_module.cpp)：理解主要动作执行链。

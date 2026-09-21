@@ -107,6 +107,13 @@ bool EthercatBusManager::getMotorActualSnapshot(
     return true;
 }
 
+bool EthercatBusManager::getTimedMotorActualSnapshot(
+    std::vector<DriverSDK::motorActualStruct>&,
+    std::chrono::steady_clock::time_point&, uint64_t&) const {
+    // Simulated states must never appear on the measured hardware feedback topic.
+    return false;
+}
+
 bool EthercatBusManager::enableMotors(const std::vector<uint16_t> &motor_ids, double timeout_seconds)
 {
     if (!ready_ || motor_ids.empty() || timeout_seconds <= 0.0) {

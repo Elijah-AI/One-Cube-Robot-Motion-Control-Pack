@@ -153,6 +153,7 @@ public:
                 "Dual arm initialization failed: " +
                 dual_arm_initialization_error);
         }
+        dual_arm_module_->attachMeasuredFeedbackBus(ethercat_bus_manager_ptr_);
         RCLCPP_INFO(
             this->get_logger(),
             "Dual arm initialized with configuration=%s, planning_frame=%s, "
@@ -852,7 +853,11 @@ int main(int argc, char ** argv)
     try {
         //调用 init 初始化模块和 Action Server，安全传递 shared_from_this
         node->init();
-        rclcpp::spin(node);
+        // Default callbacks may wait for the model lock held by a planner.
+        // The separate acquisition/WBC subscription group must keep running.
+        rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions{}, 2);
+        executor.add_node(node);
+        executor.spin();
     } catch (const std::exception &e) {
         RCLCPP_FATAL(rclcpp::get_logger("robot_control_node"), "Startup failed: %s", e.what());
         node.reset();

@@ -45,6 +45,7 @@ bool MarvinDualArmSdkAdapter::readState(DualArmDeviceState & state)
 
   for (std::size_t arm = 0; arm < kArmCount; ++arm) {
     auto & output = state.arms[arm];
+    output.feedback_sequence = vendor_state.m_Out[arm].m_OutFrameSerial;
     output.current_state = vendor_state.m_State[arm].m_CurState;
     output.error_code = vendor_state.m_State[arm].m_ERRCode;
     output.low_speed = vendor_state.m_Out[arm].m_LowSpdFlag == 1;

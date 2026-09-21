@@ -32,7 +32,8 @@ install(FILES
   include/motion_control_pkg/wbc/trajectory.hpp
   include/motion_control_pkg/wbc/tracking.hpp
   DESTINATION include/motion_control_pkg/wbc)
-install(FILES config/wbc_model.yaml config/wbc_stage2_observer.yaml DESTINATION share/${PROJECT_NAME}/config)
+install(FILES config/wbc_model.yaml config/wbc_stage2_observer.yaml config/wbc_full_support_observer.yaml
+  DESTINATION share/${PROJECT_NAME}/config)
 install(FILES launch/wbc_model.launch.py DESTINATION share/${PROJECT_NAME}/launch)
 install(FILES docs/WBC_ROBOT_DELIVERY.md DESTINATION share/${PROJECT_NAME})
 ament_export_targets(wbc_modelTargets HAS_LIBRARY_TARGET)

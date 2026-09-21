@@ -53,3 +53,12 @@ __pycache__/
 *.tmp
 *.orig
 .DS_Store
+
+# Local robot snapshots and backup archives
+robot_backups/
+backups/
+*.bak
+*.old
+*.tar.gz
+*.tgz
+*.zip

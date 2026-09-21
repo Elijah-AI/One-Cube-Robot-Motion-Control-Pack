@@ -29,11 +29,14 @@ public:
     age_ = declare_parameter<double>("max_state_age_sec", 0.1, fixed);
     skew_ = declare_parameter<double>("max_state_skew_sec", 0.02, fixed);
     inset_ = declare_parameter<double>("support_inset_m", 0.02, fixed);
+    const bool steering_uncertainty_margin = declare_parameter<bool>(
+      "steering_uncertainty_margin_enabled", true, fixed);
     const auto unknown = declare_parameter<std::vector<std::string>>("unknown_steering_joints", std::vector<std::string>{}, fixed);
     if (!unknown.empty()) {
       StaticBalanceOptions options;
       options.support_links = get_parameter("support_links").as_string_array();
       options.unknown_steering = unknown; options.inset = inset_;
+      options.steering_uncertainty_margin_enabled = steering_uncertainty_margin;
       balance_ = std::make_unique<StaticBalance>(path, options, get_parameter("package_dirs").as_string_array());
       policy = balance_->statePolicy();
     }
@@ -114,7 +117,8 @@ private:
     if (balance_) {
       report["steering_com_uncertainty_m"] = balance_->bounds().com_xy;
       report["steering_support_uncertainty_m"] = balance_->bounds().support_xy;
-      report["support_inset_effective_m"] = inset_ + balance_->bounds().com_xy + balance_->bounds().support_xy;
+      report["steering_uncertainty_margin_enabled"] = balance_->options().steering_uncertainty_margin_enabled;
+      report["support_inset_effective_m"] = balance_->effectiveInset();
       report["com_is_nominal_steering_estimate"] = true;
     }
     std_msgs::msg::String msg;

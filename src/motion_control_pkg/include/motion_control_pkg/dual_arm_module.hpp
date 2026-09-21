@@ -24,6 +24,9 @@
 #include "motion_control_pkg/execution/gripper_worker_threads.hpp"
 #include "motion_control_pkg/execution/joint_command.hpp"
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
+#include "motion_control_pkg/wbc/measured_feedback.hpp"
+#include "motion_control_pkg/wbc/feedback_channel.hpp"
+#include "motion_control_pkg/ethercat_bus_manager.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
 
@@ -54,6 +57,12 @@ public:
 
     // 设备连接与模式切换显式执行，构造函数不产生硬件通信。
     bool initialize(std::string& error_message);
+    void attachMeasuredFeedbackBus(std::shared_ptr<miracle::EthercatBusManager> bus) {
+        feedback_bus_=std::move(bus);
+    }
+    rclcpp::CallbackGroup::SharedPtr measuredFeedbackCallbackGroup() const {
+        return measured_feedback_channel_->callbackGroup();
+    }
 
     // 暴露给上层的状态检查
     bool is_idle(int module_id) const;
@@ -178,6 +187,14 @@ private:
     std::atomic<bool> is_executing_left_tool_;
     std::atomic<bool> is_executing_right_tool_;
 
+    rclcpp::Subscription<RobotVision>::SharedPtr collision_cloud_sub_;
+    std::mutex latest_cloud_mutex_;
+    sensor_msgs::msg::PointCloud2 latest_cloud_;       // 缓存最新一帧
+    std::condition_variable latest_cloud_cv_;
+    bool latest_cloud_ready_{false};
+    std::thread cloud_spin_thread_;                    // 后台 spin
+    std::atomic<bool> cloud_spin_running_{false};
+
     // --- PickAndPlace Action Handlers ---
     // rclcpp_action::GoalResponse handle_goal_pick_and_place(
     //     const rclcpp_action::GoalUUID & uuid,
@@ -259,6 +276,7 @@ private:
 
     void heart_beat_cb();
     void motor_statu_cb();
+    bool readMeasuredFeedback(sensor_msgs::msg::JointState& output, std::string& error);
     void head_status_cb();
     void init_motor_status();
 
@@ -299,6 +317,10 @@ private:
     rclcpp::Publisher<HeartBeat>::SharedPtr heart_beat_pub_;
     rclcpp::Publisher<NodeStatus>::SharedPtr device_status_pub_;
     rclcpp::Publisher<MotorStatus>::SharedPtr motor_status_pub_;
+    std::unique_ptr<motion_control_pkg::wbc::FeedbackChannel> measured_feedback_channel_;
+    std::shared_ptr<miracle::EthercatBusManager> feedback_bus_;
+    motion_control_pkg::wbc::MeasuredFeedbackBuilder measured_feedback_{
+        std::array<uint16_t,6>{{LEG_JOINT1,LEG_JOINT2,LEG_JOINT3,BODY_JOINT,HEAD_YAW_MOTOR_ID,HEAD_PITCH_MOTOR_ID}}};
     rclcpp::Publisher<MotorStatus>::SharedPtr head_status_pub_;
     MotorStatus motor_status_msg_;
     MotorStatus head_status_msg_;

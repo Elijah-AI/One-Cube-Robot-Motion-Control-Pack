@@ -1,4 +1,7 @@
-# ros2_ylf_demo
+# ylf_wbc
+
+本工作区全身运控、COM/ZMP 与点云防碰撞用法见 [ylf_wbc 运控命令手册](MOTION_WBC_USAGE.md)。
+双臂、身体及头部的 20 关节真实反馈见 [关节反馈说明](MEASURED_JOINT_FEEDBACK.md)。
 
 2026-09-17：源码统一到 `src/`，视觉按 develop、运控按 HHworkspace 合并。
 避障参数改为 `enable_collision_check: 0/1/2`；见 [合并与验证记录](MERGE_20260917.md)。
@@ -10,18 +13,18 @@
 - `onecube_robot_description`：机器人描述、网格与配置
 - `task_manager`：Modbus TCP 任务入口及 Action 适配
 
-源码单元测试保留用于回归验证；旧工作区的 `build*`、`install*`、`log*`、临时副本和测试部署环境均未提交。克隆后只在仓库根目录生成一套标准 `build/`、`install/`、`log/`。
+本仓库保留功能源码、接口、配置、launch、机器人模型和必要的第三方依赖。测试源码、测试数据、测试构建目标及备份包已移出工作区；构建产物和机器人归档不提交到 Git。克隆后在仓库根目录生成标准 `build/`、`install/`、`log/`。
 
-## 编译与测试
+2026-09-21：同步机器人 `172.16.21.80` 的点云持久订阅、后台接收和缓存实现，保留 WBC、反馈、运控及视觉任务接口。
+
+## 编译
 
 ```bash
-cd /path/to/ylfrobot
+cd /path/to/ylf_wbc
 source /opt/ros/humble/setup.bash
 colcon build --event-handlers console_cohesion+ \
-  --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=OFF
 source install/setup.bash
-colcon test --event-handlers console_cohesion+
-colcon test-result --verbose
 ```
 
 不要叠加旧工作区、单独的 task_manager 安装空间或临时构建目录。
@@ -32,7 +35,7 @@ colcon test-result --verbose
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /path/to/ylfrobot/install/setup.bash
+source /path/to/ylf_wbc/install/setup.bash
 ros2 launch motion_control_pkg bringup.launch.py active_arm_configuration:=dual_arm
 ```
 
@@ -40,9 +43,9 @@ ros2 launch motion_control_pkg bringup.launch.py active_arm_configuration:=dual_
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /path/to/ylfrobot/install/setup.bash
+source /path/to/ylf_wbc/install/setup.bash
 ros2 launch task_manager task_manager.launch.py \
-  config_path:=/path/to/ylfrobot/task_manager/config/task_config.yaml
+  config_path:=/path/to/ylf_wbc/src/task_manager/config/task_config.yaml
 ```
 
 ## 发送任务

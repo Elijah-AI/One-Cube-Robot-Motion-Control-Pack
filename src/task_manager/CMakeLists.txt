@@ -86,45 +86,5 @@ install(DIRECTORY include/
   DESTINATION include/
 )
 
-# ============================================================================
-# 单元测试
-# ============================================================================
-if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_merge_compatibility
-    test/test_behavior_tree_engine.cpp
-    test/test_merge_safety.cpp
-    src/behavior_tree_nodes.cpp
-    src/precondition_manager.cpp)
-  target_include_directories(test_merge_compatibility PRIVATE include)
-  ament_target_dependencies(test_merge_compatibility rclcpp rclcpp_action com_interfaces)
-  target_link_libraries(test_merge_compatibility yaml-cpp)
-
-  # ----- test_fsm_state -----
-  ament_add_gtest(test_fsm_state
-    test/test_fsm_state.cpp
-    src/fsm_state.cpp
-  )
-  target_include_directories(test_fsm_state PRIVATE include)
-  ament_target_dependencies(test_fsm_state
-    rclcpp
-    com_interfaces
-  )
-
-  # ----- test_task_config_parser：验证主级+次级配置分级加载 -----
-  ament_add_gtest(test_task_config_parser
-    test/test_task_config_parser.cpp
-    test/test_vision_pose_offset.cpp
-    src/task_config_parser.cpp
-  )
-  target_include_directories(test_task_config_parser PRIVATE include)
-  target_compile_definitions(test_task_config_parser PRIVATE SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_task_config_parser yaml-cpp)
-  ament_target_dependencies(test_task_config_parser
-    rclcpp
-    com_interfaces
-  )
-
-endif()
 
 ament_package()

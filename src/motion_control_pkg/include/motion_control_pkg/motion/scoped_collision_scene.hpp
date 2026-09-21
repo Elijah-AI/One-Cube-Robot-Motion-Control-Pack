@@ -43,7 +43,8 @@ private:
     MiracleMAlgo& algo_;
     CollisionModeGuard guard_;
     bool installed_{false};
-    const std::string object_name_{"action_collision_environment"};
+    // Stable scene object name, independent of the ROS topic and frame_id.
+    const std::string object_name_{"box"};
 };
 
 inline std::unique_ptr<ScopedCollisionScene> makeCollisionScene(

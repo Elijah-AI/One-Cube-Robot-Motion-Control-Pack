@@ -2,6 +2,7 @@
 #define ETHERCAT_BUS_MANAGER_HPP
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -27,6 +28,9 @@ public:
 
     bool isReady() const noexcept;
     bool getMotorActualSnapshot(std::vector<DriverSDK::motorActualStruct> &motor_actual_data) const;
+    // A successful SDK acquisition only; callers must retain its age and sequence.
+    bool getTimedMotorActualSnapshot(std::vector<DriverSDK::motorActualStruct>& data,
+        std::chrono::steady_clock::time_point& acquired, uint64_t& sequence) const;
     bool enableMotors(const std::vector<uint16_t> &motor_ids, double timeout_seconds = 5.0);
     bool updateMotorTargets(const std::vector<uint16_t> &motor_ids,
                             const std::vector<DriverSDK::motorTargetStruct> &motor_target_data);
@@ -48,6 +52,9 @@ private:
     mutable std::mutex target_mutex_;
     std::mutex enable_mutex_;
     std::vector<DriverSDK::motorActualStruct> motor_actual_snapshot_;
+    std::chrono::steady_clock::time_point actual_acquired_{};
+    uint64_t actual_sequence_{0};
+    bool actual_read_valid_{false};
     std::vector<DriverSDK::motorTargetStruct> motor_target_buffer_;
     std::vector<bool> motor_enable_ready_;
 

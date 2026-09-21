@@ -53,16 +53,9 @@ WBC 静态/动态开关沿用原来的默认关闭状态。动态 ZMP 仍要求�
 `/home/elijah/ros2_ws/.smooth_validation/deps/usr`，运行库与许可证另复制到
 `install/native_deps/`，由 `setup_local.bash` 加载；没有修改系统依赖。
 
-重新执行已有离线测试：
-
-```bash
-source /home/elijah/ylf_wbc/setup_local.bash
-cd /home/elijah/ylf_wbc
-ctest --test-dir build/com_interfaces --output-on-failure
-ctest --test-dir build/motion_control_pkg --output-on-failure
-ctest --test-dir build/task_manager --output-on-failure
-colcon test-result --test-result-base build --verbose
-```
+2026-09-21 整理后，测试源码、测试目标及旧构建产物已移出本工作区。
+下述测试数量是 2026-09-18 的历史验证记录；当前构建只保留功能目标，
+构建方法见 [工作区说明](README.md)。
 
 不得将旧安装目录生成的 `com_interfaces` 与本工作区的消费者混用。
 本次接口、运控和任务消费者在同一独立安装目录中重新生成和编译。

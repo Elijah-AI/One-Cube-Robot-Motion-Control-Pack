@@ -118,6 +118,8 @@ inline bool isArmEnabled(
 
 struct ArmFeedback
 {
+  // Controller output frame counter, not a local poll counter. -1 means absent.
+  int feedback_sequence{-1};
   std::array<double, kArmDof> joint_position{};
   std::array<double, kArmDof> joint_velocity{};
   std::array<double, kArmDof> joint_effort{};

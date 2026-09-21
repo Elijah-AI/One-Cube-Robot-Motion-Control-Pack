@@ -124,6 +124,7 @@ bool EthercatBusManager::waitForCommunication() {
 
 bool EthercatBusManager::initializeTargetBuffer() {
     std::vector<DriverSDK::motorActualStruct> motor_actual_data(motor_number_);
+    const auto acquired = std::chrono::steady_clock::now();
     if (controller_.getMotorActual(motor_actual_data) != 0) {
         RCLCPP_ERROR(rclcpp::get_logger("ethercat_bus_manager"),
                      "Failed to read initial motor state");
@@ -133,6 +134,9 @@ bool EthercatBusManager::initializeTargetBuffer() {
     {
         std::lock_guard<std::mutex> lock(actual_mutex_);
         motor_actual_snapshot_ = motor_actual_data;
+        actual_acquired_ = acquired;
+        ++actual_sequence_;
+        actual_read_valid_ = true;
     }
     {
         std::lock_guard<std::mutex> lock(target_mutex_);
@@ -159,10 +163,16 @@ void EthercatBusManager::run() {
 
     while (!stop_) {
       
+        const auto acquired = std::chrono::steady_clock::now();
         const int actual_result = controller_.getMotorActual(actual_data);
-        if (actual_result == 0) {
+        {
             std::lock_guard<std::mutex> lock(actual_mutex_);
-            motor_actual_snapshot_ = actual_data;
+            actual_read_valid_ = actual_result == 0;
+            if (actual_read_valid_) {
+                motor_actual_snapshot_ = actual_data;
+                actual_acquired_ = acquired;
+                ++actual_sequence_;
+            }
         }
         {
             std::lock_guard<std::mutex> lock(target_mutex_);
@@ -211,6 +221,18 @@ bool EthercatBusManager::getMotorActualSnapshot(std::vector<DriverSDK::motorActu
         return false;
     }
     motor_actual_data = motor_actual_snapshot_;
+    return true;
+}
+
+bool EthercatBusManager::getTimedMotorActualSnapshot(
+    std::vector<DriverSDK::motorActualStruct>& data,
+    std::chrono::steady_clock::time_point& acquired, uint64_t& sequence) const {
+    std::lock_guard<std::mutex> lock(actual_mutex_);
+    if (!actual_read_valid_ || motor_actual_snapshot_.empty() || actual_sequence_ == 0)
+        return false;
+    data = motor_actual_snapshot_;
+    acquired = actual_acquired_;
+    sequence = actual_sequence_;
     return true;
 }
 

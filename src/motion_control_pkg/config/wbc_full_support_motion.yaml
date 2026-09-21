@@ -1,0 +1,6 @@
+# Merge these two keys into the existing robot parameters, or load this file
+# after the complete motion-control configuration. This is not a driver config.
+/motion_control_ns/motion_control:
+  ros__parameters:
+    wbc_support_inset_m: 0.0
+    wbc_steering_uncertainty_margin_enabled: false

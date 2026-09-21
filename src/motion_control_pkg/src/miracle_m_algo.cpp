@@ -571,12 +571,21 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr MiracleMAlgo::pointCloudToModelRoot(
             Eigen::Isometry3d::Identity(), root_from_cloud)) {
         throw std::runtime_error("Unknown point cloud frame: " + message.header.frame_id);
     }
+    // The camera driver already publishes calibrated base_link points. For
+    // the model-root frame this is an identity transform: preserve XYZ exactly
+    // rather than applying any camera extrinsics a second time. Other model
+    // frames still need their actual FK transform (never just relabel them).
+    const bool already_in_model_root = root_from_cloud.matrix().isIdentity(0.0);
     pcl::PointCloud<pcl::PointXYZ> input;
     pcl::fromROSMsg(message, input);
     auto output = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
     output->reserve(input.size());
     for (const auto& point : input) {
         if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+        if (already_in_model_root) {
+            output->push_back(point);
+            continue;
+        }
         const Eigen::Vector3d transformed = root_from_cloud * Eigen::Vector3d(point.x, point.y, point.z);
         if (!transformed.allFinite()) throw std::runtime_error("Nonfinite point cloud transform");
         output->push_back(pcl::PointXYZ(transformed.x(), transformed.y(), transformed.z()));

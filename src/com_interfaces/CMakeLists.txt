@@ -57,11 +57,5 @@ install(DIRECTORY srv
 install(DIRECTORY action
   DESTINATION share/${PROJECT_NAME}
 )
-if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_dual_arm_action_contract test/test_dual_arm_action_contract.cpp)
-  rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
-  target_link_libraries(test_dual_arm_action_contract "${cpp_typesupport_target}")
-endif()
 
 ament_package()

@@ -292,6 +292,8 @@ WholeBodyModule::WholeBodyModule(
         options.unknown_steering = node->declare_parameter<std::vector<std::string>>("wbc_unknown_steering_joints",
             {"base_front_wheel_1_yaw_joint", "base_rear_wheel_1_yaw_joint"}, fixed);
         options.inset = node->declare_parameter<double>("wbc_support_inset_m", .02, fixed);
+        options.steering_uncertainty_margin_enabled = node->declare_parameter<bool>(
+            "wbc_steering_uncertainty_margin_enabled", true, fixed);
         options.com_weight = node->declare_parameter<double>("wbc_com_weight", .01, fixed);
         miracle_algo_->configureStaticBalance(options);
         auto policy = miracle_algo_->staticBalance()->statePolicy();
@@ -312,6 +314,11 @@ WholeBodyModule::WholeBodyModule(
         balance_skew_ = node->declare_parameter<double>("wbc_max_state_skew_sec", .06, fixed);
         balance_state_->snapshot(0, balance_age_, balance_skew_);
         const auto topic = node->declare_parameter<std::string>("wbc_joint_state_topic", "/wbc/joint_states", fixed);
+        rclcpp::SubscriptionOptions feedback_options;
+        if (dual_arm_module_)
+            feedback_options.callback_group = dual_arm_module_->measuredFeedbackCallbackGroup();
+        else
+            feedback_options.callback_group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         balance_subscription_ = node->create_subscription<sensor_msgs::msg::JointState>(topic, rclcpp::SensorDataQoS(),
             [this](sensor_msgs::msg::JointState::ConstSharedPtr msg) {
                 auto node = node_.lock(); if (!node) return;
@@ -319,7 +326,7 @@ WholeBodyModule::WholeBodyModule(
                 const double stamp = rclcpp::Time(msg->header.stamp).seconds();
                 if (stamp > node->now().seconds() || !balance_state_->update(msg->name, msg->position, msg->velocity, stamp, error))
                     RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 2000, "WBC feedback rejected: %s", error.c_str());
-            });
+            }, feedback_options);
     }
 }
 
@@ -335,11 +342,20 @@ bool WholeBodyModule::read_balance_state(std::vector<double>& q, std::string& er
         if (state.missing.empty() && state.stale.empty()) error += "; velocity estimate invalid or assumed state present";
         return false;
     }
+    if (!state.position_valid) {
+        error = "WBC feedback incomplete, stale or time-skewed";
+        for (const auto& name : state.missing) error += "; missing=" + name;
+        for (const auto& name : state.stale) error += "; stale=" + name;
+        error += "; oldest_age_sec=" + std::to_string(node->now().seconds()-state.oldest_stamp);
+        error += "; skew_sec=" + std::to_string(state.newest_stamp-state.oldest_stamp);
+        return false;
+    }
     if (!miracle_algo_->balanceStateToFullQ(state, q)) {
-        error = "WBC feedback incomplete, stale or time-skewed"; return false;
+        error = "WBC feedback-to-model joint mapping failed";
+        return false;
     }
     if (!miracle_algo_->isStaticBalanceValid(miracle_algo_->toEigenConfig(q))) {
-        error = "measured state violates conservative static COM constraint"; return false;
+        error = "measured state violates configured static COM constraint"; return false;
     }
     return true;
 }

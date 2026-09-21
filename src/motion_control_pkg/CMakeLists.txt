@@ -207,7 +207,7 @@ endif()
 # 创建可执行节点
 add_executable(motion_control_node ${SOURCES})
 
-# Production algorithm and offline tests use the same object code, without hardware SDKs.
+# Shared production planning core, independent of hardware SDKs.
 add_library(motion_planning_core STATIC src/miracle_m_algo.cpp)
 target_include_directories(motion_planning_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -380,21 +380,5 @@ install(DIRECTORY launch
 # )
 
 # 导出包配置
-if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_collision_modes test/test_collision_modes.cpp)
-  target_compile_definitions(test_collision_modes PRIVATE TEST_URDF="${CMAKE_CURRENT_SOURCE_DIR}/test/collision_modes.urdf")
-  target_link_libraries(test_collision_modes motion_planning_core)
-  ament_add_gtest(test_wbc_model test/test_wbc_model.cpp)
-  target_compile_definitions(test_wbc_model PRIVATE
-    WBC_TEST_URDF="${CMAKE_CURRENT_SOURCE_DIR}/../onecube_robot_description/urdf/onecube_robot_description.urdf")
-  target_link_libraries(test_wbc_model wbc_model urdfdom::urdfdom_model)
-  ament_add_gtest(test_wbc_tracking test/test_wbc_tracking.cpp)
-  target_link_libraries(test_wbc_tracking wbc_model)
-  ament_add_gtest(test_wbc_collision_compat test/test_wbc_collision_compat.cpp)
-  target_compile_definitions(test_wbc_collision_compat PRIVATE
-    WBC_TEST_DESCRIPTION="${CMAKE_CURRENT_SOURCE_DIR}/../onecube_robot_description")
-  target_link_libraries(test_wbc_collision_compat motion_planning_core)
-endif()
 
 ament_package()

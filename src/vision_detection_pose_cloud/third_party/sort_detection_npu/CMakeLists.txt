@@ -82,37 +82,3 @@ else(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64")
 endif()
 
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION 1.1.0.1 SOVERSION 1)
-
-add_executable(main0 test/main0.cpp)
-target_link_libraries(main0 ${PROJECT_NAME}
-                        glog
-                        gflags
-                    )
-add_executable(main1 test/main.cpp)
-target_link_libraries(main1 ${PROJECT_NAME}
-                        glog
-                        gflags
-                    )
-
-# add_executable(scara_test test/main1.cpp)
-# target_link_libraries(scara_test ${PROJECT_NAME}
-#                             ${PCL_LIBRARIES}
-
-#                     )
-
-# add_executable(main3 test/main3.cpp)
-# target_link_libraries(main3 ${PROJECT_NAME}
-#                        glog
-#                        gflags
-#                        OpenMP::OpenMP_CXX
-#                    )
-
-# add_executable(main4 test/main4.cpp)
-# target_link_libraries(main4 ${PROJECT_NAME}
-#                    )
-
-# add_executable(calibration test/calibration.cpp)
-# target_link_libraries(calibration ${PROJECT_NAME}
-#                    )
-
-        

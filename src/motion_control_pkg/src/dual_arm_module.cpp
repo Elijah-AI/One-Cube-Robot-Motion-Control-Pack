@@ -416,6 +416,10 @@ DualArmModule::DualArmModule(
     l_jerk_limit_.resize(arm_dof_);
    
     this->motor_status_pub_ = shared_node->create_publisher<MotorStatus>("/Control/MotorInfo",10);
+    measured_feedback_channel_ = std::make_unique<motion_control_pkg::wbc::FeedbackChannel>(
+        shared_node, [this](sensor_msgs::msg::JointState& output, std::string& error) {
+            return readMeasuredFeedback(output, error);
+        });
     joint_feedback_timer_ = shared_node->create_wall_timer(10ms,std::bind(&DualArmModule::motor_statu_cb, this));
     motor_status_msg_ = com_interfaces::msg::MotorStatus();
     init_motor_status();
@@ -444,6 +448,26 @@ DualArmModule::DualArmModule(
         shared_node->declare_parameter<std::string>("collision_pointcloud_topic", "/fusion/synced_robot_vision");
     }
     collision_pointcloud_topic_ = shared_node->get_parameter("collision_pointcloud_topic").as_string();
+
+    // 建立持久订阅,后台线程持续接收
+    collision_cloud_sub_ = sub_pointcloudNode_->create_subscription<RobotVision>(
+        collision_pointcloud_topic_, rclcpp::SensorDataQoS(),
+        [this](const RobotVision::SharedPtr msg) {
+            if (!msg || msg->camera_rgbd_pointcloud.data.empty()) return;
+            {
+                std::lock_guard<std::mutex> lk(latest_cloud_mutex_);
+                latest_cloud_ = msg->camera_rgbd_pointcloud;
+                latest_cloud_ready_ = true;
+            }
+            latest_cloud_cv_.notify_one();
+        });
+    cloud_spin_running_ = true;
+    cloud_spin_thread_ = std::thread([this] {
+        while (cloud_spin_running_ && rclcpp::ok()) {
+            rclcpp::spin_some(sub_pointcloudNode_);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    });
 }
 
 bool DualArmModule::initialize(std::string& error_message)
@@ -4223,6 +4247,37 @@ bool DualArmModule::normalizePoseTargetToPlanningFrame(
     return true;
 }
 
+bool DualArmModule::readMeasuredFeedback(
+    sensor_msgs::msg::JointState& output, std::string& error)
+{
+    const auto node = lockNode(__func__);
+    if (!node || !init_robot_link_ || !feedback_bus_) {
+        error = "hardware feedback sources not initialized";
+        return false;
+    }
+    // Dedicated acquisition path: no model update, FK, collision scene or
+    // MotorInfo fallback. A planner can hold the model mutex for seconds.
+    const auto arm_acquired_ros = node->now();
+    const auto arm_acquired_steady = std::chrono::steady_clock::now();
+    motion_control_pkg::sdk::DualArmDeviceState arms;
+    const auto result = sdk_command_gate_->readState(arms);
+    if (!result) {
+        error = "arm SDK read failed: " + result.error_message;
+        return false;
+    }
+    std::vector<DriverSDK::motorActualStruct> motors;
+    std::chrono::steady_clock::time_point bus_acquired;
+    uint64_t bus_sequence = 0;
+    if (!feedback_bus_->getTimedMotorActualSnapshot(motors, bus_acquired, bus_sequence)) {
+        error = "no valid EtherCAT acquisition";
+        return false;
+    }
+    const auto bus_older_ns = std::max<int64_t>(0,
+        std::chrono::duration_cast<std::chrono::nanoseconds>(arm_acquired_steady-bus_acquired).count());
+    return measured_feedback_.build(arms, motors, bus_sequence,
+        arm_acquired_ros.nanoseconds()-bus_older_ns, node->now().nanoseconds(), output, error);
+}
+
 void DualArmModule::motor_statu_cb()
 {
     auto node = lockNode(__func__);
@@ -4364,61 +4419,18 @@ void DualArmModule::head_status_cb()
 }
 
 sensor_msgs::msg::PointCloud2 DualArmModule::loadPointCloud(const std::string& topic_name) {
-  // Both arm workers share this temporary executor; never spin it concurrently.
-  std::lock_guard<std::mutex> subscription_lock(pointcloud_subscription_mutex_);
-  // path 在此处语义为“话题名”，例如 "/fusion/synced_robot_vision"
-  const std::string& topic = topic_name;
-
-  sensor_msgs::msg::PointCloud2 cloud;
-  if (topic.empty()) return cloud;
-  std::atomic<bool> got{false};
-
-  // 1. 临时订阅，仅本次调用有效
-  // 使用完整的命名空间 com_interfaces::msg::SyncedRobotVision
-  auto sub = sub_pointcloudNode_->create_subscription<RobotVision>(
-      topic, rclcpp::SensorDataQoS(),
-      [&](const RobotVision::SharedPtr msg) {
-        if (got.exchange(true)) return;   // 只取第一帧
-        
-        // 从自定义消息中提取 sensor_msgs/PointCloud2 字段
-        // 确保 msg 定义中该字段名为 camera_rgbd_pointcloud
-        const auto& pc2_msg = msg->camera_rgbd_pointcloud;
-        
-        // 检查点云数据是否为空
-        if (pc2_msg.data.empty()) {
-            RCLCPP_WARN(sub_pointcloudNode_->get_logger(), "Received empty pointcloud in SyncedRobotVision");
-            got.store(false); // 重置标志，尝试接收下一帧
-            return;
-        }
-
-        try {
-            // 将 ROS2 PointCloud2 消息转换为 PCL 点云
-            cloud = pc2_msg;
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(sub_pointcloudNode_->get_logger(), "Failed to convert ROS msg to PCL: %s", e.what());
-            got.store(false);
-        }
-      });
-
-  // 2. 阻塞等待，固定 2 秒超时
-  constexpr int kTimeoutMs = 2000;
-  auto start = std::chrono::steady_clock::now();
-  rclcpp::Rate rate(50);
-  while (rclcpp::ok() && !got.load()) {
-    rclcpp::spin_some(sub_pointcloudNode_);
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start).count() >= kTimeoutMs) {
-      RCLCPP_WARN(sub_pointcloudNode_->get_logger(),
-                  "Timeout after %d ms waiting for %s", kTimeoutMs, topic.c_str());
-      throw std::runtime_error("Timeout waiting for synced robot vision on topic: " + topic);
+    if (topic_name.empty()) return sensor_msgs::msg::PointCloud2{};
+    std::unique_lock<std::mutex> lk(latest_cloud_mutex_);
+    // 等待最新帧;若已有缓存就直接用,最多等 5 秒
+    if (!latest_cloud_ready_) {
+        latest_cloud_cv_.wait_for(lk, std::chrono::seconds(5),
+                                  [this] { return latest_cloud_ready_; });
     }
-    rate.sleep();
-  }
-
-  // 3. sub 离开作用域自动销毁，不再读取后续消息
-  if (cloud.data.empty()) throw std::runtime_error("Point cloud acquisition interrupted: " + topic);
-  
-  return cloud;
+    if (!latest_cloud_ready_) {
+        throw std::runtime_error("Timeout waiting for synced robot vision on topic: " + topic_name);
+    }
+    latest_cloud_ready_ = false;  // 取走后下次等新帧(如需"最新"语义可去掉这行)
+    return latest_cloud_;
 }
 
 void DualArmModule::joint_command_cb()
