@@ -2,6 +2,7 @@
 #define TASK_ACTION_CLIENT_HPP_
 
 #include <rclcpp/rclcpp.hpp>
+#include "sensor_msgs/msg/joint_state.hpp"
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <memory>
 #include <string>
@@ -421,13 +422,15 @@ public:
     /// @brief 将 vision_detect 结果存储到序列级 key（如 "seq1"），供同序列后续 move_pose/move_joints 使用
     /// @param seq_key 序列级 key（由 derive_seq_key 推导）
     /// @param result 视觉检测结果
-    void store_vision_result_at_seq_key(const std::string& seq_key, const VisionDet::Result& result);
+    void store_vision_result_at_seq_key(const std::string& seq_key, const VisionDet::Result& result,
+                                      const std::string& result_key = "");
 
     /// @brief 从序列级 key 获取之前 vision_detect 的结果
     /// @param seq_key 序列级 key
     /// @param out_result [输出] 视觉检测结果
     /// @return true 表示序列级 key 下有有效的检测结果
-    bool get_vision_result_from_seq_key(const std::string& seq_key, VisionDet::Result& out_result) const;
+    bool get_vision_result_from_seq_key(const std::string& seq_key, VisionDet::Result& out_result,
+                                      const std::string& result_key = "") const;
 
     /// @brief 检查序列级 key 是否有有效的视觉检测结果
     bool has_vision_result_at_seq_key(const std::string& seq_key) const;
@@ -453,6 +456,10 @@ public:
 
 private:
     rclcpp::Node::SharedPtr node_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr waist_state_subscription_;
+    sensor_msgs::msg::JointState::ConstSharedPtr waist_state_;
+    std::chrono::steady_clock::time_point waist_state_received_{};
+    std::mutex waist_state_mutex_;
     std::shared_future<std::shared_ptr<GoalHandleCtrlGripper> >  gripper_send_future_;
     void goal_response_callback(GoalHandleVisionDetection::SharedPtr goal_handle);
     void feedback_callback(GoalHandleVisionDetection::SharedPtr, const std::shared_ptr<const VisionDet::Feedback> feedback);
@@ -598,6 +605,7 @@ private:
     // ========= 序列级视觉结果存储（跨 action 共享） =========
     //序列级视觉检测结果映射表（key: "seq1","seq2", value: VisionDet::Result）
     mutable std::map<std::string, VisionDet::Result> seq_vision_results_;
+    std::map<std::pair<std::string, std::string>, VisionDet::Result> named_seq_vision_results_;
     //序列级视觉结果访问互斥锁
     mutable std::mutex seq_vision_mutex_;
 

@@ -50,6 +50,10 @@ uint8[] hand_action_type                 # 灵巧手动作类型，未安装时�
 sensor_msgs/PointCloud2 env_point_cloud
 string point_cloud_frame_id
 int64 timeout_ms                         # 操作超时时间，毫秒
+# 仅用于 WHOLE_BODY_LEFT/RIGHT/BOTH 的 MoveP（enable_move_line=false）。
+# true: 仅所选手臂和腰部 J4/body_joint 参与，leg_joint1/2/3 保持起始角度。
+# false（默认）: 保留四个腿/躯干关节参与的原全身模式。
+bool whole_body_waist_only false
 ---
 bool success
 string error_message

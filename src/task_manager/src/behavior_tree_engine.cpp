@@ -323,7 +323,7 @@ BTNode::Ptr build_action_node(
               << ", confidence=" << vis_conf
               << ", frame_id=" << vis_frame);
             // 存储到序列级 key，供同序列的 move_pose/move_joints 使用
-            act_client.store_vision_result_at_seq_key(seq_key, vis_res);
+            act_client.store_vision_result_at_seq_key(seq_key, vis_res, atomic_act->vision_param.result_key);
           }
         }
 

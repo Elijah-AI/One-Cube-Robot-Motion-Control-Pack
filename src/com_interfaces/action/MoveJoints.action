@@ -18,6 +18,9 @@ uint8 arm_id
 uint8 control_mode
 
 # ARM_LEFT/ARM_RIGHT 使用下列可变长字段，必须提供完整、唯一的七个关节。
+# LEG: 四个关节维持原有 MoveJ；仅给 leg_joint1/2/3 中两个不同关节时，
+# 自动补偿第三个关节，使 body_link 相对 base_link 的朝向在全程保持启动值。
+# 两关节模式使用绝对弧度目标，body_joint 保持启动角度，允许 body 位置变化。
 string[] joint_name
 float64[] position
 

@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "main_node.hpp"
+#include "com_interfaces/leg_joint_goal.hpp"
 #include "dual_arm_module.hpp"
 #include "ethercat_bus_manager.hpp"
 #include "miracle_head_module.hpp"
@@ -255,6 +256,14 @@ private:
                     return rclcpp_action::GoalResponse::REJECT;
                 }
             }
+        }
+
+        if (goal->whole_body_waist_only &&
+            ((goal->arm_id != WHOLE_BODY_LEFT && goal->arm_id != WHOLE_BODY_RIGHT &&
+              goal->arm_id != WHOLE_BODY_BOTH) || goal->enable_move_line)) {
+            RCLCPP_WARN(this->get_logger(),
+                "whole_body_waist_only requires whole-body MoveP (arm_id=5/6/7, enable_move_line=false)");
+            return rclcpp_action::GoalResponse::REJECT;
         }
 
         if (!std::isfinite(goal->acceleration_scale) || goal->acceleration_scale < 0 || goal->acceleration_scale > 1 ||
@@ -640,6 +649,16 @@ private:
             }
         }
         else if (goal->arm_id == LEG) { 
+            if (goal->joint_name.size() == 2 || goal->position.size() == 2) {
+                com_interfaces::LegJointSelection selection;
+                std::string error;
+                if (!com_interfaces::validateLegOrientationGoal(goal->joint_name, goal->position, selection, error) ||
+                    !std::isfinite(goal->speed) || goal->speed <= 0 || goal->speed > 1 ||
+                    goal->timeout_ms <= 0 || goal->control_mode != MoveJoints::Goal::CONTROL_POSITION) {
+                    RCLCPP_WARN(this->get_logger(), "Invalid body-orientation leg MoveJ: %s; require speed (0,1], position mode and positive timeout", error.c_str());
+                    return rclcpp_action::GoalResponse::REJECT;
+                }
+            }
             if (!lower_body_module_->is_idle(ID_LEG)) {
                 RCLCPP_WARN(this->get_logger(), "Leg is busy!");
                 return rclcpp_action::GoalResponse::REJECT;

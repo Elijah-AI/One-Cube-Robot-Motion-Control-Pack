@@ -58,4 +58,9 @@ install(DIRECTORY action
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Match rosidl's package-scoped include root so imported interface targets also
+# expose the hand-written goal validation helper to downstream consumers.
+install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+ament_export_include_directories(include/${PROJECT_NAME})
+
 ament_package()

@@ -128,7 +128,7 @@ void TaskActionClient::compound_move_worker(
       if (!seq_key.empty())
       {
         VisionDet::Result vis_res;
-        if (get_vision_result_from_seq_key(seq_key, vis_res))
+        if (get_vision_result_from_seq_key(seq_key, vis_res, sub.move_pose_param.vision_result_key))
         {
           LOG_INFO(logger, task_log::Tag::ACTION,
             "move_compound sub #" << i << ": using seq-level vision result from [" << seq_key << "]");
@@ -141,7 +141,10 @@ void TaskActionClient::compound_move_worker(
         }
       }
 
-      ActionCallResult r = sub.move_pose_param.vision_pose_offset.enabled && !has_vision_target ?
+      const auto& move = sub.move_pose_param;
+      const bool needs_vision = !move.vision_result_key.empty() || move.vision_pose_offset.enabled ||
+          move.left_vision_pose_offset.enabled || move.right_vision_pose_offset.enabled;
+      ActionCallResult r = needs_vision && !has_vision_target ?
           ActionCallResult::FAIL_PARAM_INVALID : call_move_pose(task_id, sub.move_pose_param,
           target_pose, env_cloud, cloud_frame, sub_key);
       if (action_call_result_is_ok(r))

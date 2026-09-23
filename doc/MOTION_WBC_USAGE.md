@@ -14,6 +14,7 @@
 这里的全身运动是位置轨迹控制：单臂 7 + 腿/躯干 4，或双臂 14 + 腿/躯干 4。
 它不自动控制底盘行驶或头部跟随，也不是一个力矩级全身控制接口。
 全身 IK 可调整腿部帮助 TCP 到位，但不保证每次都会动腿。
+全身 MoveP 可设置 `whole_body_waist_only: true`，仅腰部 J4 与所选手臂参与，三个腿部关节保持起始角度；默认 `false` 保留原模式。详见 [腰部与手臂 MoveP](WHOLE_BODY_WAIST_ONLY_MOVEP.md)。
 
 `wbc_static_com_enabled`、`wbc_dynamic_zmp_enabled` 默认均为 `false`。
 选择全身 `arm_id` 不等于启用了 COM/ZMP 平衡保护；碰撞开关也与这两个开关独立。
@@ -417,6 +418,11 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 右臂用 `arm_id: 1` 和 `Joint1_R` 到 `Joint7_R`。七个关节必须完整、唯一。
 双臂 `MoveJoints` 用 `arm_id: 2`，填写 `left_joint_name/left_position/right_joint_name/right_position`，同步模式为 0。
 头部/腿部关节路由为 `3/4`，但不能把 `MoveJoints.arm_id=5/6/7` 当作全身关节控制。
+
+腿部 `arm_id: 4` 仅填写 `leg_joint1/leg_joint2/leg_joint3` 中两个关节时，
+自动补偿第三关节，全程保持启动时的 body 朝向，允许位置变化；
+原有四关节目标仍走普通 MoveJ。三种组合、任务 YAML 和保护条件见
+[腿部定姿态 MoveJ](LEG_BODY_ORIENTATION_MOVEJ.md)。
 
 ### 8.2 判断动作结果
 

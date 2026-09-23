@@ -1,0 +1,296 @@
+# 笔记本组装件：左抓 5 → 放 2；右抓 10 → 放 4，右手先放。
+# 单位 m / rad，四元数 xyzw；视觉输入均为真实 base_link 位姿。
+# 以 0.530 m 内长、0.025 m 槽宽、14 槽对称布局为准：
+# pitch=(0.530-0.025)/13；x(slot)=(slot-7.5)*pitch，槽序沿 tray +X。
+# 视觉 -Z 是深入方向；TCP +Z 对齐视觉 -Z，开合轴 TCP X 对齐视觉 X/Y。
+# 所有 translation 均沿视觉局部轴，不能直接当作 base_link 偏移。
+# 详细参数与限制见 doc/LAPTOP_ASSEMBLY_TASK.md。
+action_sequencenum: 1
+action_sequence1:
+  # 0. 腰部先回绝对零位；三个腿部关节保持当前反馈位置。
+  - action_type: move_joints
+    params:
+      arm_id: 4
+      joint_name: [body_joint]
+      position: [0.0]
+      relative_position: false
+      enable_collision_check: 1
+      speed: 0.15
+      timeout_ms: 60000
+
+  # 1. 初始面向放置处，保存 rack 右下角；后续 tray 检测不会覆盖它。
+  - action_type: vision_detect
+    params:
+      target_obj_name: rack
+      result_key: rack
+      expected_frame_id: base_link
+      priority: 10
+      type: 0
+      require_single_target: true
+      require_expected_frame: true
+
+  # 2. J4 相对当前反馈转动 -pi/2；当前 URDF 腰轴朝下，对应俯视逆时针。
+  # task_manager 读取新鲜、静止的腰腿反馈，补全三个腿部保持目标。
+  - action_type: move_joints
+    params:
+      arm_id: 4
+      joint_name: [body_joint]
+      position: [-1.5707963267948966]
+      relative_position: true
+      enable_collision_check: 1
+      speed: 0.15
+      timeout_ms: 60000
+
+  # 3. 面向抓取处，保存 tray 上表面中心。
+  - action_type: vision_detect
+    params:
+      target_obj_name: tray
+      result_key: tray
+      expected_frame_id: base_link
+      priority: 10
+      type: 0
+      require_single_target: true
+      require_expected_frame: true
+
+  # 4、5 并行：双臂到准备姿态，同时双爪张开；两项均完成后进入动作 6。
+  - parallel_actions:
+      # 4. 双臂同步进入参考 demo 的准备关节姿态。
+      - action_type: move_joints
+        params:
+          arm_id: 2
+          left_joint_name: &left_joints [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L]
+          right_joint_name: &right_joints [Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R]
+          left_position: &left_ready [-0.3570031357117381, -0.9126436008072708, 0.3374029025895138, -1.8517995028984984, -0.9134245727969366, 0.9415111351802664, -0.8714162692361901]
+          right_position: &right_ready [0.6397361681014009, -0.5832027176392532, -0.8220328736686873, -1.884303783477079, 0.9503200065388943, 0.5485912108481474, 0.8430800355006652]
+          synchronization_mode: 0
+          enable_collision_check: 1
+          speed: 0.2
+          timeout_ms: 45000
+
+      # 5. 双爪张开至 140，数组顺序 [左,右]。
+      - action_type: gripper_ctrl
+        params:
+          gripper_id: 2
+          comport: [2, 2]
+          position: [140, 140]
+          speed: [255, 255]
+          max_torque: [60, 60]
+          block: true
+          timeout_ms: 10000
+
+  # 6. 双臂同步 MoveP 到各自槽上方 25 cm，腰腿保持当前姿态。
+  - action_type: move_pose
+    params:
+      arm_id: 2
+      vision_result_key: tray
+      frame_id: base_link
+      use_config_pose: false
+      left_target_pose: &unused_pose [0, 0, 0, 0, 0, 0, 1]
+      right_target_pose: *unused_pose
+      left_bound_size: &zero_offset [0, 0, 0]
+      right_bound_size: *zero_offset
+      left_vision_pose_offset: &left_pick_high
+        translation_frame: vision
+        translation: [&left_pick_x -0.09711538461538462, 0, 0.25]
+        # 已实测：TCP X -> 视觉 +Y，TCP Y -> 视觉 +X，TCP Z -> 视觉 -Z。
+        rotation: &left_pick_rotation [0.7071067811865476, 0.7071067811865476, 0, 0]
+      right_vision_pose_offset: &right_pick_high
+        translation_frame: vision
+        translation: [&right_pick_x 0.09711538461538462, 0, 0.25]
+        rotation: &right_pick_rotation [0, 1, 0, 0]
+      synchronization_mode: 0
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.2
+      timeout_ms: 60000
+
+  # 7. 同步直线下降到释放点：8 cm：相对上表面 z=0.08。
+  - action_type: move_pose
+    params:
+      arm_id: 2
+      vision_result_key: tray
+      frame_id: base_link
+      use_config_pose: false
+      left_target_pose: *unused_pose
+      right_target_pose: *unused_pose
+      left_bound_size: *zero_offset
+      right_bound_size: *zero_offset
+      left_vision_pose_offset:
+        translation_frame: vision
+        translation: [*left_pick_x, 0, 0.08]
+        rotation: *left_pick_rotation
+      right_vision_pose_offset:
+        translation_frame: vision
+        translation: [*right_pick_x, 0, 0.08]
+        rotation: *right_pick_rotation
+      synchronization_mode: 0
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.1
+      timeout_ms: 60000
+
+  # 8. 双爪夹紧并等待完成。
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 2
+      comport: [2, 2]
+      position: [255, 255]
+      speed: [255, 255]
+      max_torque: [60, 60]
+      block: true
+      timeout_ms: 10000
+
+  # 9. 双臂同步直线退出至槽上方 25 cm。
+  - action_type: move_pose
+    params:
+      arm_id: 2
+      vision_result_key: tray
+      frame_id: base_link
+      use_config_pose: false
+      left_target_pose: *unused_pose
+      right_target_pose: *unused_pose
+      left_bound_size: *zero_offset
+      right_bound_size: *zero_offset
+      left_vision_pose_offset: *left_pick_high
+      right_vision_pose_offset: *right_pick_high
+      synchronization_mode: 0
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.1
+      timeout_ms: 60000
+
+  # 10. J4 + 右臂 WBC MoveP 到 rack 第4槽上方 25 cm，三个腿部不参与规划。
+  - action_type: move_pose
+    params:
+      arm_id: 6
+      whole_body_waist_only: true
+      vision_result_key: rack
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: *unused_pose
+      bound_size: *zero_offset
+      vision_pose_offset: &right_place_high
+        translation_frame: vision
+        translation: [0.205, &right_place_y 0.0945, 0.25]
+        rotation: &right_place_rotation [0.7071067811865476, 0.7071067811865476, 0, 0]
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.15
+      timeout_ms: 60000
+
+  # 11. 腰部固定，右臂直线下降到上表面上方 10 cm。
+  - action_type: move_pose
+    params:
+      arm_id: 1
+      vision_result_key: rack
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: *unused_pose
+      bound_size: *zero_offset
+      vision_pose_offset:
+        translation_frame: vision
+        translation: [0.205, *right_place_y, 0.10]
+        rotation: *right_place_rotation
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.1
+      timeout_ms: 45000
+
+  # 12. 右爪松开至 140。
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 1
+      comport: [2, 2]
+      position: [0, 140]
+      speed: [0, 255]
+      max_torque: [0, 60]
+      block: true
+      timeout_ms: 10000
+
+  # 13. 右臂直线退出。
+  - action_type: move_pose
+    params:
+      arm_id: 1
+      vision_result_key: rack
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: *unused_pose
+      bound_size: *zero_offset
+      vision_pose_offset: *right_place_high
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.1
+      timeout_ms: 45000
+
+
+  # 14. J4 + 左臂 WBC MoveP 到 rack 第2槽上方 25 cm。
+  - action_type: move_pose
+    params:
+      arm_id: 5
+      whole_body_waist_only: true
+      vision_result_key: rack
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: *unused_pose
+      bound_size: *zero_offset
+      vision_pose_offset: &left_place_high
+        translation_frame: vision
+        translation: [0.205, &left_place_y 0.0445, 0.25]
+        rotation: &left_place_rotation [0.7071067811865476, -0.7071067811865476, 0, 0]
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: false
+      speed: 0.15
+      timeout_ms: 60000
+
+  # 15. 腰部固定，左臂直线下降到上表面上方 10 cm。
+  - action_type: move_pose
+    params:
+      arm_id: 0
+      vision_result_key: rack
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: *unused_pose
+      bound_size: *zero_offset
+      vision_pose_offset:
+        translation_frame: vision
+        translation: [0.205, *left_place_y, 0.10]
+        rotation: *left_place_rotation
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.1
+      timeout_ms: 45000
+
+  # 16. 左爪松开至 140。
+  - action_type: gripper_ctrl
+    params:
+      gripper_id: 0
+      comport: [2, 2]
+      position: [140, 0]
+      speed: [255, 0]
+      max_torque: [60, 0]
+      block: true
+      timeout_ms: 10000
+
+  # 17. 左臂直线退出。
+  - action_type: move_pose
+    params:
+      arm_id: 0
+      vision_result_key: rack
+      frame_id: base_link
+      use_config_pose: false
+      target_pose: *unused_pose
+      bound_size: *zero_offset
+      vision_pose_offset: *left_place_high
+      enable_collision_check: 1
+      use_force_control: false
+      enable_move_line: true
+      speed: 0.1
+      timeout_ms: 45000

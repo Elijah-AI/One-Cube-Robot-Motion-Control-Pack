@@ -543,6 +543,7 @@ bool TaskConfigParser::parse_vision_detect_params(YAML::Node p, AtomicAction& ac
   act.vision_param.expected_frame_id = p["expected_frame_id"].as<std::string>();
   act.vision_param.priority = p["priority"].as<int32_t>();
   act.vision_param.type = p["type"] ? p["type"].as<int8_t>() : 0;
+  act.vision_param.result_key = p["result_key"] ? p["result_key"].as<std::string>() : "";
   act.vision_param.require_single_target = p["require_single_target"] ?
     p["require_single_target"].as<bool>() : false;
   act.vision_param.require_expected_frame = p["require_expected_frame"] ?
@@ -571,6 +572,14 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
   act.arm_param.use_force_control = p["use_force_control"].as<bool>();
     act.arm_param.enable_move_line = p["enable_move_line"] ?
       p["enable_move_line"].as<bool>() : false;
+    act.arm_param.whole_body_waist_only = p["whole_body_waist_only"] ?
+      p["whole_body_waist_only"].as<bool>() : false;
+    if (act.arm_param.whole_body_waist_only &&
+        (act.arm_param.arm_id < 5 || act.arm_param.arm_id > 7 ||
+         act.arm_param.enable_move_line)) {
+      throw std::invalid_argument(
+        "whole_body_waist_only requires whole-body MoveP (arm_id=5/6/7, enable_move_line=false)");
+    }
     act.arm_param.acceleration_scale = scale("acceleration_scale");
     act.arm_param.jerk_scale = scale("jerk_scale");
     act.arm_param.via_poses.clear();
@@ -592,6 +601,11 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
   act.arm_param.hand_action_type = p["hand_action_type"] ? p["hand_action_type"].as<std::vector<uint8_t>>() : std::vector<uint8_t>{};
   act.arm_param.timeout_ms = p["timeout_ms"].as<int64_t>();
   act.arm_param.frame_id = p["frame_id"] ? p["frame_id"].as<std::string>() : "";
+  act.arm_param.vision_result_key = p["vision_result_key"] ? p["vision_result_key"].as<std::string>() : "";
+  if (!act.arm_param.vision_result_key.empty() &&
+      (act.arm_param.use_config_pose || act.arm_param.frame_id.empty())) {
+    throw std::invalid_argument("vision_result_key requires vision pose and explicit frame_id");
+  }
 
   //   com_interfaces/action/MovePose.action 定义：
   //   ARM_LEFT/ARM_RIGHT/HEAD/LEG → 使用 target_pose + bound_size
@@ -609,16 +623,21 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
     act.arm_param.config_pose = p["target_pose"].as<std::vector<float>>();
     act.arm_param.bound_size = p["bound_size"].as<std::vector<float>>();
   }
-  if (p["vision_pose_offset"]) {
-    auto& offset = act.arm_param.vision_pose_offset;
+  const auto parse_offset = [&](const char* key, VisionPoseOffset& offset,
+                                const std::vector<float>& bounds) {
+    if (!p[key]) {return;}
     offset.enabled = true;
-    offset.translation = p["vision_pose_offset"]["translation"].as<std::vector<double>>();
-    offset.rotation = p["vision_pose_offset"]["rotation"].as<std::vector<double>>();
-    if (act.arm_param.use_config_pose || act.arm_param.arm_id > 1 ||
-        act.arm_param.frame_id.empty() || offset.translation.size() != 3 ||
+    offset.translation = p[key]["translation"].as<std::vector<double>>();
+    offset.rotation = p[key]["rotation"].as<std::vector<double>>();
+    offset.translation_frame = p[key]["translation_frame"] ?
+      p[key]["translation_frame"].as<std::string>() : "base";
+    if (act.arm_param.use_config_pose || act.arm_param.frame_id.empty() || offset.translation.size() != 3 ||
         offset.rotation.size() != 4) {
       throw std::invalid_argument(
-        "vision_pose_offset requires single-arm vision pose, explicit frame_id, translation[3], rotation[4]");
+        "vision offsets require vision pose, explicit frame_id, translation[3], rotation[4]");
+    }
+    if (offset.translation_frame != "base" && offset.translation_frame != "vision") {
+      throw std::invalid_argument("translation_frame must be base or vision");
     }
     for (double v : offset.translation) {
       if (!std::isfinite(v)) {throw std::invalid_argument("non-finite vision translation");}
@@ -632,9 +651,23 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
       throw std::invalid_argument("invalid vision offset quaternion");
     }
     // bound_size 在运控中还会叠加平移，禁止重复偏移。
-    for (float v : act.arm_param.bound_size) {
+    for (float v : bounds) {
       if (v != 0.0f) {throw std::invalid_argument("vision_pose_offset needs zero bound_size");}
     }
+  };
+  auto& move = act.arm_param;
+  parse_offset("vision_pose_offset", move.vision_pose_offset, move.bound_size);
+  parse_offset("left_vision_pose_offset", move.left_vision_pose_offset, move.left_bound_size);
+  parse_offset("right_vision_pose_offset", move.right_vision_pose_offset, move.right_bound_size);
+  const bool dual = move.arm_id == 2 || move.arm_id == 7;
+  if (move.vision_pose_offset.enabled &&
+      (move.arm_id != 0 && move.arm_id != 1 && move.arm_id != 5 && move.arm_id != 6)) {
+    throw std::invalid_argument("vision_pose_offset requires arm_id=0/1/5/6");
+  }
+  if ((move.left_vision_pose_offset.enabled || move.right_vision_pose_offset.enabled) &&
+      (!dual || !move.left_vision_pose_offset.enabled || !move.right_vision_pose_offset.enabled ||
+       move.vision_pose_offset.enabled)) {
+    throw std::invalid_argument("dual vision offsets require arm_id=2/7 and both left/right offsets only");
   }
   return true;
 }
@@ -704,6 +737,7 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   act.move_joints_param.jerk_scale = scale("jerk_scale");
   act.move_joints_param.speed = p["speed"].as<float>();
   act.move_joints_param.timeout_ms = p["timeout_ms"].as<int64_t>();
+  act.move_joints_param.relative_position = p["relative_position"] ? p["relative_position"].as<bool>() : false;
 
   // com_interfaces/action/MoveJoints.action 定义：
   //   ARM_LEFT/ARM_RIGHT/HEAD/LEG → 使用 joint_name + position
@@ -720,6 +754,15 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   {
     act.move_joints_param.joint_name = p["joint_name"].as<std::vector<std::string>>();
     act.move_joints_param.position = p["position"].as<std::vector<double>>();
+  }
+  const auto& move = act.move_joints_param;
+  const bool waist_only_goal = move.arm_id == 4 &&
+    move.joint_name == std::vector<std::string>{"body_joint"};
+  if ((move.relative_position || waist_only_goal) &&
+      (move.arm_id != 4 || move.joint_name != std::vector<std::string>{"body_joint"} ||
+       move.position.size() != 1 || !std::isfinite(move.position[0]) ||
+       !std::isfinite(move.speed) || move.speed <= 0 || move.speed > 1 || move.timeout_ms <= 0)) {
+    throw std::invalid_argument("waist-only/relative MoveJ requires LEG/body_joint with one finite target, valid speed and timeout");
   }
   return true;
 }

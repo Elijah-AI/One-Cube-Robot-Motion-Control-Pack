@@ -177,6 +177,7 @@ set(SOURCES
     src/miracle_module.cpp
     src/miracle_head_module.cpp
     src/miracle_lower_body_module.cpp
+    src/leg_body_orientation_execution.cpp
     src/whole_body_module.cpp
     src/common/gripper/Modbus_Jodell.cpp
     # src/common/ctrl/PVT_ctrl.cpp
@@ -208,13 +209,13 @@ endif()
 add_executable(motion_control_node ${SOURCES})
 
 # Shared production planning core, independent of hardware SDKs.
-add_library(motion_planning_core STATIC src/miracle_m_algo.cpp)
+add_library(motion_planning_core STATIC src/miracle_m_algo.cpp src/motion/leg_body_orientation.cpp)
 target_include_directories(motion_planning_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg
     ${PCL_INCLUDE_DIRS})
 target_compile_definitions(motion_planning_core PUBLIC BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS)
-ament_target_dependencies(motion_planning_core rclcpp sensor_msgs pcl_conversions)
+ament_target_dependencies(motion_planning_core rclcpp sensor_msgs pcl_conversions com_interfaces)
 target_link_libraries(motion_planning_core
     wbc_model
     Eigen3::Eigen pinocchio::pinocchio coal::coal ompl::ompl ruckig::ruckig

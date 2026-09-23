@@ -2,6 +2,9 @@
 
 本工作区全身运控、COM/ZMP 与点云防碰撞用法见 [ylf_wbc 运控命令手册](MOTION_WBC_USAGE.md)。
 双臂、身体及头部的 20 关节真实反馈见 [关节反馈说明](MEASURED_JOINT_FEEDBACK.md)。
+腿部 J1/J2/J3 任意两关节 MoveJ 自动补偿、全程保持 body 朝向，见 [腿部定姿态 MoveJ](LEG_BODY_ORIENTATION_MOVEJ.md)。
+全身 MoveP 可按指令选择只用腰部 J4 和手臂，见 [腰部与手臂 MoveP](WHOLE_BODY_WAIST_ONLY_MOVEP.md)。
+笔记本组装件双手抓取、J4 与单臂依次放置，见 [两件抓放任务](LAPTOP_ASSEMBLY_TASK.md)。
 
 2026-09-17：源码统一到 `src/`，视觉按 develop、运控按 HHworkspace 合并。
 避障参数改为 `enable_collision_check: 0/1/2`；见 [合并与验证记录](MERGE_20260917.md)。

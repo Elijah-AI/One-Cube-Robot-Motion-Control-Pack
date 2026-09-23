@@ -550,6 +550,10 @@ bool WholeBodyModule::plan_trajectory(
     if (!goal || (goal->arm_id!=WHOLE_BODY_LEFT && goal->arm_id!=WHOLE_BODY_RIGHT && goal->arm_id!=WHOLE_BODY_BOTH)) {
         error_message = "unsupported whole-body planning goal"; return false;
     }
+    if (goal->whole_body_waist_only && goal->enable_move_line) {
+        error_message = "whole_body_waist_only requires MoveP (enable_move_line=false)";
+        return false;
+    }
     auto collision_scene = motion_control_pkg::motion::makeCollisionScene(
         *miracle_algo_, goal->enable_collision_check, start_q,
         goal->env_point_cloud, error_message);
@@ -559,6 +563,12 @@ bool WholeBodyModule::plan_trajectory(
         goal->arm_id == WHOLE_BODY_BOTH;
     const bool use_right = goal->arm_id == WHOLE_BODY_RIGHT ||
         goal->arm_id == WHOLE_BODY_BOTH;
+    std::vector<double> frozen_leg_q;
+    if (goal->whole_body_waist_only &&
+        (!miracle_algo_->extractLegJoints(start_q, frozen_leg_q) || frozen_leg_q.size() != 4U)) {
+        error_message = "cannot obtain waist-only starting leg configuration";
+        return false;
+    }
     geometry_msgs::msg::PoseStamped left_target;
     geometry_msgs::msg::PoseStamped right_target;
     if (use_left && !normalize_target(goal->arm_id == WHOLE_BODY_BOTH ?
@@ -742,7 +752,7 @@ bool WholeBodyModule::plan_trajectory(
                 if (!miracle_algo_->solveWholeBodyIK(
                         q_current, left_step, right_step, q_next,
                         std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
-                        0.0, 10.0, 5U, false)) {
+                        0.0, 10.0, 5U, false, goal->whole_body_waist_only)) {
                     error_message =
                         "failed to solve dual-arm whole-body IK at Cartesian "
                         "substep " + std::to_string(step) + "/" +
@@ -763,7 +773,7 @@ bool WholeBodyModule::plan_trajectory(
                         target_eigen, left_goal, right_goal,
                         collision_free_target,
                         std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
-                        0.0, 5.0, 15U, true)) {
+                        0.0, 5.0, 15U, true, goal->whole_body_waist_only)) {
                     error_message =
                         "failed to find a collision-free dual-arm whole-body "
                         "IK solution for the target pose";
@@ -773,7 +783,8 @@ bool WholeBodyModule::plan_trajectory(
             }
         } else if (!miracle_algo_->solveWholeBodyIK(
                        miracle_algo_->toEigenConfig(start_q), left_goal, right_goal,
-                       target_eigen)) {
+                       target_eigen, std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
+                       0.0, 10.0, 10U, true, goal->whole_body_waist_only)) {
             error_message = "failed to solve whole-body IK for target pose";
             return false;
         }
@@ -782,7 +793,8 @@ bool WholeBodyModule::plan_trajectory(
 
         if (goal->enable_collision_check) {
             if (!miracle_algo_->planWholeBodyJointSpace(
-                    start_q, target_q, use_left, use_right, full_waypoints)) {
+                    start_q, target_q, use_left, use_right, full_waypoints,
+                    goal->whole_body_waist_only)) {
                 error_message = "whole-body OMPL collision planning failed";
                 return false;
             }
@@ -824,6 +836,31 @@ bool WholeBodyModule::plan_trajectory(
         }
         active_waypoints.push_back(std::move(active_q));
     }
+
+    // Keep the existing four-axis lower-body wire format: J1/J2/J3 hold the
+    // measured start, J4 moves. Never repair a genuinely moving leg trajectory
+    // by overwriting it after IK; only remove floating-point interpolation noise.
+    const auto enforce_frozen_legs = [&](std::vector<std::vector<double>>& path) {
+        if (!goal->whole_body_waist_only) return true;
+        const std::size_t offset = (use_left ? 7U : 0U) + (use_right ? 7U : 0U);
+        for (auto& sample : path) {
+            if (sample.size() != offset + 4U) {
+                error_message = "invalid waist-only trajectory dimensions";
+                return false;
+            }
+            for (std::size_t k = 0; k < 3U; ++k) {
+                if (!std::isfinite(sample[offset + k]) ||
+                    !std::isfinite(frozen_leg_q[k]) ||
+                    std::abs(sample[offset + k] - frozen_leg_q[k]) > 1e-10) {
+                    error_message = "waist-only trajectory changes leg_joint1/2/3";
+                    return false;
+                }
+                sample[offset + k] = frozen_leg_q[k];
+            }
+        }
+        return true;
+    };
+    if (!enforce_frozen_legs(active_waypoints)) return false;
 
     const double arm_velocity = std::max(1e-3, speed * CARTES_V_MAX);
     const double arm_acceleration = std::max(1e-3, speed * CARTES_A_MAX);
@@ -898,6 +935,7 @@ bool WholeBodyModule::plan_trajectory(
         }
     }
 
+    if (!enforce_frozen_legs(active_trajectory)) return false;
     std::optional<motion_control_pkg::wbc::ReferenceResult> prepared_reference;
     if (dynamic_zmp_enabled_) {
         // Ruckig returns one point for a no-op goal. Use an explicit stationary
@@ -992,6 +1030,7 @@ bool WholeBodyModule::plan_trajectory(
             prepared.duration,prepared.samples.size(),prepared.minimum_zmp_margin);
         prepared_reference=std::move(prepared);
     }
+    if (!enforce_frozen_legs(active_trajectory)) return false;
 
     // TOPPRA may generate samples between OMPL waypoints.  Rebuild complete
     // configurations and validate them when collision checking was requested.

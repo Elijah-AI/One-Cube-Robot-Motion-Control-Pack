@@ -856,7 +856,8 @@ bool MiracleMAlgo::planWholeBodyJointSpace(
     const std::vector<double>& goal_q,
     bool use_left,
     bool use_right,
-    std::vector<std::vector<double>>& path)
+    std::vector<std::vector<double>>& path,
+    bool waist_only)
 {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     path.clear();
@@ -869,6 +870,18 @@ bool MiracleMAlgo::planWholeBodyJointSpace(
         return false;
     }
 
+    if (waist_only) {
+        if (leg_q_indices_.size() != 4U) return false;
+        for (std::size_t k = 0; k < 3U; ++k) {
+            const auto index = leg_q_indices_[k];
+            if (!std::isfinite(start_q[index]) || start_q[index] != goal_q[index]) {
+                RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"),
+                    "waist-only planning requires identical start/goal leg_joint1/2/3");
+                return false;
+            }
+        }
+    }
+
     std::vector<size_t> active_indices;
     if (use_left) {
         active_indices.insert(
@@ -879,7 +892,8 @@ bool MiracleMAlgo::planWholeBodyJointSpace(
             active_indices.end(), right_arm_q_indices_.begin(), right_arm_q_indices_.end());
     }
     active_indices.insert(
-        active_indices.end(), leg_q_indices_.begin(), leg_q_indices_.end());
+        active_indices.end(), leg_q_indices_.begin() + (waist_only ? 3 : 0),
+        leg_q_indices_.end());
 
     const Eigen::VectorXd fixed_full_q = toEigenConfig(start_q);
     auto setup = createPlannerSetup(active_indices, fixed_full_q, true);
@@ -1672,7 +1686,8 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
     Eigen::VectorXd& q_res,
     const std::array<double, 4>& leg_weights,
     std::chrono::steady_clock::time_point deadline,
-    bool enable_collision_avoidance)
+    bool enable_collision_avoidance,
+    bool waist_only)
 {
     // pinocchio 工作区(Data/GeometryData)非线程安全，且与 FK/碰撞回调共享，
     // 必须通过可重入锁串行访问。
@@ -1694,7 +1709,7 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
     if (right_goal && !right_goal->matrix().allFinite()) return false;
 
     // --- 构造活动关节速度索引表 ---
-    // 活动关节 = 被请求的末端手臂(每臂 7) + 腿部/躯干(4)。
+    // 活动关节 = 被请求的末端手臂(每臂 7) + 腿部/躯干(4)，或仅腰部 J4。
     // 腿部参与以保证手臂可达性并通过加权最小二乘保持在 q_init 附近；头部不参与。
     std::vector<int> active_v;
     active_v.reserve(left_arm_v_indices_.size() + right_arm_v_indices_.size() +
@@ -1707,7 +1722,12 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
     };
     if (left_goal)  push_unique(left_arm_v_indices_);
     if (right_goal) push_unique(right_arm_v_indices_);
-    push_unique(leg_v_indices_);
+    if (waist_only) {
+        if (leg_v_indices_.size() != 4U || leg_q_indices_.size() != 4U) return false;
+        push_unique({leg_v_indices_[3]});
+    } else {
+        push_unique(leg_v_indices_);
+    }
     const int n_active = static_cast<int>(active_v.size());
     if (n_active <= 0) return false;
 
@@ -2217,7 +2237,8 @@ bool MiracleMAlgo::solveWholeBodyIK(
     double legacy_body_pitch_limit_rad,
     double timeout_seconds,
     std::size_t max_seed_attempts,
-    bool enable_collision_avoidance)
+    bool enable_collision_avoidance,
+    bool waist_only)
 {
     // Retain the public call signature for existing callers, but never impose
     // a non-URDF torso angle cap, even if an old caller still supplies 30 deg.
@@ -2242,6 +2263,16 @@ bool MiracleMAlgo::solveWholeBodyIK(
         RCLCPP_ERROR(rclcpp::get_logger("MiracleMAlgo"), "solveWholeBodyIK: right_goal 非有限");
         return false;
     }
+    if (waist_only) {
+        if (!q_init.allFinite() || leg_q_indices_.size() != 4U ||
+            leg_v_indices_.size() != 4U) return false;
+        // Reject invalid frozen feedback instead of clamping it into motion.
+        for (std::size_t k = 0; k < 3U; ++k) {
+            const auto index = leg_q_indices_[k];
+            if (q_init[index] < model_.lowerPositionLimit[index] ||
+                q_init[index] > model_.upperPositionLimit[index]) return false;
+        }
+    }
 
     const auto deadline = std::chrono::steady_clock::now() +
         std::chrono::milliseconds(static_cast<long long>(timeout_seconds * 1000.0));
@@ -2249,7 +2280,7 @@ bool MiracleMAlgo::solveWholeBodyIK(
     // 种子 0：初始关节状态
     if (solveWholeBodyIKOnce(q_init, left_goal, right_goal, q_res,
                              leg_weights,
-                             deadline, enable_collision_avoidance)) {
+                             deadline, enable_collision_avoidance, waist_only)) {
         return true;
     }
 
@@ -2282,7 +2313,8 @@ bool MiracleMAlgo::solveWholeBodyIK(
     // 收集腿部的 q 索引（与 leg_weights 顺序一致）
     std::vector<int> leg_q;
     leg_q.reserve(leg_v_indices_.size());
-    for (int v : leg_v_indices_) {
+    for (std::size_t k = waist_only ? 3U : 0U; k < leg_v_indices_.size(); ++k) {
+        const int v = leg_v_indices_[k];
         int q_idx = v;
         for (pinocchio::JointIndex jid = 1; jid < model_.joints.size(); ++jid) {
             if (model_.joints[jid].idx_v() == v) { q_idx = model_.joints[jid].idx_q(); break; }
@@ -2309,7 +2341,7 @@ bool MiracleMAlgo::solveWholeBodyIK(
         }
         if (solveWholeBodyIKOnce(seed, left_goal, right_goal, q_res,
                                 leg_weights,
-                                deadline, enable_collision_avoidance)) {
+                                deadline, enable_collision_avoidance, waist_only)) {
             return true;
         }
     }

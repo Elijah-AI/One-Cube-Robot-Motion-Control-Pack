@@ -36,6 +36,13 @@ TaskActionClient::TaskActionClient(rclcpp::Node::SharedPtr node)
   control_reset_client_ = rclcpp_action::create_client<HardWareReset>(node_, "/Control/Reset");
   // 视觉标定控制客户端（/vision/calibration_control）
   calibration_client_ = rclcpp_action::create_client<CalibrationControl>(node_, "/vision/calibration_control");
+  const auto joint_topic = node_->declare_parameter<std::string>("task_joint_state_topic", "/wbc/joint_states");
+  waist_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
+    joint_topic, rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::JointState::ConstSharedPtr msg) {
+      std::lock_guard<std::mutex> lock(waist_state_mutex_);
+      waist_state_ = std::move(msg);
+      waist_state_received_ = std::chrono::steady_clock::now();
+    });
   std::shared_future<GoalHandleCtrlGripper> gripper_send_future_{};
   reset_state();
 
@@ -162,10 +169,11 @@ ActionCallResult TaskActionClient::dispatch_action(
         if (!seq_key.empty())
         {
             VisionDet::Result vis_res;
-            if (get_vision_result_from_seq_key(seq_key, vis_res))
+            if (get_vision_result_from_seq_key(seq_key, vis_res, act.arm_param.vision_result_key))
             {
                 LOG_INFO(node_->get_logger(), task_log::Tag::ACTION, log_prefix
-                    << "Using seq-level vision result from [" << seq_key << "] for move_pose");
+                    << "Using seq-level vision result from [" << seq_key << "] for move_pose, result_key='"
+                    << act.arm_param.vision_result_key << "'");
                 if (!vis_res.detected_targets.empty())
                 {
                     target_pose = vis_res.detected_targets[0].pose;
@@ -181,9 +189,12 @@ ActionCallResult TaskActionClient::dispatch_action(
             }
         }
 
-        if (act.arm_param.vision_pose_offset.enabled && !has_vision_target) {
+        if ((!act.arm_param.vision_result_key.empty() || act.arm_param.vision_pose_offset.enabled ||
+             act.arm_param.left_vision_pose_offset.enabled || act.arm_param.right_vision_pose_offset.enabled) &&
+            !has_vision_target) {
             LOG_ERROR(node_->get_logger(), task_log::Tag::ACTION,
-                "vision_pose_offset needs a successful vision_detect in the same sequence");
+                "move_pose needs a successful vision_detect in the same sequence, result_key='"
+                << act.arm_param.vision_result_key << "'");
             ctx.state = ActionRunState::FAILURE;
             ctx.call_result = ActionCallResult::FAIL_PARAM_INVALID;
             return ctx.call_result;
@@ -448,6 +459,7 @@ void TaskActionClient::reset_all_states()
     auto_calibrate_cancel_.store(true, std::memory_order_release);
     // 通知后台复合动作编排线程退出（复位/新任务抢占场景）
     compound_move_cancel_.store(true, std::memory_order_release);
+    clear_all_seq_vision_results();
 }
 
 
@@ -525,7 +537,8 @@ const ActionContext& TaskActionClient::get_context(const std::string& state_key)
 // 序列级视觉结果存储实现（跨 action 共享）
 // ============================================================================
 
-void TaskActionClient::store_vision_result_at_seq_key(const std::string& seq_key, const VisionDet::Result& result)
+void TaskActionClient::store_vision_result_at_seq_key(const std::string& seq_key, const VisionDet::Result& result,
+                                                    const std::string& result_key)
 {
     if (seq_key.empty())
     {
@@ -533,19 +546,29 @@ void TaskActionClient::store_vision_result_at_seq_key(const std::string& seq_key
     }
     std::lock_guard<std::mutex> lock(seq_vision_mutex_);
     seq_vision_results_[seq_key] = result;
+    if (!result_key.empty()) {
+        named_seq_vision_results_[{seq_key, result_key}] = result;
+    }
     LOG_INFO(node_->get_logger(), task_log::Tag::VISION,
         "Stored vision result at seq_key [" << seq_key
         << "], targets=" << result.total_detected_count);
 }
 
 
-bool TaskActionClient::get_vision_result_from_seq_key(const std::string& seq_key, VisionDet::Result& out_result) const
+bool TaskActionClient::get_vision_result_from_seq_key(const std::string& seq_key, VisionDet::Result& out_result,
+                                                    const std::string& result_key) const
 {
     if (seq_key.empty())
     {
         return false;
     }
     std::lock_guard<std::mutex> lock(seq_vision_mutex_);
+    if (!result_key.empty()) {
+        const auto named = named_seq_vision_results_.find({seq_key, result_key});
+        if (named == named_seq_vision_results_.end()) {return false;}
+        out_result = named->second;
+        return true;
+    }
     auto it = seq_vision_results_.find(seq_key);
     if (it == seq_vision_results_.end())
     {
@@ -571,6 +594,7 @@ void TaskActionClient::clear_all_seq_vision_results()
 {
     std::lock_guard<std::mutex> lock(seq_vision_mutex_);
     seq_vision_results_.clear();
+    named_seq_vision_results_.clear();
     LOG_DEBUG(node_->get_logger(), task_log::Tag::VISION, "Cleared all seq-level vision results");
 }
 

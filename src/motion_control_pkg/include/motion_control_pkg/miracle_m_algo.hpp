@@ -355,11 +355,13 @@ public:
 
     // 全身关节空间避障规划。goal_q 为完整模型配置，活动关节按
     // 左臂(7)、右臂(7)、腿部(4) 的顺序由 use_left/use_right 选择。
+    // waist_only=true 时仅 body_joint 参与，leg_joint1/2/3 固定为 start_q。
     bool planWholeBodyJointSpace(const std::vector<double>& start_q,
                                  const std::vector<double>& goal_q,
                                  bool use_left,
                                  bool use_right,
-                                 std::vector<std::vector<double>>& path);
+                                 std::vector<std::vector<double>>& path,
+                                 bool waist_only = false);
 
     // Plan to Cartesian goals for both arms
     bool planDualArmCartesianGoal(const std::vector<double>& start_q,
@@ -410,6 +412,7 @@ public:
     // leg_joint1、leg_joint2、leg_joint3、body_joint；left_goal/right_goal
     // 至少提供一个。关节范围以 URDF 为准，不另设躯干俯仰角阈值。
     // legacy_body_pitch_limit_rad 仅为调用兼容保留，传入任何值均不施加限制。
+    // waist_only=true 时从优化和重试种子中排除 leg_joint1/2/3。
     bool solveWholeBodyIK(
         const Eigen::VectorXd& q_init,
         const std::optional<Eigen::Isometry3d>& left_goal,
@@ -420,7 +423,8 @@ public:
         double legacy_body_pitch_limit_rad = 0.0,
         double timeout_seconds = 10.0,
         std::size_t max_seed_attempts = 10U,
-        bool enable_collision_avoidance = true);
+        bool enable_collision_avoidance = true,
+        bool waist_only = false);
     bool mergeSingleArmJoints(bool is_left, const std::vector<double>& reference,
                               const std::vector<double>& arm, std::vector<double>& full) const;
     bool extractSingleArmJoints(bool is_left,
@@ -857,7 +861,8 @@ private:
         Eigen::VectorXd& q_res,
         const std::array<double, 4>& leg_weights,
         std::chrono::steady_clock::time_point deadline,
-        bool enable_collision_avoidance);
+        bool enable_collision_avoidance,
+        bool waist_only);
 
     // Helper to create OMPL setup dynamically based on active joints
     std::shared_ptr<ompl::geometric::SimpleSetup> createPlannerSetup(const std::vector<size_t>& active_indices, 

@@ -107,6 +107,13 @@ namespace miracle {
         // node_ptr->declare_parameter("leg_chain_end", std::string());
         node_ptr->declare_parameter("leg_joint_zero", std::vector<int>{0, 0, 0, 0});
         node_ptr->declare_parameter("leg_joint_dir", std::vector<int>{1, 1, 1, 1});
+        body_orientation_tracking_tolerance_rad_ = node_ptr->declare_parameter(
+            "leg_body_orientation_tracking_tolerance_rad", 0.02);
+        if (!std::isfinite(body_orientation_tracking_tolerance_rad_) ||
+            body_orientation_tracking_tolerance_rad_ <= 0.0 ||
+            body_orientation_tracking_tolerance_rad_ > 0.1) {
+            throw std::invalid_argument("leg_body_orientation_tracking_tolerance_rad must be in (0, 0.1]");
+        }
 
 
         // node_ptr->get_parameter("leg_chain_start", m_chain_start);
@@ -497,27 +504,53 @@ namespace miracle {
 
     void MiracleLowerBodyModule::start_execution_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
-        // 如果之前有线程，等待
-        if (execution_thread_move_joints_.joinable()) {
-            execution_thread_move_joints_.join();
+        bool expected = false;
+        if (!is_executing_leg_.compare_exchange_strong(expected, true)) {
+            auto result = std::make_shared<MoveJoints::Result>();
+            result->success = false;
+            result->error_message = "leg is already occupied by another task";
+            goal_handle->abort(result);
+            return;
         }
-    
-        is_executing_leg_.store(true);
-
-        execution_thread_move_joints_ = std::thread(&MiracleLowerBodyModule::execution_loop_move_joints, this, goal_handle);
+        try {
+            if (execution_thread_move_joints_.joinable()) {
+                execution_thread_move_joints_.join();
+            }
+            execution_thread_move_joints_ = std::thread(
+                &MiracleLowerBodyModule::execution_loop_move_joints, this, goal_handle);
+        } catch (const std::exception& error) {
+            is_executing_leg_.store(false);
+            auto result = std::make_shared<MoveJoints::Result>();
+            result->success = false;
+            result->error_message = error.what();
+            goal_handle->abort(result);
+        }
     }
 
 
     void MiracleLowerBodyModule::start_execution_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle)
     {
-        // 如果之前有线程，等待
-        if (execution_thread_move_pose_.joinable()) {
-            execution_thread_move_pose_.join();
+        bool expected = false;
+        if (!is_executing_leg_.compare_exchange_strong(expected, true)) {
+            auto result = std::make_shared<MovePose::Result>();
+            result->success = false;
+            result->error_message = "leg is already occupied by another task";
+            goal_handle->abort(result);
+            return;
         }
-    
-        is_executing_leg_.store(true);
-
-        execution_thread_move_pose_ = std::thread(&MiracleLowerBodyModule::execution_loop_move_pose, this, goal_handle);
+        try {
+            if (execution_thread_move_pose_.joinable()) {
+                execution_thread_move_pose_.join();
+            }
+            execution_thread_move_pose_ = std::thread(
+                &MiracleLowerBodyModule::execution_loop_move_pose, this, goal_handle);
+        } catch (const std::exception& error) {
+            is_executing_leg_.store(false);
+            auto result = std::make_shared<MovePose::Result>();
+            result->success = false;
+            result->error_message = error.what();
+            goal_handle->abort(result);
+        }
     }
 
     bool MiracleLowerBodyModule::prepare_preplanned_dispatch(
@@ -631,6 +664,11 @@ namespace miracle {
 
     void MiracleLowerBodyModule::execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
+        if (goal_handle->get_goal()->joint_name.size() == 2 ||
+            goal_handle->get_goal()->position.size() == 2) {
+            execution_loop_body_orientation(goal_handle);
+            return;
+        }
         const auto action_started_at = std::chrono::steady_clock::now();
         const auto goal = goal_handle->get_goal();
         auto feedback = std::make_shared<MoveJoints::Feedback>();

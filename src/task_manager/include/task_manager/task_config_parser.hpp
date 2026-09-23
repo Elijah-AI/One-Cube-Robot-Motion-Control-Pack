@@ -34,12 +34,14 @@ struct VisionActionParam
   int32_t priority;                  ///< 任务优先级
   bool require_single_target{false}; ///< 要求本次检测恰好返回一个目标
   bool require_expected_frame{false}; ///< 检查目标实际坐标系；不执行坐标变换
+  std::string result_key;             ///< 可选：在本次任务的同序列内命名保存结果
 };
 
-/// 平移沿 frame_id 轴相加，姿态右乘局部四元数；仅用于单臂视觉目标。
+/// 平移默认沿 frame_id 轴，translation_frame=vision 时沿视觉局部轴；姿态右乘。
 struct VisionPoseOffset
 {
   bool enabled{false};
+  std::string translation_frame{"base"}; ///< base 或 vision；base 保持旧配置行为
   std::vector<double> translation{0.0, 0.0, 0.0};
   std::vector<double> rotation{0.0, 0.0, 0.0, 1.0}; ///< [x,y,z,w]
 };
@@ -52,6 +54,9 @@ struct MovePoseParam
   std::vector<float> config_pose;         ///< 目标位姿 [x, y, z, qx, qy, qz, qw]（对应 YAML target_pose；ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
   bool use_config_pose;                   ///< 是否使用配置中的位姿
   VisionPoseOffset vision_pose_offset;    ///< 可选：基于同序列视觉原始位姿计算目标
+  std::string vision_result_key;          ///< 空值使用最近结果，非空只读取同名结果
+  VisionPoseOffset left_vision_pose_offset;  ///< 双臂视觉目标的左臂偏移
+  VisionPoseOffset right_vision_pose_offset; ///< 双臂视觉目标的右臂偏移（必须成对配置）
   std::vector<float> bound_size;          ///< 包围盒尺寸 [x, y, z]（ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
   /// @name ARM_BOTH 专用字段（与 com_interfaces/action/MovePose.action 一致）
   /// @{
@@ -64,6 +69,7 @@ struct MovePoseParam
   bool use_force_control;                 ///< 是否使用力控模式
   std::vector<std::vector<double>> via_poses; ///< 连续 MoveP 中间 TCP 位姿 [x,y,z,qx,qy,qz,qw]
   bool enable_move_line;                  ///< 是否启用笛卡尔直线运动
+  bool whole_body_waist_only{false};       ///< 全身 MoveP 仅使用腰部 J4 和所选手臂
   float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
   float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1
@@ -144,6 +150,9 @@ struct ControlResetParam
 /// @brief 关节空间移动动作参数
 struct MoveJointsParam
 {
+  bool relative_position{false}; ///< 仅 LEG/body_joint：position[0] 为相对当前反馈的腰转角
+  // LEG: four joint targets retain ordinary MoveJ; two distinct leg_joint1/2/3
+  // targets request automatic third-joint compensation with fixed body orientation.
   uint8_t arm_id;                         ///< 部件编号，与 com_interfaces/action/MoveJoints 一致：0=ARM_LEFT, 1=ARM_RIGHT, 2=ARM_BOTH, 3=HEAD, 4=LEG
   std::vector<std::string> joint_name;    ///< 关节名称列表（ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）
   std::vector<double> position;           ///< 关节位置（单位 rad）（ARM_LEFT/ARM_RIGHT/HEAD/LEG 使用）

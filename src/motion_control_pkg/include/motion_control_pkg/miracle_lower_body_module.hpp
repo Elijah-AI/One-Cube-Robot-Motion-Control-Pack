@@ -35,6 +35,7 @@
 
 
 #include <cmath>
+#include <array>
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -205,6 +206,9 @@ namespace miracle {
     private:
            //一个action対应一个接口
         void execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
+        void execution_loop_body_orientation(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
+        bool read_body_orientation_feedback(std::array<double, 4>& positions,
+            std::array<double, 4>& velocities, uint64_t& sequence, std::string& error);
 
         void execution_loop_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
         void publishJointState();
@@ -245,7 +249,8 @@ namespace miracle {
 
         std::thread execution_thread_move_pose_;
         std::thread execution_thread_move_joints_;
-        std::atomic<bool> is_executing_leg_;
+        std::atomic<bool> is_executing_leg_{false};
+        double body_orientation_tracking_tolerance_rad_{0.02};
         std::vector<std::vector<double>> prepared_positions_;
         bool prepared_dispatch_valid_ = false;
         rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;

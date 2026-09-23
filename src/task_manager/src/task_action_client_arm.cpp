@@ -1,6 +1,7 @@
 #include "task_manager/task_action_client.hpp"
 #include "task_manager/log_helper.hpp"
 #include "task_manager/vision_pose_utils.hpp"
+#include "task_manager/waist_turn_utils.hpp"
 #include <algorithm>
 #include <random>
 #include <sstream>
@@ -15,6 +16,7 @@
 #include "com_interfaces/action/control_gripper.hpp"
 #include "com_interfaces/action/move_pose.hpp"
 #include "com_interfaces/action/move_joints.hpp"
+#include "com_interfaces/leg_joint_goal.hpp"
 #include "com_interfaces/action/control_suck.hpp"
 
 namespace task_act
@@ -48,6 +50,25 @@ ActionCallResult TaskActionClient::call_move_pose(
   }
 
   geometry_msgs::msg::PoseStamped offset_target;
+  geometry_msgs::msg::PoseStamped left_offset_target, right_offset_target;
+  const bool dual_offsets = param.left_vision_pose_offset.enabled || param.right_vision_pose_offset.enabled;
+  if (dual_offsets) {
+    std::string error;
+    if (param.use_config_pose || param.vision_pose_offset.enabled ||
+        (param.arm_id != MovePose::Goal::ARM_BOTH && param.arm_id != MovePose::Goal::WHOLE_BODY_BOTH) ||
+        !offset_vision_pose(target_pose, param.left_vision_pose_offset, param.frame_id, left_offset_target, error) ||
+        !offset_vision_pose(target_pose, param.right_vision_pose_offset, param.frame_id, right_offset_target, error)) {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Invalid dual vision offsets: " << error);
+      return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+  }
+  if (!param.vision_result_key.empty()) {
+    std::string error;
+    if (param.use_config_pose || !valid_vision_pose(target_pose, param.frame_id, error)) {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Invalid named vision target: " << error);
+      return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+  }
   if (param.vision_pose_offset.enabled) {
     std::string error;
     if (!offset_vision_pose(target_pose, param, offset_target, error)) {
@@ -101,6 +122,11 @@ ActionCallResult TaskActionClient::call_move_pose(
         goal.right_target_pose.pose.orientation.z = param.right_target_pose[5];
         goal.right_target_pose.pose.orientation.w = param.right_target_pose[6];
       }
+    }
+    else if (dual_offsets)
+    {
+      goal.left_target_pose = left_offset_target;
+      goal.right_target_pose = right_offset_target;
     }
     else
     {
@@ -187,6 +213,7 @@ ActionCallResult TaskActionClient::call_move_pose(
   goal.point_cloud_frame_id = frame_id;
   goal.timeout_ms = param.timeout_ms;
   goal.enable_move_line = param.enable_move_line;
+  goal.whole_body_waist_only = param.whole_body_waist_only;
 
   // ========== 参数打印（实际发送的 Goal） ==========
   {
@@ -196,6 +223,7 @@ ActionCallResult TaskActionClient::call_move_pose(
         << "\n collision_check=" << static_cast<unsigned>(goal.enable_collision_check)
         << "\n force_control=" << (goal.use_force_control ? "true" : "false")
         << "\n enable_move_line=" << (goal.enable_move_line ? "true" : "false")
+        << "\n whole_body_waist_only=" << (goal.whole_body_waist_only ? "true" : "false")
         << "\n speed=" << goal.speed
         << "\n timeout_ms=" << goal.timeout_ms
         << "\n cloud_frame=" << goal.point_cloud_frame_id
@@ -374,7 +402,18 @@ ActionCallResult TaskActionClient::call_move_joints(
     return ActionCallResult::FAIL_PARAM_INVALID;
   }
 
-  if (param.arm_id == MoveJoints::Goal::ARM_BOTH)
+  const bool waist_only_goal = param.arm_id == MoveJoints::Goal::LEG &&
+    param.joint_name == std::vector<std::string>{"body_joint"};
+  if (param.relative_position || waist_only_goal) {
+    if (param.arm_id != MoveJoints::Goal::LEG ||
+        param.joint_name != std::vector<std::string>{"body_joint"} || param.position.size() != 1 ||
+        !std::isfinite(param.position[0]) || !std::isfinite(param.speed) ||
+        param.speed <= 0 || param.speed > 1 || param.timeout_ms <= 0) {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Invalid waist-only MoveJ");
+      return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+  }
+  else if (param.arm_id == MoveJoints::Goal::ARM_BOTH)
   {
     constexpr size_t kArmJointCount = 7U;
     if (param.left_joint_name.size() != kArmJointCount ||
@@ -389,7 +428,18 @@ ActionCallResult TaskActionClient::call_move_joints(
   }
   else
   {
-    const size_t expected_joint_count =
+    const bool leg_orientation_goal = param.arm_id == MoveJoints::Goal::LEG &&
+      (param.joint_name.size() == 2 || param.position.size() == 2);
+    if (leg_orientation_goal) {
+      com_interfaces::LegJointSelection selection;
+      std::string error;
+      if (!com_interfaces::validateLegOrientationGoal(param.joint_name, param.position, selection, error) ||
+          !std::isfinite(param.speed) || param.speed <= 0 || param.speed > 1 || param.timeout_ms <= 0) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Invalid body-orientation leg MoveJ: " << error);
+        return ActionCallResult::FAIL_PARAM_INVALID;
+      }
+    }
+    const size_t expected_joint_count = leg_orientation_goal ? 2U :
       (param.arm_id == MoveJoints::Goal::HEAD) ? 2U :
       (param.arm_id == MoveJoints::Goal::LEG) ? 4U : 7U;
     if (param.joint_name.size() != expected_joint_count ||
@@ -502,6 +552,27 @@ ActionCallResult TaskActionClient::call_move_joints(
   }
 
   LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints action server connected successfully");
+
+  if (param.relative_position || waist_only_goal) {
+    std::lock_guard<std::mutex> lock(waist_state_mutex_);
+    const double age = waist_state_ ?
+      (node_->now().nanoseconds() - rclcpp::Time(waist_state_->header.stamp).nanoseconds()) * 1e-9 : 1e9;
+    const double received_age = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - waist_state_received_).count();
+    std::string error;
+    if (!waist_state_ || rclcpp::Time(waist_state_->header.stamp).nanoseconds() <= 0 ||
+        age < -0.05 || age > 0.25 || received_age > 0.25 ||
+        !expand_waist_turn(*waist_state_, param.position[0], param.relative_position,
+                           goal.joint_name, goal.position, error)) {
+      LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+        "Waist-only MoveJ requires fresh, stopped /wbc/joint_states: " << error);
+      return ActionCallResult::FAIL_PARAM_INVALID;
+    }
+    LOG_INFO(node_->get_logger(), task_log::Tag::ARM,
+      "J4 " << (param.relative_position ? "delta=" : "absolute=")
+      << param.position[0] << ", target=" << goal.position[3]
+      << ", held legs=[" << goal.position[0] << "," << goal.position[1] << "," << goal.position[2] << "]");
+  }
 
   auto send_goal_options = rclcpp_action::Client<MoveJoints>::SendGoalOptions();
 
