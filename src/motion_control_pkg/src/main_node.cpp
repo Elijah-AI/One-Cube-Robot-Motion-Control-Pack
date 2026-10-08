@@ -7,6 +7,7 @@
 
 #include "main_node.hpp"
 #include "com_interfaces/leg_joint_goal.hpp"
+#include "com_interfaces/leg_body_motion_goal.hpp"
 #include "dual_arm_module.hpp"
 #include "ethercat_bus_manager.hpp"
 #include "miracle_head_module.hpp"
@@ -155,6 +156,22 @@ public:
                 dual_arm_initialization_error);
         }
         dual_arm_module_->attachMeasuredFeedbackBus(ethercat_bus_manager_ptr_);
+        lower_body_module_->set_body_motion_callbacks(
+            [arms = dual_arm_module_, head = head_module_](std::string& error) {
+                if (!arms->reserve_preplanned_trajectory_resources(true, true, error)) return false;
+                if (!head->reserve_body_motion_resource(error)) {
+                    arms->release_preplanned_trajectory_resources(true, true);
+                    return false;
+                }
+                return true;
+            },
+            [arms = dual_arm_module_, head = head_module_] {
+                head->release_body_motion_resource();
+                arms->release_preplanned_trajectory_resources(true, true);
+            },
+            [arms = dual_arm_module_](sensor_msgs::msg::JointState& state, std::string& error) {
+                return arms->read_body_motion_feedback(state, error);
+            });
         RCLCPP_INFO(
             this->get_logger(),
             "Dual arm initialized with configuration=%s, planning_frame=%s, "
@@ -527,6 +544,25 @@ private:
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const MoveJoints::Goal> goal)
     {
+        std::string body_error;
+        if (!com_interfaces::validateLegBodyMotionGoal(goal->arm_id, goal->leg_motion_mode,
+                goal->body_tilt_deg, goal->body_height_m, goal->joint_name, goal->position,
+                goal->speed, goal->timeout_ms, goal->control_mode, goal->acceleration_scale,
+                goal->jerk_scale, false, body_error)) {
+            RCLCPP_WARN(this->get_logger(), "Invalid leg body motion: %s", body_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (goal->leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS &&
+            !goal->header.frame_id.empty() && goal->header.frame_id != "base_link") {
+            RCLCPP_WARN(this->get_logger(), "Leg body targets use base_link coordinates");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (goal->leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS &&
+            (!dual_arm_module_->is_idle(ID_LEFT_ARM) || !dual_arm_module_->is_idle(ID_RIGHT_ARM) ||
+             !head_module_->is_idle(ID_HEAD))) {
+            RCLCPP_WARN(this->get_logger(), "Body motion requires idle upper-body resources");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (goal->enable_collision_check > 2) {
             RCLCPP_WARN(this->get_logger(), "enable_collision_check must be 0, 1 or 2");
             return rclcpp_action::GoalResponse::REJECT;

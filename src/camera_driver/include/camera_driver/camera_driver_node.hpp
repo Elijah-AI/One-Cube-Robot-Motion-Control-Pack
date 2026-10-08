@@ -241,6 +241,10 @@ class CameraDriverNode : public rclcpp::Node {
   //     尚未收到头部位姿时保持原样；
   //   1 号（底盘）相机：T = kFixedTransform_1（相机→基座，一次转换，与头部位姿无关）。
   void applyPointCloudTransform(sensor_msgs::msg::PointCloud2 &pc_msg, uint8_t camera_id);
+  // 线程安全地查询是否已收到头部位姿。
+  // 头部相机（camera_id==0）的点云需依赖 /Control/HeadPose 做手眼变换，
+  // 未收到头部位姿前相机 0 的数据不对外发布。
+  bool is_head_pose_available() const;
   // 工具函数：四元数位姿 -> 4×4 矩阵（行主序）；4×4 相乘（行主序）；齐次变换点
   static void poseToMat4(const geometry_msgs::msg::Pose &pose, float M[16]);
   static void mat4Mul(const float A[16], const float B[16], float out[16]);
@@ -356,7 +360,7 @@ class CameraDriverNode : public rclcpp::Node {
 
   // --- 头部位姿与点云坐标变换状态 ---
   rclcpp::Subscription<MotorStatus>::SharedPtr sub_head_pose_{nullptr};
-  std::mutex head_pose_mtx_;              // 保护 head_pose_transform_ / head_pose_available_
+  mutable std::mutex head_pose_mtx_;      // 保护 head_pose_transform_ / head_pose_available_
   bool head_pose_available_ = false;      // 是否已收到头部位姿并构建变换矩阵（头部相机）
   std::array<float, 16> head_pose_transform_{};  // 头部相机 T = M_end × kFixedTransform_0（行主序）
   // 固定标定矩阵 M_fixed（行主序，相机→头部末端，手眼标定结果） //141主机的

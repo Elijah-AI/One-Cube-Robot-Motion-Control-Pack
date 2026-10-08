@@ -30,7 +30,7 @@
 
 #include <set>
 #include <vector>
-#define LABEL_NALE_TXT_PATH "/home/neardi/workspace/project/sort_detection_npu/models/labels_list.txt"
+#define LABEL_NALE_TXT_PATH SORT_DETECTION_MODEL_DIR "/labels_list.txt"
 #define USE_FP_RESIZE
 
 static char *labels[OBJ_CLASS_NUM];
@@ -103,8 +103,7 @@ static int readLines(const char *fileName, char *lines[], int max_line)
 static int loadLabelName(const char *locationFilename, char *label[])
 {
     printf("load lable %s\n", locationFilename);
-    readLines(locationFilename, label, OBJ_CLASS_NUM);
-    return 0;
+    return readLines(locationFilename, label, OBJ_CLASS_NUM);
 }
 
 static float CalculateOverlap(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1,

@@ -36,6 +36,7 @@
 
 #include <cmath>
 #include <array>
+#include <functional>
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -175,6 +176,14 @@ namespace miracle {
         // 暴露给上层的任务入口, 一个action対应一个接口
         void start_execution_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
 
+        void set_body_motion_callbacks(std::function<bool(std::string&)> reserve,
+            std::function<void()> release,
+            std::function<bool(sensor_msgs::msg::JointState&, std::string&)> feedback) {
+            reserve_upper_body_ = std::move(reserve);
+            release_upper_body_ = std::move(release);
+            read_upper_body_ = std::move(feedback);
+        }
+
         void start_execution_move_pose(std::shared_ptr<GoalHandleMovePose> goal_handle);
 
         // 执行全身模块预先生成的弧度制腿部关节轨迹。
@@ -199,6 +208,12 @@ namespace miracle {
             const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
             std::string& error_message);
 
+        // Reuse the timestamped, fault-checked EtherCAT read for WBC completion.
+        bool read_preplanned_completion_feedback(std::array<double, 4>& positions,
+            std::array<double, 4>& velocities, uint64_t& sequence, std::string& error) {
+            return read_body_orientation_feedback(positions, velocities, sequence, error);
+        }
+
         // Reserve the leg execution flag before whole-body planning starts.
         bool reserve_preplanned_trajectory_resource(std::string& error_message);
         void release_preplanned_trajectory_resource() noexcept;
@@ -207,6 +222,10 @@ namespace miracle {
            //一个action対应一个接口
         void execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
         void execution_loop_body_orientation(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
+        void execution_loop_body_motion(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
+        std::function<bool(std::string&)> reserve_upper_body_;
+        std::function<void()> release_upper_body_;
+        std::function<bool(sensor_msgs::msg::JointState&, std::string&)> read_upper_body_;
         bool read_body_orientation_feedback(std::array<double, 4>& positions,
             std::array<double, 4>& velocities, uint64_t& sequence, std::string& error);
 

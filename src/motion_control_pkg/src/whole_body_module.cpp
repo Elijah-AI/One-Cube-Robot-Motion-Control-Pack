@@ -34,6 +34,12 @@ public:
     bool execute_legs(const Path& p,Time start,const Cancel& cancel,std::string& e) override {
         return legs_->dispatch_preplanned(p,start,cancel,e);
     }
+    bool read_completion_feedback(motion_control_pkg::execution::WholeBodyCompletionFeedback& state,
+                                  std::string& error) override {
+        return arms_->read_preplanned_completion_feedback(state.arms,error) &&
+            legs_->read_preplanned_completion_feedback(state.leg_positions,state.leg_velocities,
+                                                        state.leg_sequence,error);
+    }
 private:
     std::shared_ptr<DualArmModule> arms_;
     std::shared_ptr<miracle::MiracleLowerBodyModule> legs_;
@@ -1260,6 +1266,47 @@ void WholeBodyModule::execution_loop(
         }
         publish_feedback(30.0F, cancel->requested() ? "stopping synchronized whole-body trajectory" : "executing synchronized whole-body trajectory",
             cancel->requested() ? MovePose::Feedback::STATUS_STOPPING : MovePose::Feedback::STATUS_EXECUTING);
+    }
+    // A successful stream only means the last command was sent. Keep all
+    // resources reserved until measured feedback has continuously settled.
+    if (!child_failed && !timed_out && !goal_handle->is_canceling()) {
+        using Guard = motion_control_pkg::execution::WholeBodyCompletionGuard;
+        const auto settling_started = Guard::Clock::now();
+        auto deadline = settling_started + std::chrono::seconds(3);
+        if (goal->timeout_ms > 0)
+            deadline = std::min(deadline, started_at + std::chrono::milliseconds(goal->timeout_ms));
+        Guard guard(need_left ? left_path.back() : std::vector<double>{},
+                    need_right ? right_path.back() : std::vector<double>{},
+                    leg_path.back(), settling_started, deadline);
+        publish_feedback(95.0F, "waiting for measured arm and waist feedback to settle");
+        while (!goal_handle->is_canceling()) {
+            if (!rclcpp::ok()) {
+                child_failed = true;
+                result->error_message = "ROS shutdown while waiting for whole-body completion";
+                break;
+            }
+            if (!check_balance_feedback(start_q,need_left,need_right,false,result->error_message)) {
+                child_failed = true;
+                break;
+            }
+            motion_control_pkg::execution::WholeBodyCompletionFeedback measured;
+            if (!backend_->read_completion_feedback(measured,result->error_message)) {
+                child_failed = true;
+                result->error_message = "WBC completion feedback: " + result->error_message;
+                break;
+            }
+            const auto status = guard.update(measured,Guard::Clock::now(),result->error_message);
+            if (status == Guard::Status::Failed) { child_failed = true; break; }
+            if (status == Guard::Status::Settled) {
+                RCLCPP_INFO(rclcpp::get_logger("whole_body_module"),
+                    "WBC measured completion settled after %.3f s (100 ms stable feedback)",
+                    std::chrono::duration<double>(Guard::Clock::now()-settling_started).count());
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (goal_handle->is_canceling())
+            result->error_message = "whole-body MovePose canceled while waiting for measured completion";
     }
     finish_time();
 

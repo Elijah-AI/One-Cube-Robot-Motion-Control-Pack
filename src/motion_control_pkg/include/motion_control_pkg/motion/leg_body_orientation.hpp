@@ -36,6 +36,7 @@ public:
       const std::vector<std::string>& names, const std::vector<double>& targets,
       double speed, double sample_period, double max_duration);
   Eigen::Matrix3d orientation(const LegJoints& joints);
+  Eigen::Isometry3d pose(const LegJoints& joints);
   double orientationError(const LegJoints& joints, const Eigen::Matrix3d& reference);
   void validatePosition(const LegJoints& joints) const;
 

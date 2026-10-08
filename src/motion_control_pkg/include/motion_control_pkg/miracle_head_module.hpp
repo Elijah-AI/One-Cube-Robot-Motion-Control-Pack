@@ -128,6 +128,8 @@ namespace miracle {
 
         // 暴露给上层的状态检查
         bool is_idle(int module_id) const;
+        bool reserve_body_motion_resource(std::string& error);
+        void release_body_motion_resource() noexcept { is_executing_head_.store(false); }
     
         // 暴露给上层的任务入口, 一个action対应一个接口
         void start_execution_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);

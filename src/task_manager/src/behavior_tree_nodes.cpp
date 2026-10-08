@@ -734,3 +734,40 @@ void ParallelNode::addChild(BTNode::Ptr child)
 
 
 
+
+BTStatus IKLegLiftRecoveryNode::tick() {
+    if (phase_ == Phase::DONE) return status_;
+    auto child = phase_ == Phase::PRIMARY ? primary_ : phase_ == Phase::LIFT ? lift_ : retry_;
+    const auto state = child->tick();
+    if (state == BTStatus::RUNNING || state == BTStatus::IDLE) return status_ = BTStatus::RUNNING;
+    if (phase_ == Phase::PRIMARY && state == BTStatus::FAILURE && may_recover_()) {
+        phase_ = Phase::LIFT;
+        return status_ = BTStatus::RUNNING;
+    }
+    if (phase_ == Phase::LIFT && state == BTStatus::SUCCESS) {
+        mark_lifted_();
+        phase_ = Phase::RETRY;
+        return status_ = BTStatus::RUNNING;
+    }
+    phase_ = Phase::DONE;
+    return status_ = state;
+}
+void IKLegLiftRecoveryNode::reset() {
+    phase_ = Phase::PRIMARY;
+    status_ = BTStatus::IDLE;
+    primary_->reset(); lift_->reset(); retry_->reset();
+}
+
+BTStatus ConditionalLegRestoreNode::tick() {
+    if (status_ == BTStatus::SUCCESS || status_ == BTStatus::FAILURE) return status_;
+    if (!decided_) { run_ = pending_(); decided_ = true; }
+    if (!run_) return status_ = BTStatus::SUCCESS;
+    const auto state = restore_->tick();
+    if (state == BTStatus::SUCCESS) clear_();
+    return status_ = state;
+}
+void ConditionalLegRestoreNode::reset() {
+    decided_ = run_ = false;
+    status_ = BTStatus::IDLE;
+    restore_->reset();
+}

@@ -35,6 +35,8 @@ struct VisionActionParam
   bool require_single_target{false}; ///< 要求本次检测恰好返回一个目标
   bool require_expected_frame{false}; ///< 检查目标实际坐标系；不执行坐标变换
   std::string result_key;             ///< 可选：在本次任务的同序列内命名保存结果
+  std::vector<double> canonical_y_direction; ///< 可选：期望坐标系内的局部+Y参考方向；空则禁用
+  double canonical_y_min_alignment{0.5}; ///< |Y dot reference| 下限；方向不明确时拒绝
 };
 
 /// 平移默认沿 frame_id 轴，translation_frame=vision 时沿视觉局部轴；姿态右乘。
@@ -44,6 +46,9 @@ struct VisionPoseOffset
   std::string translation_frame{"base"}; ///< base 或 vision；base 保持旧配置行为
   std::vector<double> translation{0.0, 0.0, 0.0};
   std::vector<double> rotation{0.0, 0.0, 0.0, 1.0}; ///< [x,y,z,w]
+  bool force_vertical_down{false}; ///< TCP Z -> base_link -Z; preserve projected TCP X heading
+  bool keep_current_tcp_height{false}; ///< translation[2]=current_tcp_height: derive local Z from measured base Z
+  double minimum_z{0.0}; ///< Minimum vision-local approach height in current_tcp_height mode
 };
 
 /// @brief 机械臂位姿移动动作参数（对应 MovePose.action）
@@ -150,6 +155,9 @@ struct ControlResetParam
 /// @brief 关节空间移动动作参数
 struct MoveJointsParam
 {
+  uint8_t leg_motion_mode{0}; ///< 0=关节目标；1=绝对身体倾角；2=相对升降；3=绝对身体高度
+  double body_tilt_deg{0};    ///< 身体 +Z 向 base_link +X 的有符号倾角（度）
+  double body_height_m{0};    ///< 相对 Z 距离或 body_link 原点的绝对 Z（米）
   bool relative_position{false}; ///< 仅 LEG/body_joint：position[0] 为相对当前反馈的腰转角
   // LEG: four joint targets retain ordinary MoveJ; two distinct leg_joint1/2/3
   // targets request automatic third-joint compensation with fixed body orientation.
@@ -360,8 +368,20 @@ struct ResultBranchParam
 };
 
 /// @brief 原子动作：包含动作类型及所有可能的参数
+struct IKLegLiftRecoveryParam
+{
+  bool enabled{false};
+  std::string key;
+  double lift_m{0.05};
+  float speed{0.10f};
+  int64_t timeout_ms{30000};
+  uint8_t collision_mode{1};
+};
+
 struct AtomicAction
 {
+  IKLegLiftRecoveryParam ik_failure_recovery;
+  std::string if_recovery_applied;
   std::string action_type;                    ///< 动作类型标识
   int64_t delay_ms;                           ///< 执行前延迟时间（毫秒），>0 时先延迟再执行，默认 0 不延迟
   VisionActionParam vision_param;             ///< 视觉检测参数

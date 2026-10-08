@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>berxel_camera_driver</name>
+  <version>0.1.0</version>
+  <description>
+    Camera driver node (camera_driver_node) for Berxel Hawk (iHawk) 3D depth cameras.
+    Functionally identical to the Orbbec-based camera_driver package - publishes the
+    fused /fusion/synced_robot_vision message with per-camera RGB image and depth point
+    cloud (RGB colored, aligned to the color frame), /vision/rgb_raw,
+    /SafeNode/Heartbeat and /SafeNode/status, provides /vision/Check_self and
+    /vision/Reset action servers and the robot head-pose point cloud transform.
+    The only difference from camera_driver is the low-level raw image data source
+    (Berxel Hawk Linux SDK instead of the Orbbec SDK).
+    The Berxel Hawk SDK (shared headers under SDK/Include/ plus native shared
+    libraries split by architecture: SDK/x86 for x86_64 and SDK/arm for aarch64)
+    is bundled under SDK/ so the package builds self-contained on both an x86_64
+    WSL host and an aarch64 RK3576 target (CMake picks the arch automatically).
+  </description>
+  <maintainer email="user@example.com">user</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>com_interfaces</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

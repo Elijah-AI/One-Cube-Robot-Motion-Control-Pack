@@ -381,4 +381,35 @@ private:
     std::function<void()> precondition_fail_cb_;                ///< 前置条件失败回调（可选）
 };
 
+// One recovery attempt, awaiting measured-success Action results at each step.
+class IKLegLiftRecoveryNode : public BTNode {
+public:
+    IKLegLiftRecoveryNode(const std::string& name, Ptr primary, Ptr lift, Ptr retry,
+        std::function<bool()> may_recover, std::function<void()> mark_lifted)
+        : BTNode(name), primary_(std::move(primary)), lift_(std::move(lift)),
+          retry_(std::move(retry)), may_recover_(std::move(may_recover)), mark_lifted_(std::move(mark_lifted)) {}
+    BTStatus tick() override;
+    void reset() override;
+private:
+    enum class Phase { PRIMARY, LIFT, RETRY, DONE };
+    Phase phase_{Phase::PRIMARY};
+    Ptr primary_, lift_, retry_;
+    std::function<bool()> may_recover_;
+    std::function<void()> mark_lifted_;
+};
+
+class ConditionalLegRestoreNode : public BTNode {
+public:
+    ConditionalLegRestoreNode(const std::string& name, Ptr restore,
+        std::function<bool()> pending, std::function<void()> clear)
+        : BTNode(name), restore_(std::move(restore)), pending_(std::move(pending)), clear_(std::move(clear)) {}
+    BTStatus tick() override;
+    void reset() override;
+private:
+    Ptr restore_;
+    std::function<bool()> pending_;
+    std::function<void()> clear_;
+    bool decided_{false}, run_{false};
+};
+
 #endif // BEHAVIOR_TREE_ENGINE_H

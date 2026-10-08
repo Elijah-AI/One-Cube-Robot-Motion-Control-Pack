@@ -12,6 +12,7 @@
 
 #include "task_manager/task_config_parser.hpp"
 #include "task_manager/log_helper.hpp"
+#include "com_interfaces/leg_body_motion_goal.hpp"
 #include <rclcpp/rclcpp.hpp>
 
 namespace task_cfg
@@ -526,6 +527,29 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act, i
       return false;
     }
   }
+  if (auto recovery = action_node["ik_failure_recovery"]) {
+    auto& config = act.ik_failure_recovery;
+    config.enabled = recovery["enabled"] ? recovery["enabled"].as<bool>() : true;
+    config.key = recovery["key"] ? recovery["key"].as<std::string>() : "";
+    config.lift_m = recovery["lift_m"] ? recovery["lift_m"].as<double>() : 0.05;
+    config.speed = recovery["speed"] ? recovery["speed"].as<float>() : 0.10f;
+    config.timeout_ms = recovery["timeout_ms"] ? recovery["timeout_ms"].as<int64_t>() : 30000;
+    config.collision_mode = recovery["enable_collision_check"] ? parse_collision_mode(recovery) :
+        act.arm_param.enable_collision_check;
+    if (config.enabled && (act.action_type != "move_pose" || act.arm_param.arm_id < 5 ||
+        act.arm_param.arm_id > 7 || !act.arm_param.whole_body_waist_only || config.key.empty() ||
+        !std::isfinite(config.lift_m) || config.lift_m <= 0 || !std::isfinite(config.speed) ||
+        config.speed <= 0 || config.speed > 1 || config.timeout_ms <= 0 || act.feedback_check.enable))
+      throw std::invalid_argument("IK leg recovery requires a waist-only whole-body MovePose, key, positive lift, valid speed/timeout and no feedback_check");
+  }
+  if (action_node["if_recovery_applied"]) {
+    act.if_recovery_applied = action_node["if_recovery_applied"].as<std::string>();
+    const auto& move = act.move_joints_param;
+    if (act.if_recovery_applied.empty() || act.action_type != "move_joints" ||
+        move.arm_id != 4 || move.leg_motion_mode != 2 || !std::isfinite(move.body_height_m) ||
+        move.body_height_m >= 0 || act.ik_failure_recovery.enabled || act.feedback_check.enable)
+      throw std::invalid_argument("Conditional leg restore requires a key and a negative LEG vertical-relative MoveJoints");
+  }
   return true;
 }
 
@@ -550,6 +574,24 @@ bool TaskConfigParser::parse_vision_detect_params(YAML::Node p, AtomicAction& ac
     p["require_expected_frame"].as<bool>() : false;
   if (act.vision_param.require_expected_frame && act.vision_param.expected_frame_id.empty()) {
     throw std::invalid_argument("require_expected_frame needs a nonempty expected_frame_id");
+  }
+  if (p["canonical_y_direction"]) {
+    auto& param = act.vision_param;
+    param.canonical_y_direction = p["canonical_y_direction"].as<std::vector<double>>();
+    param.canonical_y_min_alignment = p["canonical_y_min_alignment"] ?
+      p["canonical_y_min_alignment"].as<double>() : 0.5;
+    double norm2 = 0.0;
+    for (const double v : param.canonical_y_direction) norm2 += v*v;
+    if (param.canonical_y_direction.size() != 3U || !std::isfinite(norm2) ||
+        norm2 < 1e-12 || !param.require_expected_frame || !param.require_single_target ||
+        !std::isfinite(param.canonical_y_min_alignment) ||
+        param.canonical_y_min_alignment <= 0.0 || param.canonical_y_min_alignment > 1.0) {
+      throw std::invalid_argument(
+        "canonical_y_direction needs a finite nonzero 3-vector, checked frame, single target "
+        "and canonical_y_min_alignment in (0,1]");
+    }
+  } else if (p["canonical_y_min_alignment"]) {
+    throw std::invalid_argument("canonical_y_min_alignment requires canonical_y_direction");
   }
   return true;
 }
@@ -627,8 +669,19 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
                                 const std::vector<float>& bounds) {
     if (!p[key]) {return;}
     offset.enabled = true;
-    offset.translation = p[key]["translation"].as<std::vector<double>>();
+    const auto translation = p[key]["translation"];
+    if (!translation.IsSequence() || translation.size() != 3U) {
+      throw std::invalid_argument("vision translation needs three values");
+    }
+    offset.keep_current_tcp_height = translation[2].IsScalar() &&
+      translation[2].Scalar() == "current_tcp_height";
+    offset.translation = {
+      translation[0].as<double>(), translation[1].as<double>(),
+      offset.keep_current_tcp_height ? 0.0 : translation[2].as<double>()};
+    offset.minimum_z = p[key]["minimum_z"] ? p[key]["minimum_z"].as<double>() : 0.0;
     offset.rotation = p[key]["rotation"].as<std::vector<double>>();
+    offset.force_vertical_down = p[key]["force_vertical_down"] ?
+      p[key]["force_vertical_down"].as<bool>() : false;
     offset.translation_frame = p[key]["translation_frame"] ?
       p[key]["translation_frame"].as<std::string>() : "base";
     if (act.arm_param.use_config_pose || act.arm_param.frame_id.empty() || offset.translation.size() != 3 ||
@@ -638,6 +691,19 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
     }
     if (offset.translation_frame != "base" && offset.translation_frame != "vision") {
       throw std::invalid_argument("translation_frame must be base or vision");
+    }
+    if (offset.force_vertical_down && act.arm_param.frame_id != "base_link") {
+      throw std::invalid_argument("force_vertical_down requires frame_id=base_link");
+    }
+    if (offset.keep_current_tcp_height &&
+        (std::string(key) != "vision_pose_offset" || act.arm_param.arm_id > 1 ||
+         act.arm_param.frame_id != "base_link" || offset.translation_frame != "vision" ||
+         !std::isfinite(offset.minimum_z) || offset.minimum_z < 0.0)) {
+      throw std::invalid_argument(
+        "current_tcp_height requires a single-arm base_link vision-local target and minimum_z >= 0");
+    }
+    if (!offset.keep_current_tcp_height && p[key]["minimum_z"]) {
+      throw std::invalid_argument("minimum_z requires translation[2]=current_tcp_height");
     }
     for (double v : offset.translation) {
       if (!std::isfinite(v)) {throw std::invalid_argument("non-finite vision translation");}
@@ -738,6 +804,16 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   act.move_joints_param.speed = p["speed"].as<float>();
   act.move_joints_param.timeout_ms = p["timeout_ms"].as<int64_t>();
   act.move_joints_param.relative_position = p["relative_position"] ? p["relative_position"].as<bool>() : false;
+  if (p["leg_motion_mode"]) {
+    const auto mode = p["leg_motion_mode"].as<std::string>();
+    if (mode == "joint_targets" || mode == "0") act.move_joints_param.leg_motion_mode = 0;
+    else if (mode == "body_tilt" || mode == "1") act.move_joints_param.leg_motion_mode = 1;
+    else if (mode == "vertical_relative" || mode == "2") act.move_joints_param.leg_motion_mode = 2;
+    else if (mode == "vertical_absolute" || mode == "3") act.move_joints_param.leg_motion_mode = 3;
+    else throw std::invalid_argument("Unknown leg_motion_mode");
+  }
+  act.move_joints_param.body_tilt_deg = p["body_tilt_deg"] ? p["body_tilt_deg"].as<double>() : 0;
+  act.move_joints_param.body_height_m = p["body_height_m"] ? p["body_height_m"].as<double>() : 0;
 
   // com_interfaces/action/MoveJoints.action 定义：
   //   ARM_LEFT/ARM_RIGHT/HEAD/LEG → 使用 joint_name + position
@@ -752,10 +828,18 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   }
   else
   {
-    act.move_joints_param.joint_name = p["joint_name"].as<std::vector<std::string>>();
-    act.move_joints_param.position = p["position"].as<std::vector<double>>();
+    if (act.move_joints_param.leg_motion_mode == 0 || p["joint_name"])
+      act.move_joints_param.joint_name = p["joint_name"].as<std::vector<std::string>>();
+    if (act.move_joints_param.leg_motion_mode == 0 || p["position"])
+      act.move_joints_param.position = p["position"].as<std::vector<double>>();
   }
   const auto& move = act.move_joints_param;
+  std::string body_error;
+  if (!com_interfaces::validateLegBodyMotionGoal(move.arm_id, move.leg_motion_mode,
+      move.body_tilt_deg, move.body_height_m, move.joint_name, move.position, move.speed,
+      move.timeout_ms, p["control_mode"] ? p["control_mode"].as<uint8_t>() : 0,
+      move.acceleration_scale, move.jerk_scale, move.relative_position, body_error))
+    throw std::invalid_argument(body_error);
   const bool waist_only_goal = move.arm_id == 4 &&
     move.joint_name == std::vector<std::string>{"body_joint"};
   if ((move.relative_position || waist_only_goal) &&

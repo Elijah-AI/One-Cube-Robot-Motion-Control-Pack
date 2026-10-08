@@ -43,6 +43,15 @@ TaskActionClient::TaskActionClient(rclcpp::Node::SharedPtr node)
       waist_state_ = std::move(msg);
       waist_state_received_ = std::chrono::steady_clock::now();
     });
+  const auto tcp_topic = node_->declare_parameter<std::string>(
+    "task_tcp_state_topic", "/Control/MotorInfo");
+  tcp_state_subscription_ = node_->create_subscription<com_interfaces::msg::MotorStatus>(
+    tcp_topic, rclcpp::SensorDataQoS(),
+    [this](com_interfaces::msg::MotorStatus::ConstSharedPtr msg) {
+      std::lock_guard<std::mutex> lock(tcp_state_mutex_);
+      tcp_state_ = std::move(msg);
+      tcp_state_received_ = std::chrono::steady_clock::now();
+    });
   std::shared_future<GoalHandleCtrlGripper> gripper_send_future_{};
   reset_state();
 
@@ -410,6 +419,11 @@ bool TaskActionClient::is_action_failure(const std::string& state_key) const
 void TaskActionClient::reset_action_state(const std::string& state_key)
 {
     auto& ctx = get_ctx(state_key);
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    ++ctx.goal_generation;
+    ctx.pre_motion_ik_failure = false;
+    ctx.move_pose_execution_observed = false;
+    ctx.result_error_message.clear();
     ctx.state = ActionRunState::IDLE;
     ctx.call_result = ActionCallResult::SUCCESS;
     ctx.start_time = rclcpp::Time(0, 0);
@@ -426,6 +440,10 @@ void TaskActionClient::reset_all_states()
     std::lock_guard<std::mutex> lock(ctx_mutex_);
     for (auto& [key, ctx] : action_contexts_)
     {
+        ++ctx.goal_generation;
+        ctx.pre_motion_ik_failure = false;
+        ctx.move_pose_execution_observed = false;
+        ctx.result_error_message.clear();
         ctx.state = ActionRunState::IDLE;
         ctx.call_result = ActionCallResult::SUCCESS;
         ctx.start_time = rclcpp::Time(0, 0);
@@ -460,6 +478,7 @@ void TaskActionClient::reset_all_states()
     // 通知后台复合动作编排线程退出（复位/新任务抢占场景）
     compound_move_cancel_.store(true, std::memory_order_release);
     clear_all_seq_vision_results();
+    { std::lock_guard<std::mutex> lock(recovery_mutex_); recovery_offsets_.clear(); }
 }
 
 
@@ -603,9 +622,15 @@ ActionCallResult TaskActionClient::send_goal(const task_cfg::AtomicAction& act, 
 {
     // 先重置该分支状态
     auto& ctx = get_ctx(state_key);
+    {
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
     ctx.state = ActionRunState::IDLE;
     ctx.call_result = ActionCallResult::SUCCESS;
-
+    ++ctx.goal_generation;
+    ctx.pre_motion_ik_failure = false;
+    ctx.move_pose_execution_observed = false;
+    ctx.result_error_message.clear();
+    }
     const std::string& act_type = act.action_type;
 
     // 生成唯一任务 ID
@@ -775,6 +800,11 @@ std::vector<ResourceType> TaskActionClient::get_required_resources(
         if (aid == MoveJoints::Goal::LEG)
         {
             resources.push_back(ResourceType::LEG);
+            if (act.move_joints_param.leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS) {
+                resources.push_back(ResourceType::LEFT_ARM);
+                resources.push_back(ResourceType::RIGHT_ARM);
+                resources.push_back(ResourceType::HEAD);
+            }
         }
     }
     else if (act_type == "gripper_ctrl")
@@ -1032,14 +1062,58 @@ void TaskActionClient::log_task_timing_summary(
 void TaskActionClient::complete_action_context(
     const std::string& state_key,
     ActionRunState state,
-    ActionCallResult call_result)
+    ActionCallResult call_result, uint64_t expected_generation)
 {
     const auto resources = detail::complete_context(
-      action_contexts_, ctx_mutex_, state_key, state, call_result);
+      action_contexts_, ctx_mutex_, state_key, state, call_result, expected_generation);
     for (const auto& resource : resources)
     {
         release_resource(resource);
     }
+}
+
+uint64_t TaskActionClient::begin_goal_request(const std::string& key)
+{
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    auto& ctx = action_contexts_[key];
+    ctx.pre_motion_ik_failure = false;
+    ctx.move_pose_execution_observed = false;
+    ctx.result_error_message.clear();
+    return ++ctx.goal_generation;
+}
+bool TaskActionClient::is_current_goal_request(const std::string& key, uint64_t generation) const
+{
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    const auto it = action_contexts_.find(key);
+    return it != action_contexts_.end() && it->second.goal_generation == generation;
+}
+bool TaskActionClient::had_pre_motion_ik_failure(const std::string& key) const
+{
+    std::lock_guard<std::mutex> lock(ctx_mutex_);
+    const auto it = action_contexts_.find(key);
+    if (it == action_contexts_.end() || it->second.state != ActionRunState::FAILURE ||
+        !it->second.pre_motion_ik_failure || it->second.start_time.nanoseconds() == 0) return false;
+    const auto elapsed = node_->now().nanoseconds() - it->second.start_time.nanoseconds();
+    return elapsed >= 0 && elapsed <= int64_t(it->second.execution_time_ms) * 1000000;
+}
+double TaskActionClient::recovery_offset(const std::string& sequence, const std::string& key) const
+{
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    const auto it = recovery_offsets_.find(sequence + ":" + key);
+    return it == recovery_offsets_.end() ? 0 : it->second;
+}
+void TaskActionClient::mark_recovery_offset(const std::string& sequence, const std::string& key, double metres)
+{
+    if (!std::isfinite(metres) || metres <= 0) throw std::invalid_argument("Invalid confirmed leg recovery offset");
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    auto& offset = recovery_offsets_[sequence + ":" + key];
+    if (offset != 0) throw std::runtime_error("Leg recovery already applied; refusing cumulative lift");
+    offset = metres;
+}
+void TaskActionClient::clear_recovery_offset(const std::string& sequence, const std::string& key)
+{
+    std::lock_guard<std::mutex> lock(recovery_mutex_);
+    recovery_offsets_.erase(sequence + ":" + key);
 }
 
 } // namespace task_act

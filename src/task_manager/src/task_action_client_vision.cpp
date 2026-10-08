@@ -117,8 +117,11 @@ TaskActionClient::call_vision_detect(
       }
 
       std::string validation_error;
+      VisionDet::Result prepared_result;
+      bool half_turn_applied = false;
       const bool succeeded = result.code == rclcpp_action::ResultCode::SUCCEEDED &&
-        result.result && validate_vision_result(*result.result, param, validation_error);
+        result.result && prepare_vision_result(
+          *result.result, param, prepared_result, half_turn_applied, validation_error);
       finish_action_timing(
         state_key, succeeded ? "SUCCESS" : "FAILURE");
       if (!result.result)
@@ -135,10 +138,18 @@ TaskActionClient::call_vision_detect(
       if (succeeded)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::VISION, "Vision detect succeeded [" << state_key << "]");
-        print_vision_result(node_->get_logger(), *result.result);
+        if (half_turn_applied) {
+          const auto& raw = result.result->detected_targets.front().pose.pose.orientation;
+          const auto& fixed = prepared_result.detected_targets.front().pose.pose.orientation;
+          LOG_INFO(node_->get_logger(), task_log::Tag::VISION,
+            "Corrected vision local-Z half-turn before caching [" << state_key
+            << "]: xyzw=[" << raw.x << "," << raw.y << "," << raw.z << "," << raw.w
+            << "] -> [" << fixed.x << "," << fixed.y << "," << fixed.z << "," << fixed.w << "]");
+        }
+        print_vision_result(node_->get_logger(), prepared_result);
 
         // ========== 保存视觉检测结果到 context，供后续动作使用 ==========
-        ctx.vision_result = *result.result;
+        ctx.vision_result = std::move(prepared_result);
         ctx.has_vision_result = true;
 
         ctx.state = ActionRunState::SUCCESS;

@@ -262,37 +262,30 @@ void TaskManagerNode::on_modbus_reg_write(uint32_t addr, uint16_t old_val, uint1
 {
 
   LOG_INFO(this->get_logger(), task_log::Tag::MODBUS, "Modbus reg write: addr=" << addr << ", new_val=" << new_val << ", old_val=" << old_val);
-  if(new_val == 1 && old_val == 0)
-  {
-    handle_trigger_task(addr);
+  if (new_val != 1 || old_val != 0) return;
+  if (safety_task_running_.load()) {
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "Reject task trigger while safety task is active");
+    return;
+  }
+  // Config is immutable after init. The socket thread never runs the behavior tree.
+  bool known = false;
+  for (const auto& entry : cfg_.task_dict) {
+    if (entry.second.trigger_reg == addr) { known = true; break; }
+  }
+  if (!known) return;
+  if (!modbus_trigger_gate_.submit(addr)) {
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM,
+      "Reject task trigger reg " << addr << ": busy or already pending; no automatic retry");
   }
 }
 
 void TaskManagerNode::handle_trigger_task(uint32_t trigger_addr)
 {
-  // 紧急状态时拒绝常规任务触发（不缓存，紧急态恢复后应由操作员明确触发）
-  if (current_state_ == task_fsm::SystemState::EMERGENCY)
-  {
-    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "System in EMERGENCY mode, ignore normal task reg " << trigger_addr);
+  if (current_state_ != task_fsm::SystemState::IDLE) {
+    LOG_WARN(this->get_logger(), task_log::Tag::FSM,
+      "Discard task trigger reg " << trigger_addr << ": system is not IDLE");
     return;
   }
-
-  // 只在 IDLE 状态才能触发新任务，防止任务重叠导致状态混乱。
-  // 系统忙时先将触发地址缓存到待执行队列，当前任务完成后自动执行（FIFO 顺序）。
-  if(current_state_ != task_fsm::SystemState::IDLE)
-  {
-    if (current_state_ == task_fsm::SystemState::RUNNING)
-    {
-      std::lock_guard<std::mutex> lock(pending_trigger_mutex_);
-      pending_trigger_regs_.push_back(trigger_addr);
-    }
-
-    LOG_WARN(this->get_logger(), task_log::Tag::FSM, "System busy (state="
-      << task_fsm::state_to_str(current_state_) << "), cache pending task reg " << trigger_addr
-      << ", pending=" << pending_trigger_regs_.size());
-    return;
-  }
-
   start_task_by_reg(trigger_addr);
 }
 
@@ -302,6 +295,7 @@ void TaskManagerNode::start_task_by_reg(uint32_t trigger_addr)
   {
     if(item.trigger_reg == trigger_addr)
     {
+      modbus_slave_->set_regaddr(trigger_addr);
       start_normal_task_timing(name);
       LOG_INFO(this->get_logger(), task_log::Tag::FSM, "Trigger task: " << name << " (reg=" << trigger_addr << ")");
       switch_state(task_fsm::SystemState::RUNNING);
@@ -317,39 +311,6 @@ void TaskManagerNode::start_task_by_reg(uint32_t trigger_addr)
   }
 }
 
-void TaskManagerNode::try_process_pending_trigger()
-{
-  uint32_t trigger_addr = 0;
-  {
-    std::lock_guard<std::mutex> lock(pending_trigger_mutex_);
-    if (pending_trigger_regs_.empty())
-    {
-      return;
-    }
-    trigger_addr = pending_trigger_regs_.front();
-    pending_trigger_regs_.pop_front();
-  }
-
-  // 仅在安全状态下才执行缓存的触发（防止紧急态下自动执行普通任务）；
-  // 若状态不允许，重新放回队首等待下一次机会。
-  if (current_state_ != task_fsm::SystemState::IDLE)
-  {
-    LOG_WARN(this->get_logger(), task_log::Tag::FSM,
-      "Skip pending task reg " << trigger_addr
-      << " (state=" << task_fsm::state_to_str(current_state_) << "), re-queue");
-    {
-      std::lock_guard<std::mutex> lock(pending_trigger_mutex_);
-      pending_trigger_regs_.push_front(trigger_addr);
-    }
-    return;
-  }
-
-  LOG_INFO(this->get_logger(), task_log::Tag::FSM,
-    "Execute pending trigger reg " << trigger_addr
-    << ", remaining=" << pending_trigger_regs_.size());
-  start_task_by_reg(trigger_addr);
-}
-
 void TaskManagerNode::write_task_status_reg(uint32_t status_addr, uint16_t result)
 {
   modbus_slave_->set_reg(status_addr, result);
@@ -360,6 +321,7 @@ void TaskManagerNode::switch_state(task_fsm::SystemState new_state, uint64_t err
   if(err_mask != 0) set_error_flag(err_mask);
   if(current_state_ == new_state) return;
   current_state_ = new_state;
+  modbus_trigger_gate_.set_idle(new_state == task_fsm::SystemState::IDLE);
   publish_state_change();
 }
 
@@ -516,7 +478,14 @@ void TaskManagerNode::halt_current_modbus_task()
 
 void TaskManagerNode::bt_tick_cb()
 {
-  if (safety_task_running_.load()) { return; }
+  if (safety_task_running_.load()) {
+    // Drop any handoff predating safety takeover. The socket callback rejects
+    // all new writes during safety handling, even if the FSM is still IDLE.
+    modbus_trigger_gate_.set_idle(current_state_ == task_fsm::SystemState::IDLE);
+    return;
+  }
+  uint32_t requested_trigger = 0;
+  if (modbus_trigger_gate_.take(requested_trigger)) handle_trigger_task(requested_trigger);
 
   
   switch (current_state_)
@@ -631,8 +600,7 @@ void TaskManagerNode::bt_tick_cb()
       action_client_->reset_all_states();
       switch_state(task_fsm::SystemState::IDLE);
 
-      // 任务已完成，检查是否有缓存的待执行触发，按 FIFO 顺序自动执行
-      try_process_pending_trigger();
+      // Completion never starts another task. A fresh idle-state trigger is required.
     }
   break;
 

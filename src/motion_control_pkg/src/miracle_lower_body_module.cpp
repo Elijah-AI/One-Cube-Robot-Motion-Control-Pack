@@ -664,6 +664,10 @@ namespace miracle {
 
     void MiracleLowerBodyModule::execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
+        if (goal_handle->get_goal()->leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS) {
+            execution_loop_body_motion(goal_handle);
+            return;
+        }
         if (goal_handle->get_goal()->joint_name.size() == 2 ||
             goal_handle->get_goal()->position.size() == 2) {
             execution_loop_body_orientation(goal_handle);

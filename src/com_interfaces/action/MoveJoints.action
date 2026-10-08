@@ -42,6 +42,19 @@ float32 speed                    # 控制速度比例，范围：(0, 1]
 float32 acceleration_scale
 float32 jerk_scale
 int64 timeout_ms
+
+# LEG Cartesian body modes. Zero preserves all existing joint-target behavior.
+uint8 LEG_JOINT_TARGETS=0
+uint8 LEG_BODY_TILT=1
+uint8 LEG_BODY_Z_RELATIVE=2
+uint8 LEG_BODY_Z_ABSOLUTE=3
+uint8 leg_motion_mode
+# Absolute signed inclination of body_link +Z toward base_link +X, degrees.
+# TILT holds measured J1/J2/body_joint; omitted angle means upright (0 degrees).
+float64 body_tilt_deg
+# RELATIVE: delta Z; ABSOLUTE: body_link origin Z in base_link; metres.
+# Both height modes hold body_link orientation, X/Y and all upper-body joints.
+float64 body_height_m
 ---
 bool success
 string error_message

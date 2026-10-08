@@ -20,6 +20,12 @@
 #include <modbus/modbus.h>
 #include <thread>
 #include <chrono>
+#include <poll.h>
+#include <sys/socket.h>
+#include <fcntl.h>
+#include <cerrno>
+#include <vector>
+#include <algorithm>
 
 namespace task_modbus
 {
@@ -78,13 +84,13 @@ void ModbusTcpSlave::start()
 void ModbusTcpSlave::stop()
 {
   run_flag_ = false;
-  if (server_fd_ > 0)
-  {
+  // The loop has a bounded poll timeout; it owns client sockets until it exits.
+  if (server_thread_.joinable()) server_thread_.join();
+  if (server_fd_ >= 0) {
     close(server_fd_);
     server_fd_ = -1;
   }
-  if (server_thread_.joinable())
-    server_thread_.join();
+
 }
 
 /// @brief 读取保持寄存器值（线程安全）
@@ -128,43 +134,78 @@ void ModbusTcpSlave::set_regaddr(RegAddr addr)
 /// 接受客户端连接并处理 Modbus 请求
 void ModbusTcpSlave::server_loop()
 {
-  uint8_t query_buf[MODBUS_TCP_MAX_ADU_LENGTH];
-  int recv_len;
-
-  while (run_flag_)
-  {
-    // 接受客户端连接
-    int client_fd = modbus_tcp_accept(ctx_, &server_fd_);
-
-    if (client_fd <= 0)
-    {
-      // 无客户端连接时短暂休眠后继续
-      std::this_thread::sleep_for(std::chrono::milliseconds(SERVER_POLL_INTERVAL_MS));
-      continue;
+  struct Client {
+    int fd;
+    std::vector<uint8_t> input;
+    std::chrono::steady_clock::time_point partial_since;
+  };
+  std::vector<Client> clients;
+  // Never wait for a whole request on one client: fragmented/idle peers must not
+  // prevent other clients from receiving their replies.
+  fcntl(server_fd_, F_SETFL, fcntl(server_fd_, F_GETFL, 0) | O_NONBLOCK);
+  while (run_flag_) {
+    std::vector<pollfd> events{{server_fd_, POLLIN, 0}};
+    for (const auto& client : clients) events.push_back({client.fd, POLLIN, 0});
+    const int ready = poll(events.data(), events.size(), 20);
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      break;
     }
-
-    // 设置客户端 socket
-    modbus_set_socket(ctx_, client_fd);
-
-    // 处理客户端请求循环
-    while (run_flag_)
-    {
-      recv_len = modbus_receive(ctx_, query_buf);
-      if (recv_len > 0)
-      {
-        handle_modbus_request(query_buf, recv_len);
+    // Existing clients first; descriptors accepted below join the next poll.
+    for (size_t i = clients.size(); i-- > 0;) {
+      auto& client = clients[i];
+      bool drop = events[i+1].revents & (POLLERR | POLLHUP | POLLNVAL);
+      if (!drop && (events[i+1].revents & POLLIN)) {
+        uint8_t data[MODBUS_TCP_MAX_ADU_LENGTH * 8];
+        const auto n = recv(client.fd, data, sizeof(data), MSG_DONTWAIT);
+        if (n > 0) {
+          if (client.input.empty()) client.partial_since = std::chrono::steady_clock::now();
+          client.input.insert(client.input.end(), data, data+n);
+          if (client.input.size() > MODBUS_TCP_MAX_ADU_LENGTH * 16U) drop = true;
+        } else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+          drop = true;
+        }
       }
-      else if (recv_len == -1)
-      {
-        // 接收错误或连接关闭，退出当前客户端处理
-        break;
+      // Do not execute a queued write after its sender has already disconnected.
+      uint8_t probe;
+      if (!drop && recv(client.fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT) == 0) drop = true;
+      for (int budget = 0; !drop && budget < 8 && client.input.size() >= 7; ++budget) {
+        const auto& b = client.input;
+        const size_t length = (static_cast<size_t>(b[4]) << 8) | b[5];
+        if (b[2] != 0 || b[3] != 0 || length < 2 || length + 6 > MODBUS_TCP_MAX_ADU_LENGTH) {
+          drop = true;
+          break;
+        }
+        const size_t total = length + 6;
+        if (b.size() < total) break;
+        modbus_set_socket(ctx_, client.fd);
+        handle_modbus_request(client.input.data(), static_cast<int>(total));
+        client.input.erase(client.input.begin(), client.input.begin()+total);
+        client.partial_since = std::chrono::steady_clock::now();
+      }
+      if (!client.input.empty() &&
+          std::chrono::steady_clock::now()-client.partial_since > std::chrono::seconds(1)) drop = true;
+      if (drop) {
+        close(client.fd);
+        clients.erase(clients.begin()+i);
       }
     }
-
-    // 关闭客户端连接
-    close(client_fd);
-    modbus_set_socket(ctx_, -1);
+    if (events[0].revents & POLLIN) {
+      const int fd = accept(server_fd_, nullptr, nullptr);
+      if (fd >= 0) {
+        if (clients.size() >= 64) close(fd);
+        else {
+          // A peer not reading replies also cannot block this loop indefinitely.
+          timeval timeout{0, 100000};
+          setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+          clients.push_back({fd, {}, std::chrono::steady_clock::now()});
+        }
+      }
+    }
   }
+  for (const auto& client : clients) close(client.fd);
+  modbus_set_socket(ctx_, -1);
+
 }
 
 /// @brief 处理 Modbus 请求
@@ -174,7 +215,7 @@ void ModbusTcpSlave::server_loop()
 void ModbusTcpSlave::handle_modbus_request(uint8_t* query, int query_len)
 {
   // Modbus TCP 最小报文长度检查
-  if (query_len < MODBUS_TCP_HEADER_LEN)
+  if (query_len < 8)
   {
     LOG_WARN(logger_, task_log::Tag::MODBUS, "Invalid modbus request length: " << query_len);
     return;
@@ -182,6 +223,10 @@ void ModbusTcpSlave::handle_modbus_request(uint8_t* query, int query_len)
 
   // 获取功能码（报文第 8 字节）
   uint8_t func = query[7];
+  if ((func == MODBUS_FC_WRITE_SINGLE_REGISTER || func == MODBUS_FC_READ_HOLDING_REGISTERS) && query_len != 12) {
+    modbus_reply_exception(ctx_, query, MODBUS_EXCEPTION_ILLEGAL_DATA_VALUE);
+    return;
+  }
   LOG_DEBUG(logger_, task_log::Tag::MODBUS, "Modbus request received, func=0x" << std::hex << (int)func << std::dec);
 
   // 创建 Modbus 映射结构用于响应
@@ -203,19 +248,25 @@ void ModbusTcpSlave::handle_modbus_request(uint8_t* query, int query_len)
     uint16_t write_val = (query[10] << 8) | query[11];
 
     // 逻辑地址转换为实际地址（Modbus 协议偏移）
-    real_reg_addr_ = logic_addr + MODBUS_PROTOCOL_ADDR_OFFSET;
+    const RegAddr write_addr = logic_addr + MODBUS_PROTOCOL_ADDR_OFFSET;
     LOG_INFO(logger_, task_log::Tag::MODBUS,
-      "Write single register: logic_addr=" << logic_addr << ", real_addr=" << real_reg_addr_ << ", value=" << write_val);
+      "Write single register: logic_addr=" << logic_addr << ", real_addr=" << write_addr << ", value=" << write_val);
+
+    if (logic_addr >= MODBUS_MAX_REGISTERS) {
+      modbus_reply_exception(ctx_, query, MODBUS_EXCEPTION_ILLEGAL_DATA_ADDRESS);
+      modbus_mapping_free(mb_mapping);
+      return;
+    }
 
     // 获取旧值
-    uint16_t old_val = get_reg(real_reg_addr_);
+    uint16_t old_val = get_reg(write_addr);
 
     // 写入寄存器并触发回调
-    set_reg(real_reg_addr_, write_val);
+    set_reg(write_addr, write_val);
     if (write_cb_)
-      write_cb_(real_reg_addr_, old_val, write_val);
+      write_cb_(write_addr, old_val, write_val);
 
-    LOG_INFO(logger_, task_log::Tag::MODBUS, "Write reg " << real_reg_addr_ << " value: " << write_val << " (old: " << old_val << ")");
+    LOG_INFO(logger_, task_log::Tag::MODBUS, "Write reg " << write_addr << " value: " << write_val << " (old: " << old_val << ")");
 
     // 发送响应
     rc = modbus_reply(ctx_, query, query_len, mb_mapping);
@@ -229,9 +280,10 @@ void ModbusTcpSlave::handle_modbus_request(uint8_t* query, int query_len)
     uint16_t reg_count = (query[10] << 8) | query[11];
 
     // 检查寄存器范围合法性
-    if (static_cast<uint32_t>(start_logic) + reg_count > MODBUS_MAX_REGISTERS)
+    if (reg_count == 0 || reg_count > 125 || static_cast<uint32_t>(start_logic) + reg_count > MODBUS_MAX_REGISTERS)
     {
       LOG_WARN(logger_, task_log::Tag::MODBUS, "Invalid register range: start=" << start_logic << ", count=" << reg_count);
+      modbus_reply_exception(ctx_, query, MODBUS_EXCEPTION_ILLEGAL_DATA_ADDRESS);
       modbus_mapping_free(mb_mapping);
       return;
     }

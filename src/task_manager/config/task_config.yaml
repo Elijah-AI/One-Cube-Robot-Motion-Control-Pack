@@ -4,7 +4,8 @@
 node_id: 1
 modbus_slave:
   slave_id: 1
-  listen_ip: 0.0.0.0
+  # .136 isolation: task triggers are accepted only from the robot itself.
+  listen_ip: 127.0.0.1
   listen_port: 12000
 tasks:
   laptop_assembly_two_piece:

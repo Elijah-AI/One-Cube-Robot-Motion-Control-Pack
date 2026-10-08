@@ -430,7 +430,61 @@ BTNode::Ptr build_action_node(
       }
     };
 
-    return std::make_shared<ActionNode>(node_name, std::move(action_cb), logger);
+    BTNode::Ptr leaf = std::make_shared<ActionNode>(node_name, std::move(action_cb), logger);
+    const auto sequence = task_act::derive_seq_key(state_key);
+    if (atomic_act->ik_failure_recovery.enabled) {
+        const auto config = atomic_act->ik_failure_recovery;
+        auto lift = std::make_shared<task_cfg::AtomicAction>();
+        lift->action_type = "move_joints";
+        lift->delay_ms = 0;
+        auto& goal = lift->move_joints_param;
+        goal.arm_id = 4;
+        goal.leg_motion_mode = 2;
+        goal.body_height_m = config.lift_m;
+        goal.speed = config.speed;
+        goal.timeout_ms = config.timeout_ms;
+        goal.enable_collision_check = config.collision_mode;
+        auto retry = std::make_shared<task_cfg::AtomicAction>(*atomic_act);
+        retry->ik_failure_recovery.enabled = false;
+        retry->delay_ms = 0;
+        auto lift_node = build_action_node(act_client, lift, state_key + "_ik_leg_lift",
+            branch_index, node_name + "_LegLift", logger);
+        auto retry_node = build_action_node(act_client, retry, state_key + "_ik_arm_retry",
+            branch_index, node_name + "_ArmRetry", logger);
+        return std::make_shared<IKLegLiftRecoveryNode>(node_name + "_IKRecovery", leaf,
+            lift_node, retry_node,
+            [&act_client, state_key, sequence, config, logger] {
+                const bool eligible = act_client.had_pre_motion_ik_failure(state_key) &&
+                    act_client.recovery_offset(sequence, config.key) == 0;
+                if (eligible) LOG_WARN(logger, task_log::Tag::BT,
+                    "Pre-dispatch IK failure: lift body " << config.lift_m << " m, then retry arms once [" << config.key << "]");
+                return eligible;
+            },
+            [&act_client, sequence, config, logger] {
+                act_client.mark_recovery_offset(sequence, config.key, config.lift_m);
+                LOG_INFO(logger, task_log::Tag::BT, "Confirmed body lift [" << config.key << "]; restore after turn");
+            });
+    }
+    if (!atomic_act->if_recovery_applied.empty()) {
+        const auto key = atomic_act->if_recovery_applied;
+        const auto descent = atomic_act->move_joints_param.body_height_m;
+        return std::make_shared<ConditionalLegRestoreNode>(node_name + "_RestoreIfLifted", leaf,
+            [&act_client, sequence, key, descent, logger] {
+                const double pending = act_client.recovery_offset(sequence, key);
+                if (pending == 0) {
+                    LOG_INFO(logger, task_log::Tag::BT, "No body recovery lift; skip descent [" << key << "]");
+                    return false;
+                }
+                if (std::abs(pending + descent) > 1e-9)
+                    throw std::runtime_error("Recovery descent does not match the confirmed lift");
+                return true;
+            },
+            [&act_client, sequence, key, logger] {
+                act_client.clear_recovery_offset(sequence, key);
+                LOG_INFO(logger, task_log::Tag::BT, "Confirmed recovery descent [" << key << "]");
+            });
+    }
+    return leaf;
 }
 
 /// @brief 从视觉反馈结果中提取指定字段的数值（double）
@@ -840,7 +894,11 @@ void BehaviorTreeEngine::load_action_group(
       return send_action_goal(act_client, *atomic_act, atomic_act->action_type, logger_);
     };
 
-    auto act_node = std::make_shared<ActionNode>(node_name, std::move(action_cb), logger_);
+    BTNode::Ptr act_node = std::make_shared<ActionNode>(node_name, std::move(action_cb), logger_);
+    if (atomic_act->ik_failure_recovery.enabled || !atomic_act->if_recovery_applied.empty()) {
+      const auto recovery_state_key = "seq0_" + atomic_act->action_type + "_" + std::to_string(i);
+      act_node = build_action_node(act_client, atomic_act, recovery_state_key, 0, node_name, logger_);
+    }
     // 前置条件/结果分支包装（未配置时 wrap_guarded_action 返回 nullptr，保持原节点，完全向后兼容）
     // 串行路径主动作使用默认状态 key；state_key 仅用于生成分支动作的独立状态 key
     std::string state_key = "seq0_" + atomic_act->action_type + "_" + std::to_string(i);

@@ -1,0 +1,62 @@
+# Parameters for the Berxel Hawk camera_driver_node.
+# The node is functionally identical to camera_driver (Orbbec); only the
+# low-level raw image data source is the Berxel Hawk SDK.
+# Loaded by launch/berxel_camera_driver.launch.py (node name = camera_driver_node)
+camera_driver_node:
+  ros__parameters:
+
+    # ---- requested stream resolution / framerate ---------------------------
+    # iHawk100RS 的 color 仅支持 1280x800@5..45（无 720p 高度、无 <5fps）。
+    # 节点启动时会按 SDK 支持列表自动挑选最近可用模式（见 applyFrameMode），
+    # 因此这里的 1280x800@5fps 是可安全命中 color 的默认值；depth 若不同也会被自动校正。
+    color_width: 1280
+    color_height: 800
+    color_fps: 5
+    depth_width: 1280
+    depth_height: 800
+    depth_fps: 5
+
+    # ---- device selection ---------------------------------------------------
+    # Empty => open the first connected Berxel device.
+    serial_number: ""
+    # Multi-camera SN -> camera_id mapping (string array, index = camera_id):
+    # camera_id 0=head, 1=waist, ...
+    # When empty, the device enumeration order is used (camera_id = index).
+    camera_id_sn_map: []
+
+    # ---- TF / message frame ids ---------------------------------------------
+    frame_id: "camera_link"
+    color_frame_id: "camera_color_optical_frame"
+    depth_frame_id: "camera_depth_optical_frame"
+
+    # ---- cross-process device lock ------------------------------------------
+    # false = take a shared-memory/pthread device lock so that only one camera
+    # driver process can own the Berxel device at a time.
+    bypass_lock: false
+
+    # ---- depth-to-color registration (D2C alignment) ------------------------
+    # enable_align kept for backward compatibility; align_mode takes precedence.
+    enable_align: true
+    # "OFF" | "HW" | "SW".
+    # The Berxel SDK only performs depth->color alignment in hardware
+    # (setRegistrationEnable), so both HW and SW map to hardware registration;
+    # OFF disables it.
+    align_mode: "HW"
+    # Alignment target: "COLOR" (depth -> color; Berxel only supports D2C).
+    # Requesting "DEPTH" warns and falls back to COLOR.
+    align_target_stream: "COLOR"
+
+    # ---- point cloud output ---------------------------------------------------
+    # "rgb_point" (default, RGB colored: xyz float32 + rgb uint32) | "point" (xyz only)
+    pointcloud_format: "rgb_point"
+    # true = keep every pixel, invalid depth points encoded as NaN
+    #        (point cloud width = image width); false = emit valid points only
+    pc_keep_invalid_points: true
+    # frame_id of the transformed (robot base) point cloud
+    pointcloud_base_frame_id: "base_link"
+
+    # ---- host time sync -------------------------------------------------------
+    # Synchronize the camera internal clock to the host system time
+    # (Berxel setSystemClock) so frame timestamps match the robot's /Control data.
+    enable_host_time_sync: true
+    time_sync_period: 60.0   # seconds; re-sync period

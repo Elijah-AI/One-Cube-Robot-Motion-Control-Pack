@@ -19,6 +19,7 @@
 #include "task_manager/fsm_state.hpp"
 #include "task_manager/task_config_parser.hpp"
 #include "task_manager/modbus_slave.hpp"
+#include "task_manager/modbus_trigger_gate.hpp"
 #include "task_manager/task_action_client.hpp"
 #include "task_manager/precondition_manager.hpp"
 
@@ -125,8 +126,6 @@ private:
   /// @brief 根据触发寄存器地址查找并启动任务（核心启动逻辑）
   void start_task_by_reg(uint32_t trigger_addr);
 
-  /// @brief 尝试处理缓存的待执行触发（系统切换到 IDLE 后调用）
-  void try_process_pending_trigger();
 
   /// @brief 写入任务状态到 Modbus 寄存器
   void write_task_status_reg(uint32_t status_addr, uint16_t result);
@@ -170,10 +169,8 @@ private:
   /// @brief 防止重复发送系统状态请求
   std::atomic<bool> boot_state_req_pending_{false};
 
-  // ==================== 待执行触发缓存 ====================
-  /// @brief 系统忙时接收到的触发寄存器地址队列（任务完成后按 FIFO 顺序自动执行）
-  std::deque<uint32_t> pending_trigger_regs_;
-  std::mutex pending_trigger_mutex_;       ///< 待执行触发缓存互斥锁
+  // Only an idle-state request may be handed to the executor; no deferred reruns.
+  ModbusTriggerGate modbus_trigger_gate_;
 
   // ==================== 设备安全状态监听 ====================
   /// @brief /Safety/device_safety_state 订阅器，获取设备安全状态（SafetyState）

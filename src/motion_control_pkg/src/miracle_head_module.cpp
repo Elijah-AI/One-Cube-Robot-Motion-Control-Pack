@@ -381,6 +381,15 @@ namespace miracle {
 
     void MiracleHeadModule::start_execution_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
+        std::string error;
+        if (!reserve_body_motion_resource(error)) {
+            auto result = std::make_shared<MoveJoints::Result>();
+            result->success = false;
+            result->error_message = error;
+            goal_handle->abort(result);
+            return;
+        }
+        try {
         // 如果之前有线程，等待
         if (execution_thread_move_joints_.joinable()) {
             execution_thread_move_joints_.join();
@@ -389,10 +398,27 @@ namespace miracle {
         // const auto goal = goal_handle->get_goal();
         // 标记为正在执行,
     
-        is_executing_head_.store(true);
 
         // 启动线程（不再使用 detach）
         execution_thread_move_joints_ = std::thread(&MiracleHeadModule::execution_loop_move_joints, this, goal_handle);
+        } catch (const std::exception& exception) {
+            release_body_motion_resource();
+            auto result = std::make_shared<MoveJoints::Result>();
+            result->success = false;
+            result->error_message = exception.what();
+            goal_handle->abort(result);
+        }
+    }
+
+    bool MiracleHeadModule::reserve_body_motion_resource(std::string& error)
+    {
+        bool expected = false;
+        if (!is_executing_head_.compare_exchange_strong(expected, true)) {
+            error = "Head is occupied by another motion";
+            return false;
+        }
+        error.clear();
+        return true;
     }
 
     void MiracleHeadModule::execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)

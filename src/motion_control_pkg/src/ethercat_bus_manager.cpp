@@ -1,6 +1,8 @@
 #include "ethercat_bus_manager.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <time.h>
 #include <unistd.h>
 #include "rclcpp/rclcpp.hpp"
@@ -12,9 +14,13 @@ namespace {
 
 constexpr int kExpectedMotorCount = 32;
 constexpr int kCommunicationStableCycles = 25;
-constexpr int kCommunicationTimeoutCycles = 15 * 1000000 / TRAJ_CYCLE_US;
+constexpr int kCommunicationTimeoutCycles = 25 * 1000000 / TRAJ_CYCLE_US;
 constexpr int kBrakeReleaseHoldCycles = 600000 / TRAJ_CYCLE_US;
 constexpr int kShutdownDisableCycles = 100;
+constexpr int kStartupFaultResetCycles = 200000 / TRAJ_CYCLE_US;
+constexpr int kStartupFaultResetTimeoutCycles = 2000000 / TRAJ_CYCLE_US;
+// Same EtherCAT aliases as LEG_JOINT1/2/3 and BODY_JOINT in main_node.hpp.
+constexpr std::array<int, 4> kLowerBodyMotorIds{{30 - 1, 29 - 1, 28 - 1, 27 - 1}};
 
 bool communicationValid(unsigned short status_word) {
     return status_word != 0U && status_word != 0xffffU;
@@ -26,6 +32,110 @@ bool operationEnabled(unsigned short status_word) {
 
 bool faultPresent(const DriverSDK::motorActualStruct &actual) {
     return actual.errorCode != 0U || (actual.statusWord & 0x0008U) != 0U;
+}
+
+// Startup only: no worker is running, so its fault-to-disable guard cannot
+// overwrite the SDK's enabled=-1 reset request. Never enable a motor here.
+bool clearStartupLowerBodyFaults(
+    DriverSDK::DriverSDK &controller, const std::vector<int> &active_motors,
+    const std::vector<DriverSDK::motorTargetStruct> &initial_targets) {
+    std::vector<int> motor_ids;
+    for (int id : kLowerBodyMotorIds) {
+        if (std::find(active_motors.begin(), active_motors.end(), id) != active_motors.end()) {
+            motor_ids.push_back(id);
+        }
+    }
+    if (motor_ids.empty()) {
+        return true;
+    }
+
+    auto motor_target_data = initial_targets;
+    for (auto &target : motor_target_data) {
+        target.enabled = 0;
+    }
+    std::vector<DriverSDK::motorActualStruct> actual_data(initial_targets.size());
+    const auto read_feedback = [&]() {
+        if (controller.getMotorActual(actual_data) != 0 ||
+            actual_data.size() != motor_target_data.size()) {
+            return false;
+        }
+        for (int id : motor_ids) {
+            if (static_cast<size_t>(id) >= actual_data.size() ||
+                !communicationValid(actual_data[id].statusWord) ||
+                !std::isfinite(actual_data[id].pos)) {
+                return false;
+            }
+            motor_target_data[id].pos = actual_data[id].pos;
+        }
+        return true;
+    };
+    if (!read_feedback()) {
+        RCLCPP_ERROR(rclcpp::get_logger("ethercat_bus_manager"),
+                     "Lower-body startup fault reset requires valid motor feedback");
+        return false;
+    }
+    for (int id : motor_ids) {
+        motor_target_data[id].enabled = -1;
+        RCLCPP_INFO(rclcpp::get_logger("ethercat_bus_manager"),
+                    "Startup fault reset alias %u: enabled=-1, status=0x%04x error=0x%04x",
+                    static_cast<unsigned int>(id + 1),
+                    static_cast<unsigned int>(actual_data[id].statusWord),
+                    static_cast<unsigned int>(actual_data[id].errorCode));
+    }
+    bool reset_sent = true;
+    for (int cycle = 0; cycle < kStartupFaultResetCycles; ++cycle) {
+        if (controller.setMotorTarget(motor_target_data) != 0) {
+            reset_sent = false;
+            break;
+        }
+        usleep(TRAJ_CYCLE_US);
+        if (!read_feedback()) {
+            reset_sent = false;
+            break;
+        }
+    }
+    // Release the reset command even on error. Normal enableMotors() remains
+    // responsible for the later enable/brake-release handshake.
+    for (int id : motor_ids) {
+        motor_target_data[id].enabled = 0;
+    }
+    const bool reset_released = controller.setMotorTarget(motor_target_data) == 0;
+    if (!reset_sent || !reset_released) {
+        RCLCPP_ERROR(rclcpp::get_logger("ethercat_bus_manager"),
+                     "Lower-body startup fault reset failed to exchange motor data");
+        return false;
+    }
+
+    int stable_cycles = 0;
+    for (int cycle = 0; cycle < kStartupFaultResetTimeoutCycles; ++cycle) {
+        usleep(TRAJ_CYCLE_US);
+        const bool feedback_valid = read_feedback();
+        bool faults_cleared = feedback_valid;
+        if (feedback_valid) {
+            for (int id : motor_ids) {
+                faults_cleared = faults_cleared && !faultPresent(actual_data[id]);
+            }
+        }
+        if (controller.setMotorTarget(motor_target_data) != 0) {
+            break;
+        }
+        stable_cycles = faults_cleared ? stable_cycles + 1 : 0;
+        if (stable_cycles >= kCommunicationStableCycles) {
+            RCLCPP_INFO(rclcpp::get_logger("ethercat_bus_manager"),
+                        "Lower-body startup fault reset confirmed; enabled=0 until normal enable");
+            return true;
+        }
+    }
+    for (int id : motor_ids) {
+        if (static_cast<size_t>(id) < actual_data.size()) {
+            RCLCPP_ERROR(rclcpp::get_logger("ethercat_bus_manager"),
+                         "Startup fault reset not confirmed for alias %u: status=0x%04x error=0x%04x",
+                         static_cast<unsigned int>(id + 1),
+                         static_cast<unsigned int>(actual_data[id].statusWord),
+                         static_cast<unsigned int>(actual_data[id].errorCode));
+        }
+    }
+    return false;
 }
 
 std::vector<unsigned short> defaultMaxCurrent() {
@@ -78,6 +188,10 @@ EthercatBusManager::EthercatBusManager(char const *xmlFile)
     if (!waitForCommunication() || !initializeTargetBuffer()) {
         return;
     }
+    if (!clearStartupLowerBodyFaults(controller_, active_motors_, motor_target_buffer_) ||
+        !initializeTargetBuffer()) {
+        return;
+    }
 
     ready_ = true;
     worker_ = std::make_shared<std::thread>(&EthercatBusManager::run, this);
@@ -118,7 +232,8 @@ bool EthercatBusManager::waitForCommunication() {
     }
 
     RCLCPP_ERROR(rclcpp::get_logger("ethercat_bus_manager"),
-                 "PDO communication did not become stable within 15 seconds");
+                 "PDO communication did not become stable within %.1f seconds",
+                 static_cast<double>(kCommunicationTimeoutCycles) * TRAJ_CYCLE_US / 1000000.0);
     return false;
 }
 

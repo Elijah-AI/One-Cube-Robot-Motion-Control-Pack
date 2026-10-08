@@ -17,7 +17,7 @@ ros2 action info /vision/detection_pose_cloud
 # 发送 Goal 测试（带 feedback 实时反馈）
 #ros2 action send_goal /vision/detection_pose_cloud \
   com_interfaces/action/DetectionPoseCloud \
-  "{task_id: 't-001', target_obj_name: 'red_block', expected_frame_id: 'camera_link', priority: 10, type: 0}" \
+  "{task_id: 't-001', target_obj_name: 'crak', expected_frame_id: 'camera_link', priority: 10, type: 0}" \
   --feedback
 # 验证 TargetDetection 话题发布
   ros2 topic echo /vision/target_detection

@@ -1,0 +1,54 @@
+SUBSYSTEM=="usb", ATTR{idProduct}=="8612", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="86ff", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0001", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="1001", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0002", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0003", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0004", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0003", ATTR{idVendor}=="04b4", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0005", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="1006", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0004", ATTR{idVendor}=="0c45", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0007", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0008", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0009", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="000a", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="000b", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="000c", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="000d", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="000e", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="000f", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0010", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0011", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0012", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0013", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0014", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0015", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0016", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0017", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0018", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0019", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="001a", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="001b", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="001c", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="001d", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="1012", ATTR{idVendor}=="3558", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="1002", ATTR{idVendor}=="3558", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="001e", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="001f", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="0020", ATTR{idVendor}=="0603", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="1013", ATTR{idVendor}=="3558", MODE="0666",OWNER="berxel",GROUP="berxel"
+SUBSYSTEM=="usb", ATTR{idProduct}=="636f", ATTR{idVendor}=="0c45", MODE="0666",OWNER="berxel",GROUP="berxel"
+
+# -----------------------------------------------------------------------------
+# Disable USB autosuspend for the two pipes of the dual-USB Berxel Hawk cameras
+# (e.g. iHawk100RS exposes VID3558:PID1012 as the "master" pipe and
+# VID0603:PID001f as the "depth/ISP" pipe).  If the kernel suspends a pipe while
+# the SDK is streaming, the device may drop off the bus (node then reports
+# "Hotplug device ... LEFT" and later re-ARRIVEs as a NEW device number, so no
+# frames ever reach the node).  ATTR{power/control}="on" keeps the link alive;
+# this is the same mitigation shipped by other 3D-camera vendors (e.g. RealSense).
+# See kernel doc Documentation/driver-api/usb/power-management.rst.
+# -----------------------------------------------------------------------------
+SUBSYSTEM=="usb", ATTR{idProduct}=="1012", ATTR{idVendor}=="3558", ATTR{power/control}="on"
+SUBSYSTEM=="usb", ATTR{idProduct}=="001f", ATTR{idVendor}=="0603", ATTR{power/control}="on"

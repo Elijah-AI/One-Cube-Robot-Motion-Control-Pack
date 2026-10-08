@@ -2,6 +2,8 @@
 #include "task_manager/log_helper.hpp"
 #include "task_manager/vision_pose_utils.hpp"
 #include "task_manager/waist_turn_utils.hpp"
+#include "task_manager/current_tcp_height.hpp"
+#include "task_manager/ik_lift_recovery.hpp"
 #include <algorithm>
 #include <random>
 #include <sstream>
@@ -17,6 +19,7 @@
 #include "com_interfaces/action/move_pose.hpp"
 #include "com_interfaces/action/move_joints.hpp"
 #include "com_interfaces/leg_joint_goal.hpp"
+#include "com_interfaces/leg_body_motion_goal.hpp"
 #include "com_interfaces/action/control_suck.hpp"
 
 namespace task_act
@@ -71,7 +74,47 @@ ActionCallResult TaskActionClient::call_move_pose(
   }
   if (param.vision_pose_offset.enabled) {
     std::string error;
-    if (!offset_vision_pose(target_pose, param, offset_target, error)) {
+    if (param.vision_pose_offset.keep_current_tcp_height) {
+      com_interfaces::msg::MotorStatus::ConstSharedPtr tcp;
+      sensor_msgs::msg::JointState::ConstSharedPtr joints;
+      std::chrono::steady_clock::time_point tcp_received, joints_received;
+      {
+        std::lock_guard<std::mutex> lock(tcp_state_mutex_);
+        tcp = tcp_state_;
+        tcp_received = tcp_state_received_;
+      }
+      {
+        std::lock_guard<std::mutex> lock(waist_state_mutex_);
+        joints = waist_state_;
+        joints_received = waist_state_received_;
+      }
+      const auto now = node_->now();
+      const auto steady_now = std::chrono::steady_clock::now();
+      const auto fresh = [&](const std_msgs::msg::Header& header,
+                             std::chrono::steady_clock::time_point received) {
+        const rclcpp::Time stamp(header.stamp, now.get_clock_type());
+        const auto age_ns = (now - stamp).nanoseconds();
+        return stamp.nanoseconds() > 0 && age_ns >= 0 && age_ns <= 250000000LL &&
+          steady_now - received <= std::chrono::milliseconds(250);
+      };
+      if (!tcp || !joints || !fresh(tcp->header, tcp_received) ||
+          !fresh(joints->header, joints_received)) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+          "current_tcp_height needs TCP and lower-body feedback no older than 250 ms");
+        return ActionCallResult::FAIL_GENERAL;
+      }
+      std::vector<std::string> names;
+      std::vector<double> positions;
+      double local_height = 0.0;
+      if (!expand_waist_turn(*joints, 0.0, false, names, positions, error) ||
+          !resolve_current_tcp_height(target_pose, param, *tcp, offset_target, local_height, error)) {
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "current_tcp_height: " << error);
+        return ActionCallResult::FAIL_GENERAL;
+      }
+      LOG_INFO(node_->get_logger(), task_log::Tag::ARM,
+        "current_tcp_height [" << state_key << "]: base_z=" << offset_target.pose.position.z <<
+        ", vision_z=" << local_height << ", arm_id=" << static_cast<int>(param.arm_id));
+    } else if (!offset_vision_pose(target_pose, param, offset_target, error)) {
       LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, error);
       return ActionCallResult::FAIL_PARAM_INVALID;
     }
@@ -312,30 +355,67 @@ ActionCallResult TaskActionClient::call_move_pose(
   LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MovePose action server connected successfully");
 
   auto send_goal_options = rclcpp_action::Client<MovePose>::SendGoalOptions();
+  const auto generation = begin_goal_request(state_key);
 
   send_goal_options.goal_response_callback =
-    [this, state_key](GoalHandleMovePose::SharedPtr goal_handle)
+    [this, state_key, generation](GoalHandleMovePose::SharedPtr goal_handle)
     {
-      if (goal_handle) {
-        std::lock_guard<std::mutex> lock(active_goal_mutex_);
-        active_arm_goal_[state_key] = goal_handle;
+      bool stale = false;
+      {
+        std::lock_guard<std::mutex> context_lock(ctx_mutex_);
+        stale = action_contexts_[state_key].goal_generation != generation;
+        if (!stale && goal_handle) {
+          std::lock_guard<std::mutex> active_lock(active_goal_mutex_);
+          active_arm_goal_[state_key] = goal_handle;
+        }
+      }
+      if (stale) {
+        if (goal_handle) {
+          try { arm_client_->async_cancel_goal(goal_handle); }
+          catch (const std::exception& error) {
+            LOG_WARN(node_->get_logger(), task_log::Tag::ARM, "Stale goal cancel: " << error.what());
+          }
+        }
+        return;
       }
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Goal was rejected by server [" << state_key << "]");
         finish_action_timing(state_key, "GOAL_REJECTED");
-        complete_action_context(state_key, ActionRunState::FAILURE, ActionCallResult::FAIL_GOAL_REJECTED);
+        complete_action_context(state_key, ActionRunState::FAILURE, ActionCallResult::FAIL_GOAL_REJECTED, generation);
       } else {
         LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "Goal accepted by server [" << state_key << "], waiting for result...");
       }
     };
 
   send_goal_options.feedback_callback =
-    std::bind(&TaskActionClient::arm_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
+    [this, state_key, generation](GoalHandleMovePose::SharedPtr handle,
+        const std::shared_ptr<const MovePose::Feedback> feedback) {
+      if (!is_current_goal_request(state_key, generation)) return;
+      if (feedback && (feedback->dual_task_status == MovePose::Feedback::STATUS_EXECUTING ||
+          feedback->dual_task_status == MovePose::Feedback::STATUS_WAITING_FOR_COMPLETION ||
+          feedback->dual_task_status == MovePose::Feedback::STATUS_STOPPING)) {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        if (action_contexts_[state_key].goal_generation != generation) return;
+        action_contexts_[state_key].move_pose_execution_observed = true;
+      }
+      arm_feedback_callback(handle, feedback);
+    };
 
   send_goal_options.result_callback =
-    [this, state_key](const GoalHandleMovePose::WrappedResult & result)
+    [this, state_key, generation](const GoalHandleMovePose::WrappedResult & result)
     {
+      if (!is_current_goal_request(state_key, generation)) return;
+      {
+        std::lock_guard<std::mutex> lock(ctx_mutex_);
+        auto& ctx = action_contexts_[state_key];
+        if (ctx.goal_generation != generation) return;
+        ctx.result_error_message = result.result ? result.result->error_message : "Empty MovePose result";
+        ctx.pre_motion_ik_failure = result.result && is_pre_motion_whole_body_ik_failure(
+            ctx.result_error_message, result.code == rclcpp_action::ResultCode::ABORTED,
+            result.result->success, ctx.move_pose_execution_observed,
+            result.result->timing_breakdown_valid, result.result->motion_time);
+      }
       {
         std::lock_guard<std::mutex> lock(active_goal_mutex_);
         active_arm_goal_.erase(state_key);
@@ -354,26 +434,21 @@ ActionCallResult TaskActionClient::call_move_pose(
           "MovePose returned an empty result [" << state_key << "]");
         complete_action_context(
           state_key, ActionRunState::FAILURE,
-          ActionCallResult::FAIL_GENERAL);
+          ActionCallResult::FAIL_GENERAL, generation);
         return;
       }
       if(result.result->success)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "MovePose succeeded [" << state_key << "]");
-        auto& ctx = get_ctx(state_key);
-        ctx.state = ActionRunState::SUCCESS;
-        ctx.call_result = ActionCallResult::SUCCESS;
       }
       else
       {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MovePose failed [" << state_key << "]: " << result.result->error_message);
-        auto& ctx = get_ctx(state_key);
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GENERAL;
       }
 
       // 释放该 action 占用的资源
-      complete_action_context(state_key, get_ctx(state_key).state, get_ctx(state_key).call_result);
+      complete_action_context(state_key, succeeded ? ActionRunState::SUCCESS : ActionRunState::FAILURE,
+          succeeded ? ActionCallResult::SUCCESS : ActionCallResult::FAIL_GENERAL, generation);
     };
 
   arm_client_->async_send_goal(goal, send_goal_options);
@@ -404,7 +479,18 @@ ActionCallResult TaskActionClient::call_move_joints(
 
   const bool waist_only_goal = param.arm_id == MoveJoints::Goal::LEG &&
     param.joint_name == std::vector<std::string>{"body_joint"};
-  if (param.relative_position || waist_only_goal) {
+  std::string body_error;
+  if (!com_interfaces::validateLegBodyMotionGoal(param.arm_id, param.leg_motion_mode,
+      param.body_tilt_deg, param.body_height_m, param.joint_name, param.position,
+      param.speed, param.timeout_ms, 0, param.acceleration_scale, param.jerk_scale,
+      param.relative_position, body_error)) {
+    LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "Invalid leg body motion: " << body_error);
+    return ActionCallResult::FAIL_PARAM_INVALID;
+  }
+  if (param.leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS) {
+    // Validated body modes deliberately carry no joint-space targets.
+  }
+  else if (param.relative_position || waist_only_goal) {
     if (param.arm_id != MoveJoints::Goal::LEG ||
         param.joint_name != std::vector<std::string>{"body_joint"} || param.position.size() != 1 ||
         !std::isfinite(param.position[0]) || !std::isfinite(param.speed) ||
@@ -485,6 +571,10 @@ ActionCallResult TaskActionClient::call_move_joints(
   goal.acceleration_scale = param.acceleration_scale;
   goal.jerk_scale = param.jerk_scale;
   goal.timeout_ms = param.timeout_ms;
+  goal.leg_motion_mode = param.leg_motion_mode;
+  goal.body_tilt_deg = param.body_tilt_deg;
+  goal.body_height_m = param.body_height_m;
+  if (param.leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS) goal.header.frame_id = "base_link";
 
   // ========== 参数打印（实际发送的 Goal） ==========
   {
@@ -493,7 +583,10 @@ ActionCallResult TaskActionClient::call_move_joints(
         << ", arm_id=" << static_cast<int>(goal.arm_id)
         << ", collision_check=" << static_cast<unsigned>(goal.enable_collision_check)
         << ", speed=" << goal.speed
-        << ", timeout_ms=" << goal.timeout_ms;
+        << ", timeout_ms=" << goal.timeout_ms
+        << ", leg_motion_mode=" << static_cast<int>(goal.leg_motion_mode)
+        << ", body_tilt_deg=" << goal.body_tilt_deg
+        << ", body_height_m=" << goal.body_height_m;
     if (goal.arm_id == MoveJoints::Goal::ARM_BOTH)
     {
       oss << "\n  [ARM_BOTH] sync_mode=" << static_cast<int>(goal.synchronization_mode);
@@ -575,19 +668,34 @@ ActionCallResult TaskActionClient::call_move_joints(
   }
 
   auto send_goal_options = rclcpp_action::Client<MoveJoints>::SendGoalOptions();
+  const auto generation = begin_goal_request(state_key);
 
   send_goal_options.goal_response_callback =
-    [this, state_key](GoalHandleMoveJoints::SharedPtr goal_handle)
+    [this, state_key, generation](GoalHandleMoveJoints::SharedPtr goal_handle)
     {
-      if (goal_handle) {
-        std::lock_guard<std::mutex> lock(active_goal_mutex_);
-        active_move_joints_goal_[state_key] = goal_handle;
+      bool stale = false;
+      {
+        std::lock_guard<std::mutex> context_lock(ctx_mutex_);
+        stale = action_contexts_[state_key].goal_generation != generation;
+        if (!stale && goal_handle) {
+          std::lock_guard<std::mutex> active_lock(active_goal_mutex_);
+          active_move_joints_goal_[state_key] = goal_handle;
+        }
+      }
+      if (stale) {
+        if (goal_handle) {
+          try { move_joints_client_->async_cancel_goal(goal_handle); }
+          catch (const std::exception& error) {
+            LOG_WARN(node_->get_logger(), task_log::Tag::ARM, "Stale goal cancel: " << error.what());
+          }
+        }
+        return;
       }
       auto goal = goal_handle.get();
       if (!goal) {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal rejected by server [" << state_key << "]");
         finish_action_timing(state_key, "GOAL_REJECTED");
-        complete_action_context(state_key, ActionRunState::FAILURE, ActionCallResult::FAIL_GOAL_REJECTED);
+        complete_action_context(state_key, ActionRunState::FAILURE, ActionCallResult::FAIL_GOAL_REJECTED, generation);
       } else {
         LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints goal accepted by server [" << state_key << "], waiting for result...");
       }
@@ -597,8 +705,9 @@ ActionCallResult TaskActionClient::call_move_joints(
     std::bind(&TaskActionClient::move_joints_feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
 
   send_goal_options.result_callback =
-    [this, state_key](const GoalHandleMoveJoints::WrappedResult & result)
+    [this, state_key, generation](const GoalHandleMoveJoints::WrappedResult & result)
     {
+      if (!is_current_goal_request(state_key, generation)) return;
       {
         std::lock_guard<std::mutex> lock(active_goal_mutex_);
         active_move_joints_goal_.erase(state_key);
@@ -617,25 +726,21 @@ ActionCallResult TaskActionClient::call_move_joints(
           "MoveJoints returned an empty result [" << state_key << "]");
         complete_action_context(
           state_key, ActionRunState::FAILURE,
-          ActionCallResult::FAIL_GENERAL);
+          ActionCallResult::FAIL_GENERAL, generation);
         return;
       }
-      auto& ctx = get_ctx(state_key);
       if(result.result->success)
       {
         LOG_SUCCESS(node_->get_logger(), task_log::Tag::ARM, "MoveJoints succeeded [" << state_key << "]");
-        ctx.state = ActionRunState::SUCCESS;
-        ctx.call_result = ActionCallResult::SUCCESS;
       }
       else
       {
         LOG_ERROR(node_->get_logger(), task_log::Tag::ARM, "MoveJoints failed [" << state_key << "]: " << result.result->error_message);
-        ctx.state = ActionRunState::FAILURE;
-        ctx.call_result = ActionCallResult::FAIL_GENERAL;
       }
 
       // 只释放当前 Goal 的资源；不能影响仍在运行的并行兄弟动作。
-      release_acquired_resources(ctx);
+      complete_action_context(state_key, succeeded ? ActionRunState::SUCCESS : ActionRunState::FAILURE,
+          succeeded ? ActionCallResult::SUCCESS : ActionCallResult::FAIL_GENERAL, generation);
     };
 
   move_joints_client_->async_send_goal(goal, send_goal_options);

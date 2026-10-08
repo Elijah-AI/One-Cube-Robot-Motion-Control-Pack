@@ -178,6 +178,7 @@ set(SOURCES
     src/miracle_head_module.cpp
     src/miracle_lower_body_module.cpp
     src/leg_body_orientation_execution.cpp
+    src/leg_body_motion_execution.cpp
     src/whole_body_module.cpp
     src/common/gripper/Modbus_Jodell.cpp
     # src/common/ctrl/PVT_ctrl.cpp
@@ -209,7 +210,7 @@ endif()
 add_executable(motion_control_node ${SOURCES})
 
 # Shared production planning core, independent of hardware SDKs.
-add_library(motion_planning_core STATIC src/miracle_m_algo.cpp src/motion/leg_body_orientation.cpp)
+add_library(motion_planning_core STATIC src/miracle_m_algo.cpp src/motion/leg_body_orientation.cpp src/motion/leg_body_motion.cpp)
 target_include_directories(motion_planning_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg
@@ -381,5 +382,6 @@ install(DIRECTORY launch
 # )
 
 # 导出包配置
+
 
 ament_package()

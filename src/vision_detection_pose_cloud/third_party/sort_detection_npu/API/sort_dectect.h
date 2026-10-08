@@ -1,3 +1,6 @@
+#ifndef SORT_DECTECT_H_
+#define SORT_DECTECT_H_
+
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <sys/time.h>
@@ -13,6 +16,7 @@ struct Result6D {
     float confidence; // 结果置信度
     Eigen::Vector3f pose_xyz; // 平面拟合后的6D位姿位置
     Eigen::Vector3f pose_rpy;      // ZYX内禀欧拉角(roll,pitch,yaw)
+    bool pose_ok = false;           // 6D位姿是否检测成功
 };
 
 
@@ -40,9 +44,14 @@ struct ParaConfig {
     float max_depth;
     float min_limit;
     float max_limit;
+
+    float box_len;   // 纸箱顶面长边尺寸（米），影响边外推与尺寸校验
+    float box_wid;   // 纸箱顶面短边尺寸（米）
 };
 
 
 void slotDetection(cv::Mat& img_in, const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud_in,  struct ParaConfig* para_config_ptr,
-                  struct DecodeInfo* decode_info_ptr);
+                  struct DecodeInfo* decode_info_ptr, const std::string& target_obj_name = "");
+
+#endif // SORT_DECTECT_H_
 

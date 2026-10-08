@@ -87,7 +87,7 @@ private:
   std::atomic<bool> run_flag_{false};                  ///< 运行标志（线程安全）
   std::thread server_thread_;                          ///< 服务器监听线程
   WriteRegCb write_cb_;                                ///< 寄存器写入回调
-  RegAddr real_reg_addr_;                              ///< 当前实际寄存器地址
+  std::atomic<RegAddr> real_reg_addr_{0};                              ///< 当前实际寄存器地址
   modbus_t* ctx_ = nullptr;                            ///< libmodbus 上下文指针
   std::mutex reg_mutex_;                               ///< 寄存器访问互斥锁
 

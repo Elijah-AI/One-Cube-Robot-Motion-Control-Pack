@@ -1252,6 +1252,17 @@ void CameraDriverNode::onFrameSet(size_t cam_index, std::shared_ptr<ob::FrameSet
     // Update frame rate counters
     fps_frame_count_++;
 
+    // 头部相机（camera_id==0）的点云需依赖 /Control/HeadPose 头部位姿做手眼变换
+    // （T = M_end × kFixedTransform_0）。未收到头部位姿前直接丢弃该相机帧，
+    // 不发布任何数据（/vision/rgb_raw 与 /fusion/synced_robot_vision 均不发布），
+    // 避免下游拿到未变换到基坐标系的无效视觉数据。
+    if (camera_id == 0 && !is_head_pose_available()) {
+      RCLCPP_WARN_THROTTLE(logger_, *get_clock(), 5000,
+        "[Camera 0] head pose not received yet, camera 0 data not published "
+        "(waiting for /Control/HeadPose)");
+      return;
+    }
+
     auto rgbd_msg = std::make_shared<com_interfaces::msg::SyncedRobotVision>();
 
     // 相机时间戳：优先使用相机报告的全局时间戳（主机时间同步后为 Unix 微秒），
@@ -1710,6 +1721,12 @@ void CameraDriverNode::applyPointCloudTransform(sensor_msgs::msg::PointCloud2 &p
 
   // 变换后点云位于机器人基坐标系
   pc_msg.header.frame_id = pointcloud_base_frame_id_;
+}
+
+// 线程安全地查询是否已收到头部位姿（头部相机点云坐标变换依赖该位姿）
+bool CameraDriverNode::is_head_pose_available() const {
+  std::lock_guard<std::mutex> lock(head_pose_mtx_);
+  return head_pose_available_;
 }
 
 // ----------------------------------------------------------

@@ -1,5 +1,6 @@
 #pragma once
 #include "motion_control_pkg/execution/execution_control.hpp"
+#include "motion_control_pkg/execution/whole_body_completion.hpp"
 #include "motion_control_pkg/wbc/trajectory.hpp"
 #include <chrono>
 #include <cstdint>
@@ -28,5 +29,10 @@ public:
   virtual bool execute_arms(const Path& left,const Path& right,std::uint8_t mode,
                            Time start,const Cancel& cancel,std::string& error)=0;
   virtual bool execute_legs(const Path& path,Time start,const Cancel& cancel,std::string& error)=0;
+  // Return actual controller feedback; unsupported backends fail closed.
+  virtual bool read_completion_feedback(WholeBodyCompletionFeedback&, std::string& error) {
+    error = "whole-body backend has no measured completion feedback";
+    return false;
+  }
 };
 }  // namespace motion_control_pkg::execution

@@ -69,7 +69,7 @@ private:
     const std::shared_ptr<const DetectionPoseCloud::Goal> & goal,
     const geometry_msgs::msg::PoseStamped & pose,
     float confidence);
-  // 由 Result6D (base_link, m, rad) 构造 TargetDetection 消息
+  // 由 Result6D (base_link 系, m, rad) 构造 TargetDetection 消息
   com_interfaces::msg::TargetDetection build_detection_msg(
     const std::shared_ptr<const DetectionPoseCloud::Goal> & goal,
     const Result6D & result6d);
@@ -79,7 +79,7 @@ private:
   // 视觉管线函数
   // image 与 cloud 由 execute() 在任务起始处通过 getImageAndCloud() 原子取一次,
   // 保证两个管线阶段使用同一帧相机数据, 避免分别取到不同帧导致位姿错位
-  // 输出 results: 检测到的多目标 6D 位姿 (gripper 系, m, ZYX rad)
+  // 输出 results: 检测到的多目标 6D 位姿 (base_link 系, m, ZYX rad)
   bool detect_target(
     const std::string & target_name,
     const sensor_msgs::msg::Image & image,

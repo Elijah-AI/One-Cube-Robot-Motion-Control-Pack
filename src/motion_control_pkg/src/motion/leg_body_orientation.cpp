@@ -54,6 +54,15 @@ struct LegBodyOrientationPlanner::Impl {
     pinocchio::updateFramePlacements(model, data);
     return data.oMf[base_frame].rotation().transpose() * data.oMf[body_frame].rotation();
   }
+
+  Eigen::Isometry3d pose(const LegJoints& joints) {
+    rotation(joints);
+    const auto relative = data.oMf[base_frame].inverse() * data.oMf[body_frame];
+    Eigen::Isometry3d result = Eigen::Isometry3d::Identity();
+    result.linear() = relative.rotation();
+    result.translation() = relative.translation();
+    return result;
+  }
 };
 
 LegBodyOrientationPlanner::LegBodyOrientationPlanner(const pinocchio::Model& model)
@@ -72,6 +81,11 @@ void LegBodyOrientationPlanner::validatePosition(const LegJoints& joints) const 
 Eigen::Matrix3d LegBodyOrientationPlanner::orientation(const LegJoints& joints) {
   validatePosition(joints);
   return impl_->rotation(joints);
+}
+
+Eigen::Isometry3d LegBodyOrientationPlanner::pose(const LegJoints& joints) {
+  validatePosition(joints);
+  return impl_->pose(joints);
 }
 
 double LegBodyOrientationPlanner::orientationError(const LegJoints& joints, const Eigen::Matrix3d& reference) {

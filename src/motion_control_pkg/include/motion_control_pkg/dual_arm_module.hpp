@@ -60,6 +60,9 @@ public:
     void attachMeasuredFeedbackBus(std::shared_ptr<miracle::EthercatBusManager> bus) {
         feedback_bus_=std::move(bus);
     }
+    bool read_body_motion_feedback(sensor_msgs::msg::JointState& state, std::string& error) {
+        return readMeasuredFeedback(state, error);
+    }
     rclcpp::CallbackGroup::SharedPtr measuredFeedbackCallbackGroup() const {
         return measured_feedback_channel_->callbackGroup();
     }
@@ -114,6 +117,10 @@ public:
         const std::chrono::steady_clock::time_point& start_time,
         const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,
         std::string& error_message);
+
+    // Read controller frames without model/FK access for WBC completion gating.
+    bool read_preplanned_completion_feedback(
+        motion_control_pkg::sdk::DualArmDeviceState& state, std::string& error);
 
     // Reserve arm execution flags before whole-body planning starts.
     bool reserve_preplanned_trajectory_resources(

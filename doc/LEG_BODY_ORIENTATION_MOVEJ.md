@@ -51,3 +51,6 @@ params:
 成功必须有末条命令之后的新反馈，四关节实际到位误差均不超过 0.01 rad、角速度不超过 0.02 rad/s，且 body 朝向通过实测保护检查。Result 中提供 `planning_time`、`motion_time`、`execution_time` 和实际最大关节误差。
 
 功能源码在 `motion_control_pkg`，目标格式校验头位于 `com_interfaces/include/com_interfaces/leg_joint_goal.hpp`。更新后一起重编译 `com_interfaces`、`motion_control_pkg`、`task_manager`。离线验证程序和构建产物保持在工作区外；本功能的代码实现和离线验证不代表机器人实机验收。
+## 相关身体控制模式
+
+J1/J2 固定、通过 J3 设置身体倾角，以及保持上半身姿态的竖直升降，见 [腿部身体倾角与竖直升降](LEG_BODY_MOTION.md)。本文的双关节 MoveJ 仍使用原有第三关节补偿模式。

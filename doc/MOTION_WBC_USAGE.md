@@ -1,6 +1,6 @@
 # ylf_wbc 运控使用命令与点云接口
 
-依据：2026-09-20 本地 `/home/elijah/ylf_wbc`，源码提交 `0dab30c`。
+最初整理于 2026-09-20；2026-10-08 更新点云实现说明。当前完整接口与参数以 [运控完整手册](MOTION_COMMANDS_AND_PARAMETERS.md) 为准。
 本文命令按 ROS 2 Humble 和本工作区实际接口整理；本次只做源码与离线消息检查，没有启动硬件或执行动作。
 
 ## 1. 先区分三个入口
@@ -205,11 +205,10 @@ ros2 topic hz /fusion/synced_robot_vision
 ```
 
 接着发送 `enable_collision_check: 2` 的动作，`env_point_cloud` 保持默认空。
-程序在规划时临时订阅，等待第一帧非空点云，固定等待上限约 **2 秒**。
-因此发布端应持续发布；提前 `--once` 发布一帧后退出通常不能供后续动作使用。
-订阅使用 `SensorDataQoS`。动作没有开始时没有该临时订阅者，不一定是配置错误。
+程序启动时建立持久订阅并后台缓存非空点云；规划读取无可用缓存时最多等待 **5 秒**，已有缓存直接使用，取走后下次等新帧。
+订阅使用 `SensorDataQoS`，动作未开始时订阅也存在。发布端应持续更新；当前缓存没有通用年龄限制，仍需核对采集时效。
 
-多相机共用融合话题时，当前碰撞读取器不按 `camera_id` 筛选，也不合并多路点云，取首先收到的非空一帧。
+多相机共用融合话题时，当前碰撞读取器不按 `camera_id` 筛选，也不合并多路点云，使用最近缓存的非空一帧。
 若需要固定相机或融合完整环境，应在上游生成专门的碰撞点云话题。
 当前读取器也不使用外层 `data_valid`、`joint_positions` 等字段进行有效性或同步判定。
 
@@ -448,7 +447,7 @@ ros2 service call /Control/move_pose/_action/cancel_goal action_msgs/srv/CancelG
 | 现象/错误 | 检查重点 |
 |---|---|
 | `Goal rejected` | 目标 frame/四元数、speed、timeout、全身非零 acceleration/jerk、双臂同步模式、资源忙 |
-| `Timeout waiting for synced robot vision` | 默认等点云 2 秒；检查消息类型、持续发布、DDS/QoS 与话题参数 |
+| `Timeout waiting for synced robot vision` | 无缓存时最多等点云 5 秒；检查消息类型、持续发布、DDS/QoS 与话题参数 |
 | `Invalid point cloud frame, dimensions or byte layout` | 空 frame、宽高、大小端、point_step/row_step/data 长度 |
 | `Point cloud requires valid float32 x/y/z fields` | 小写 XYZ、FLOAT32、count=1、offset |
 | `Unknown point cloud frame` | frame 是否在实际加载的模型中；上游是否正确变换到 base_link |
@@ -464,7 +463,7 @@ ros2 service call /Control/move_pose/_action/cancel_goal action_msgs/srv/CancelG
 - [main_node.cpp](../src/motion_control_pkg/src/main_node.cpp)：Action 路由、参数接收检查。
 - [whole_body_module.cpp](../src/motion_control_pkg/src/whole_body_module.cpp)：全身 IK/轨迹、bound 偏移、COM/ZMP 开关。
 - [scoped_collision_scene.hpp](../src/motion_control_pkg/include/motion_control_pkg/motion/scoped_collision_scene.hpp)：点云来源优先级与模式。
-- [dual_arm_module.cpp](../src/motion_control_pkg/src/dual_arm_module.cpp)：`loadPointCloud()` 临时订阅与 2 秒等待。
+- [dual_arm_module.cpp](../src/motion_control_pkg/src/dual_arm_module.cpp)：持久订阅、后台缓存与最多 5 秒等待。
 - [miracle_m_algo.cpp](../src/motion_control_pkg/src/miracle_m_algo.cpp)：`pointCloudToModelRoot()` 格式检查、1 cm Octree。
 - [bringup.launch.py](../src/motion_control_pkg/launch/bringup.launch.py)：实际配置路径和启动参数。
 - [model_node.cpp](../src/motion_control_pkg/src/wbc/model_node.cpp)：只读状态观察。

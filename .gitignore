@@ -62,3 +62,12 @@ backups/
 *.tar.gz
 *.tgz
 *.zip
+
+# Publication excludes test sources, test tasks and local validation reports
+**/test/
+**/tests/
+**/testing/
+**/test_*
+**/*_test.*
+**/*_tests.*
+/doc/*_TEST*.md

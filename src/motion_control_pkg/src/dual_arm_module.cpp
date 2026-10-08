@@ -3208,6 +3208,18 @@ bool DualArmModule::prepare_preplanned_dispatch(
     return true;
 }
 
+bool DualArmModule::read_preplanned_completion_feedback(
+    motion_control_pkg::sdk::DualArmDeviceState& state, std::string& error)
+{
+    if (!sdk_command_gate_ || !init_robot_link_) {
+        error = "arm completion feedback source is unavailable";
+        return false;
+    }
+    const auto result = sdk_command_gate_->readState(state);
+    error = result ? "" : "arm completion SDK read failed: " + result.error_message;
+    return static_cast<bool>(result);
+}
+
 bool DualArmModule::dispatch_preplanned(
     const std::chrono::steady_clock::time_point& start_time,
     const std::shared_ptr<motion_control_pkg::execution::CancellationToken>& cancel,

@@ -3,6 +3,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "com_interfaces/msg/motor_status.hpp"
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <memory>
 #include <string>
@@ -146,6 +147,10 @@ inline const char* resource_type_to_str(ResourceType r)
 /// @brief 每个 action 的独立上下文（状态、启动时间、超时时间、调用结果、占用的资源）
 struct ActionContext
 {
+    uint64_t goal_generation{0};
+    bool move_pose_execution_observed{false};
+    bool pre_motion_ik_failure{false};
+    std::string result_error_message;
     ActionRunState state{ActionRunState::IDLE};
     ActionCallResult call_result{ActionCallResult::SUCCESS};
     rclcpp::Time start_time{0, 0};
@@ -201,10 +206,11 @@ inline std::vector<ResourceType> complete_context(
     std::mutex& contexts_mutex,
     const std::string& state_key,
     ActionRunState state,
-    ActionCallResult call_result)
+    ActionCallResult call_result, uint64_t expected_generation = 0)
 {
     std::lock_guard<std::mutex> lock(contexts_mutex);
     auto& context = contexts[state_key];
+    if (expected_generation && context.goal_generation != expected_generation) return {};
     context.state = state;
     context.call_result = call_result;
     std::vector<ResourceType> resources;
@@ -411,6 +417,10 @@ public:
 
     /// @brief 获取指定 state_key 下的完整 ActionContext（供外部读取）
     const ActionContext& get_context(const std::string& state_key) const;
+    bool had_pre_motion_ik_failure(const std::string& state_key) const;
+    double recovery_offset(const std::string& seq_key, const std::string& key) const;
+    void mark_recovery_offset(const std::string& seq_key, const std::string& key, double metres);
+    void clear_recovery_offset(const std::string& seq_key, const std::string& key);
 
     // ========= 普通任务原子动作耗时汇总 =========
     mutable std::mutex action_timing_mutex_;
@@ -460,6 +470,10 @@ private:
     sensor_msgs::msg::JointState::ConstSharedPtr waist_state_;
     std::chrono::steady_clock::time_point waist_state_received_{};
     std::mutex waist_state_mutex_;
+    rclcpp::Subscription<com_interfaces::msg::MotorStatus>::SharedPtr tcp_state_subscription_;
+    com_interfaces::msg::MotorStatus::ConstSharedPtr tcp_state_;
+    std::chrono::steady_clock::time_point tcp_state_received_{};
+    std::mutex tcp_state_mutex_;
     std::shared_future<std::shared_ptr<GoalHandleCtrlGripper> >  gripper_send_future_;
     void goal_response_callback(GoalHandleVisionDetection::SharedPtr goal_handle);
     void feedback_callback(GoalHandleVisionDetection::SharedPtr, const std::shared_ptr<const VisionDet::Feedback> feedback);
@@ -509,7 +523,7 @@ private:
     void complete_action_context(
         const std::string& state_key,
         ActionRunState state,
-        ActionCallResult call_result);
+        ActionCallResult call_result, uint64_t expected_generation = 0);
 
     /// @brief 记录一次原子动作开始；仅在普通任务计时窗口内生效。
     void start_action_timing(
@@ -593,6 +607,10 @@ private:
     // ========= 基于 state_key 的独立 action 上下文管理 =========
     //获取指定 state_key 的上下文
     const ActionContext& get_ctx(const std::string& state_key) const;
+    uint64_t begin_goal_request(const std::string& state_key);
+    bool is_current_goal_request(const std::string& state_key, uint64_t generation) const;
+    mutable std::mutex recovery_mutex_;
+    std::map<std::string, double> recovery_offsets_;
 
     //获取指定 state_key 的上下文
     ActionContext& get_ctx(const std::string& state_key);
