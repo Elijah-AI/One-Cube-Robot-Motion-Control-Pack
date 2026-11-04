@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -118,6 +119,9 @@ inline bool isArmEnabled(
 
 struct ArmFeedback
 {
+  // Host steady time when this controller frame was FIRST observed by the gate.
+  // Repeated reads of the same SDK buffer retain this timestamp.
+  std::chrono::steady_clock::time_point acquired{};
   // Controller output frame counter, not a local poll counter. -1 means absent.
   int feedback_sequence{-1};
   std::array<double, kArmDof> joint_position{};
@@ -128,12 +132,21 @@ struct ArmFeedback
   bool low_speed{false};
   std::array<double, kToolKinematicsSize> tool_kinematics{};
   std::array<double, kToolDynamicsSize> tool_dynamics{};
+  // Optional controller output echo in vendor degrees, for fault diagnosis only.
+  std::optional<std::array<double, kArmDof>> controller_joint_command;
 };
 
 struct DualArmDeviceState
 {
   std::array<ArmFeedback, kArmCount> arms{};
 };
+
+inline bool armFeedbackOperational(const ArmFeedback& state)
+{
+  // Official FxRtCSDef.h: 0=servo off, 1=position, 3=torque,
+  // 4=release; >=100 denotes fault/transition. This executor uses 1 or 3.
+  return state.error_code == 0 && (state.current_state == 1 || state.current_state == 3);
+}
 
 /**
  * @brief 双臂设备的厂商无关接口。
@@ -153,9 +166,18 @@ public:
   virtual void disableLogging() = 0;
   virtual bool readState(DualArmDeviceState & state) = 0;
 
-  // 厂商 SDK 规定：以下设置必须位于 begin/commit 事务之间。
+  // Immediate SDK operations; never nest EStop's internal batch in another batch.
+  // Default refuses older test/backends which do not implement emergency stop.
+  virtual bool emergencyStop(bool left, bool right) { (void)left; (void)right; return false; }
+  virtual bool readServoError(ArmChannel channel, std::size_t joint, long& error) {
+    (void)channel; (void)joint; (void)error; return false;
+  }
+  // OnClearErr_* sends RESET via OnSetIntPara, independently of a joint batch.
+  // A true result only means invocation, not a controller acknowledgement.
+  // Other setters below must be serialized within begin/commit transactions.
   virtual bool beginCommandBatch() = 0;
   virtual bool clearServoError(ArmChannel channel) = 0;
+  virtual bool setServoOff(ArmChannel) { return false; }
   virtual bool setPositionMode(ArmChannel channel) = 0;
   virtual bool setTorqueMode(ArmChannel channel) = 0;
   virtual bool setJointLimits(

@@ -1,15 +1,26 @@
+#include "motion_control_pkg/execution/shutdown_request.hpp"
+#include "motion_control_pkg/execution/orderly_shutdown.hpp"
+#include "motion_control_pkg/execution/motion_safety.hpp"
+#include "motion_control_pkg/execution/ethercat_trajectory.hpp"
+#include <std_srvs/srv/trigger.hpp>
+#include <rcl_interfaces/srv/set_parameters_atomically.hpp>
+#include <rcl_interfaces/msg/parameter_type.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <sstream>
 
 #include "main_node.hpp"
 #include "com_interfaces/leg_joint_goal.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
+#include "com_interfaces/tcp_level_goal.hpp"
 #include "dual_arm_module.hpp"
 #include "ethercat_bus_manager.hpp"
+#include "com_interfaces/srv/drive_control.hpp"
 #include "miracle_head_module.hpp"
 #include "miracle_lower_body_module.hpp"
 #include "miracle_m_algo.hpp"
@@ -27,8 +38,19 @@ using namespace miracle;
 class RobotControlNode : public rclcpp::Node {
 public:
     RobotControlNode() : Node("robot_control_node") {}
+    ~RobotControlNode() override {
+        if (motion_safety_) motion_safety_->requestStop("control node shutdown");
+        if (head_startup_thread_.joinable()) head_startup_thread_.join();
+    }
+
 
     void init() {
+        shutdown_pub_=create_publisher<std_msgs::msg::String>(
+            "/Control/shutdown_state",rclcpp::QoS(1).transient_local());
+        shutdown_timer_=create_wall_timer(std::chrono::milliseconds(100),[this]{
+            std_msgs::msg::String msg;msg.data=shutdownStatus();shutdown_pub_->publish(msg);
+        });
+        if (motion_control_pkg::execution::shutdownRequested()) return;
         // 1. 创建各个身体部位的控制模块
         // 传入 shared_from_this() 让各模块都能使用这个 Node 发日志/建定时器
 
@@ -40,7 +62,9 @@ public:
         } else {
             RCLCPP_ERROR(rclcpp::get_logger("robot_control_node"),"Failed to get parameter EtherCAT_bus_config");
         }
+        ethercat_attempted_=true;
         ethercat_bus_manager_ptr_ = EthercatBusManager::getOrCreate(etherat_bus_config.c_str());
+        if (motion_control_pkg::execution::shutdownRequested()) return;
         if (!ethercat_bus_manager_ptr_ || !ethercat_bus_manager_ptr_->isReady()) {
             throw std::runtime_error("EtherCAT bus manager failed its startup safety checks");
         }
@@ -63,6 +87,15 @@ public:
         }
 
         miracleAlgo_ptr_ = std::make_shared<MiracleMAlgo>(urdf_path, mesh_dir);
+        rcl_interfaces::msg::ParameterDescriptor planning_workers_descriptor;
+        planning_workers_descriptor.description = "Startup planning workers: 1 serial or 2/4 parallel";
+        planning_workers_descriptor.read_only = true;
+        const int planning_workers = this->declare_parameter<int>(
+            "planning_worker_count", 2, planning_workers_descriptor);
+        if (planning_workers != 1 && planning_workers != 2 && planning_workers != 4)
+            throw std::invalid_argument("planning_worker_count must be 1, 2 or 4");
+        miracleAlgo_ptr_->configurePlanningWorkers(static_cast<std::size_t>(planning_workers));
+        RCLCPP_INFO(get_logger(), "Planning workers: %d (private caches, shared immutable model)", planning_workers);
 
         //创建头部模块
         head_module_ = std::make_shared<MiracleHeadModule>("head", shared_from_this());
@@ -149,6 +182,7 @@ public:
             planning_frame, left_tool_transform.transform,
             right_tool_transform.transform);
 
+        if (motion_control_pkg::execution::shutdownRequested()) return;
         std::string dual_arm_initialization_error;
         if (!dual_arm_module_->initialize(dual_arm_initialization_error)) {
             throw std::runtime_error(
@@ -191,6 +225,8 @@ public:
             lower_body_module_, planning_frame, left_tool_transform.transform,
             right_tool_transform.transform);
 
+        configureMotionSafety();
+
         // 2. 创建全局唯一的 Action Server
         move_pose_action_server_ = rclcpp_action::create_server<MovePose>(
             this,
@@ -224,10 +260,103 @@ public:
             std::bind(&RobotControlNode::handle_accepted_control_suck, this, std::placeholders::_1)
         );
 
-        RCLCPP_INFO(this->get_logger(), "Robot Control Action Server is ready.");
+        if (head_startup_policy_.enabled && !motion_control_pkg::execution::shutdownRequested()) {
+            head_startup_finished_=false;
+            head_startup_thread_=std::thread([this] {
+                std::string error;
+                const bool ok=head_module_->runStartupHome(head_startup_policy_,motion_safety_,error);
+                head_startup_finished_=true;
+                if(ok)RCLCPP_INFO(get_logger(),"Head startup home complete; normal URDF limits restored");
+                else RCLCPP_ERROR(get_logger(),"Head startup home failed: %s",error.c_str());
+            });
+        }
+        RCLCPP_INFO(this->get_logger(), "Robot Control Action Server is ready; motion admission follows safety/startup state.");
+    }
+
+    void beginShutdown() {
+        std::lock_guard<std::mutex> lock(admission_mutex_);
+        motion_control_pkg::execution::requestShutdown();
+        if (shutdown_) return;
+        if (motion_safety_) motion_safety_->requestStop("orderly process shutdown");
+        const std::size_t axes=(ethercat_attempted_ ? 6U : 0U)+
+            ((dual_arm_module_ && dual_arm_module_->shutdownDriverConnected()) ? 14U : 0U);
+        using Shutdown=motion_control_pkg::execution::OrderlyShutdown;
+        Shutdown::Hooks hooks;
+        hooks.idle=[this] {return shutdownResourcesIdle();};
+        hooks.read=[this](auto& values,auto& error,bool after_disable) {
+            if (ethercat_attempted_ && (!ethercat_bus_manager_ptr_ ||
+                !ethercat_bus_manager_ptr_->readShutdownFeedback(values,error,after_disable))) return false;
+            const std::string bus_detail=error;
+            if (dual_arm_module_ && dual_arm_module_->shutdownDriverConnected()) {
+                std::string arm_detail;
+                const bool arm_ok=dual_arm_module_->readShutdownFeedback(values,arm_detail);
+                error=bus_detail+"; arms:"+arm_detail;
+                if (!arm_ok) return false;
+            }
+            return true;
+        };
+        hooks.disable=[this](std::string& error) {
+            // Submit both commands even if one backend reports failure; never
+            // release either backend on an unconfirmed result.
+            bool bus_ok=!ethercat_attempted_;
+            if (ethercat_bus_manager_ptr_) bus_ok=ethercat_bus_manager_ptr_->requestShutdownDisable(error);
+            std::string arm_error;
+            const bool arm_ok=!dual_arm_module_ || dual_arm_module_->disableForShutdown(arm_error);
+            if (!arm_ok) error+="; "+arm_error;
+            return bus_ok && arm_ok;
+        };
+        hooks.release=[this](std::string& error) {
+            if (head_startup_thread_.joinable()) head_startup_thread_.join();
+            // Readers are serialized by the SDK gate; after release they fail
+            // closed without touching the vendor handle. PDO joins precede IgH release.
+            if (dual_arm_module_ && !dual_arm_module_->releaseAfterShutdown(error)) return false;
+            return !ethercat_bus_manager_ptr_ || ethercat_bus_manager_ptr_->releaseAfterShutdown(error);
+        };
+        shutdown_=std::make_unique<Shutdown>(std::move(hooks),axes,Shutdown::Clock::now());
+        setShutdownStatus(shutdown_->status());
+        RCLCPP_WARN(get_logger(),"Orderly shutdown requested: admission closed; keeping ROS/feedback alive until confirmed");
+    }
+
+    bool advanceShutdown() {
+        const auto previous=shutdown_->phase();
+        shutdown_->tick(motion_control_pkg::sdk::DriveClock::now());
+        const auto status=shutdown_->status();
+        if (status!=shutdownStatus()) {
+            setShutdownStatus(status);
+            if (shutdown_->phase()==motion_control_pkg::execution::OrderlyShutdown::Phase::FailedHold)
+                RCLCPP_ERROR(get_logger(),"%s; drivers/feedback retained; repeated signals cannot force completion",status.c_str());
+            else if (previous!=shutdown_->phase()) RCLCPP_INFO(get_logger(),"%s",status.c_str());
+        }
+        return shutdown_->complete();
     }
 
 private:
+    std::mutex admission_mutex_;
+    mutable std::mutex shutdown_status_mutex_;
+    std::string shutdown_status_{"shutdown=RUNNING admission=open brake_feedback=UNAVAILABLE"};
+    std::unique_ptr<motion_control_pkg::execution::OrderlyShutdown> shutdown_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr shutdown_pub_;
+    rclcpp::TimerBase::SharedPtr shutdown_timer_;
+    std::atomic<bool> head_startup_finished_{true};
+    bool ethercat_attempted_{false};
+    std::string shutdownStatus() const {
+        std::lock_guard<std::mutex> lock(shutdown_status_mutex_);return shutdown_status_;
+    }
+    void setShutdownStatus(const std::string& status) {
+        {std::lock_guard<std::mutex> lock(shutdown_status_mutex_);shutdown_status_=status;}
+        if (shutdown_pub_) {std_msgs::msg::String msg;msg.data=status;shutdown_pub_->publish(msg);}
+    }
+    bool shutdownResourcesIdle() const {
+        return head_startup_finished_ && (!motion_safety_ || motion_safety_->workersIdle()) &&
+            (!whole_body_module_ || whole_body_module_->is_idle()) &&
+            (!head_module_ || head_module_->is_idle(ID_HEAD)) &&
+            (!lower_body_module_ || lower_body_module_->is_idle(ID_LEG)) &&
+            (!dual_arm_module_ || (dual_arm_module_->is_idle(ID_LEFT_ARM) &&
+             dual_arm_module_->is_idle(ID_RIGHT_ARM) && dual_arm_module_->is_idle(ID_LEFT_TOOL) &&
+             dual_arm_module_->is_idle(ID_RIGHT_TOOL)));
+    }
+    motion_control_pkg::execution::HeadStartupHomePolicy head_startup_policy_;
+    std::thread head_startup_thread_;
     std::shared_ptr<MiracleMAlgo> miracleAlgo_ptr_;
     std::shared_ptr<EthercatBusManager> ethercat_bus_manager_ptr_;
     std::shared_ptr<MiracleHeadModule> head_module_;
@@ -247,12 +376,210 @@ private:
     rclcpp_action::Server<ControlGripper>::SharedPtr control_gripper_action_server_;
     rclcpp_action::Server<ControlSuck>::SharedPtr control_suck_action_server_;
 
+    std::shared_ptr<motion_control_pkg::execution::MotionSafety> motion_safety_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr motion_safety_pub_;
+    rclcpp::TimerBase::SharedPtr motion_safety_timer_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_motion_service_, reset_motion_fault_service_;
+    rclcpp::Service<rcl_interfaces::srv::SetParametersAtomically>::SharedPtr arm_error_service_, body_error_service_;
+    rclcpp::CallbackGroup::SharedPtr drive_control_group_;
+    rclcpp::Service<com_interfaces::srv::DriveControl>::SharedPtr drive_control_service_;
+    std::mutex drive_clear_mutex_;
+
+    bool motionResourcesIdle() const {
+        return whole_body_module_->is_idle() && head_module_->is_idle(ID_HEAD) &&
+            lower_body_module_->is_idle(ID_LEG) && dual_arm_module_->is_idle(ID_LEFT_ARM) &&
+            dual_arm_module_->is_idle(ID_RIGHT_ARM);
+    }
+
+    void configureDriveControl() {
+        using Service=com_interfaces::srv::DriveControl;
+        drive_control_group_=create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+        drive_control_service_=create_service<Service>("/Control/drive_control",
+            [this](const std::shared_ptr<Service::Request> request,
+                   std::shared_ptr<Service::Response> response) {
+                if (motion_control_pkg::execution::shutdownRequested()) {
+                    response->message="orderly shutdown in progress; drive maintenance refused"; return;
+                }
+                if (request->target>Service::Request::LOWER_BODY ||
+                    request->operation>Service::Request::CLEAR_FAULT) {
+                    response->message="invalid target or operation"; return;
+                }
+                const bool clear=request->operation==Service::Request::CLEAR_FAULT;
+                std::unique_lock<std::mutex> clear_lock(drive_clear_mutex_,std::defer_lock);
+                if (clear && (!clear_lock.try_lock() || !motionResourcesIdle())) {
+                    response->message="clear refused: maintenance or motion resources busy"; return;
+                }
+                // Fence every coupled trajectory before touching a selected drive.
+                // This includes WBC compensation and targets from other clients.
+                motion_safety_->requestStop(clear ? "explicit online drive clear" : "online drive emergency stop");
+                if (clear && !motionResourcesIdle()) {
+                    response->message="clear refused: motion worker still leaving execution"; return;
+                }
+                motion_control_pkg::sdk::DriveControlResult result;
+                if (request->target==Service::Request::LOWER_BODY) {
+                    result=ethercat_bus_manager_ptr_->controlLowerBodyDrives(clear);
+                } else {
+                    result=dual_arm_module_->controlDrives(
+                        request->target!=Service::Request::RIGHT_ARM,
+                        request->target!=Service::Request::LEFT_ARM,clear);
+                }
+                response->success=result.success();
+                response->command_issued=result.command_issued;
+                response->feedback_confirmed=result.feedback_confirmed;
+                response->message=result.message;
+            },rmw_qos_profile_services_default,drive_control_group_);
+    }
+
+    void configureMotionSafety() {
+        using namespace motion_control_pkg::execution;
+        SafetyPolicy policy;
+        policy.tracking_error=declare_parameter("motion_tracking_error_rad",policy.tracking_error);
+        policy.hard_error=declare_parameter("motion_tracking_hard_error_rad",policy.hard_error);
+        policy.tracking_dwell=declare_parameter("motion_tracking_dwell_sec",policy.tracking_dwell);
+        policy.max_feedback_age=declare_parameter("motion_feedback_max_age_sec",policy.max_feedback_age);
+        policy.stop_timeout=declare_parameter("motion_stop_confirmation_timeout_sec",policy.stop_timeout);
+        motion_safety_=std::make_shared<MotionSafety>(policy);
+        const auto limits=[&](const std::vector<std::string>& names) {
+            std::vector<SafetyJoint> result;
+            const auto& model=miracleAlgo_ptr_->getModel();
+            for(const auto& name:names) {
+                if(!model.existJointName(name)) throw std::runtime_error("missing safety joint: "+name);
+                const auto& joint=model.joints[model.getJointId(name)];
+                result.push_back({name,model.lowerPositionLimit[joint.idx_q()],
+                    model.upperPositionLimit[joint.idx_q()],model.velocityLimit[joint.idx_v()]});
+            }
+            return result;
+        };
+        for(unsigned arm=0;arm<2;++arm) {
+            std::vector<std::string> names;
+            for(unsigned j=1;j<=7;++j)names.push_back("Joint"+std::to_string(j)+(arm==0?"_L":"_R"));
+            motion_safety_->addChannel(1U<<arm,limits(names),
+                [weak=std::weak_ptr<DualArmModule>(dual_arm_module_),arm](SafetySample& sample,std::string& error) {
+                    const auto module=weak.lock();
+                    motion_control_pkg::sdk::DualArmDeviceState state;
+                    if(!module || !module->read_preplanned_completion_feedback(state,error))return false;
+                    const auto& a=state.arms[arm];
+                    if(a.feedback_sequence<0 || !motion_control_pkg::sdk::armFeedbackOperational(a)) {
+                        error="arm driver fault or invalid state: arm="+std::to_string(arm)+
+                            " error="+std::to_string(a.error_code)+" state="+std::to_string(a.current_state);return false;
+                    }
+                    constexpr double radians=0.017453292519943295;
+                    for(unsigned j=0;j<7;++j){sample.position.push_back(a.joint_position[j]*radians);sample.velocity.push_back(a.joint_velocity[j]*radians);}
+                    if(a.controller_joint_command)
+                        for(double q:*a.controller_joint_command)sample.controller_command.push_back(q*radians);
+                    sample.sequence=a.feedback_sequence;sample.acquired=a.acquired;sample.wraps_at_million=true;
+                    return true;
+                });
+        }
+        const auto bus_reader=[weak=std::weak_ptr<EthercatBusManager>(ethercat_bus_manager_ptr_)](std::vector<std::uint16_t> ids) {
+            return [weak,ids=std::move(ids)](SafetySample& sample,std::string& error) {
+                JointCompletionFeedback measured;
+                if(!readEthercatChainFeedback(weak.lock(),ids,measured,error))return false;
+                sample.position=std::move(measured.position);sample.velocity=std::move(measured.velocity);
+                sample.acquired=measured.acquired;sample.sequence=measured.sequence;return true;
+            };
+        };
+        motion_safety_->addChannel(kLegSafety,limits({"leg_joint1","leg_joint2","leg_joint3","body_joint"}),
+            bus_reader({LEG_JOINT1,LEG_JOINT2,LEG_JOINT3,BODY_JOINT}));
+        const auto head_limits=limits({"head_yaw_joint","head_pitch_joint"});
+        motion_safety_->addChannel(kHeadSafety,head_limits,
+            bus_reader({HEAD_YAW_MOTOR_ID,HEAD_PITCH_MOTOR_ID}));
+        rcl_interfaces::msg::ParameterDescriptor fixed;fixed.read_only=true;
+        auto& home=head_startup_policy_;
+        home.enabled=declare_parameter("head_startup_home.enabled",true,fixed);
+        home.lower=declare_parameter<std::vector<double>>("head_startup_home.recovery_lower_rad",
+            {head_limits[0].lower,-0.7},fixed);
+        home.upper=declare_parameter<std::vector<double>>("head_startup_home.recovery_upper_rad",
+            {head_limits[0].upper,head_limits[1].upper},fixed);
+        home.velocity=declare_parameter("head_startup_home.velocity_rad_s",home.velocity,fixed);
+        home.acceleration=declare_parameter("head_startup_home.acceleration_rad_s2",home.acceleration,fixed);
+        home.jerk=declare_parameter("head_startup_home.jerk_rad_s3",home.jerk,fixed);
+        home.feedback_wait=declare_parameter("head_startup_home.feedback_wait_sec",home.feedback_wait,fixed);
+        home.timeout=declare_parameter("head_startup_home.timeout_sec",home.timeout,fixed);
+        motion_safety_->configureHeadStartupHome(home);
+        installMotionSafety(motion_safety_);
+        motion_safety_->start();
+        motion_safety_pub_=create_publisher<std_msgs::msg::String>("/Control/motion_safety",rclcpp::QoS(1).transient_local());
+        motion_safety_timer_=create_wall_timer(std::chrono::milliseconds(100),[this]{
+            std_msgs::msg::String status;status.data=motion_safety_->status()+"; "+shutdownStatus();motion_safety_pub_->publish(status);
+        });
+        stop_motion_service_=create_service<std_srvs::srv::Trigger>("/Control/stop_motion",
+            [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+                motion_safety_->requestStop("explicit stop service request");
+                response->success=true;response->message="command fence installed; measured stop confirmation is asynchronous; "+motion_safety_->status();
+            });
+        reset_motion_fault_service_=create_service<std_srvs::srv::Trigger>("/Control/reset_motion_fault",
+            [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+                // Resource reservations precede worker startup. Include workers
+                // that have been accepted but have not entered MotionSafetyScope
+                // yet (and head/leg workers that are still planning).
+                if (!whole_body_module_->is_idle() || !head_module_->is_idle(ID_HEAD) ||
+                    !lower_body_module_->is_idle(ID_LEG) || !dual_arm_module_->is_idle(ID_LEFT_ARM) ||
+                    !dual_arm_module_->is_idle(ID_RIGHT_ARM)) {
+                    response->success=false;
+                    response->message="motion resources still reserved by an accepted/planning/executing worker";
+                    return;
+                }
+                response->success=motion_safety_->reset(response->message);
+            });
+        // Independent runtime switches; both start OFF on every process start.
+        const auto error_service=[this](const std::string& name,SafetyMask group) {
+          return create_service<rcl_interfaces::srv::SetParametersAtomically>(
+            "/Control/"+name,
+            [this,group](const std::shared_ptr<rcl_interfaces::srv::SetParametersAtomically::Request> request,
+                   std::shared_ptr<rcl_interfaces::srv::SetParametersAtomically::Response> response) {
+                std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+                if (motion_control_pkg::execution::shutdownRequested()) {
+                    response->result.reason="orderly shutdown in progress";return;
+                }
+                if (!motionResourcesIdle()) {
+                    response->result.reason="error tracking option requires idle motion resources";return;
+                }
+                bool enabled=false;double limit=0,hard=0;unsigned seen=0;
+                using Type=rcl_interfaces::msg::ParameterType;
+                for (const auto& parameter:request->parameters) {
+                    unsigned bit=0;
+                    if(parameter.name=="enabled" && parameter.value.type==Type::PARAMETER_BOOL) {
+                        bit=1;enabled=parameter.value.bool_value;
+                    } else if(parameter.name=="position_error_rad" && parameter.value.type==Type::PARAMETER_DOUBLE) {
+                        bit=2;limit=parameter.value.double_value;
+                    } else if(parameter.name=="hard_error_rad" && parameter.value.type==Type::PARAMETER_DOUBLE) {
+                        bit=4;hard=parameter.value.double_value;
+                    }
+                    if(!bit || (seen&bit)) {
+                        response->result.reason="unknown, duplicate or wrongly typed error tracking option";return;
+                    }
+                    seen|=bit;
+                }
+                if (!(seen&1) || (enabled && seen!=7) || (!enabled && seen!=1)) {
+                    response->result.reason="enable requires enabled + position_error_rad + hard_error_rad; disable requires enabled only";
+                    return;
+                }
+                response->result.successful=motion_safety_->setErrorTrackingEnabled(
+                    group,enabled,limit,hard,response->result.reason);
+                if(response->result.successful) RCLCPP_INFO(get_logger(),"%s",response->result.reason.c_str());
+            });
+        };
+        arm_error_service_=error_service("arm_error",kArmSafety);
+        body_error_service_=error_service("body_error",kBodySafety);
+        RCLCPP_INFO(get_logger(),"arm_error and body_error default OFF; enable: <command> <position_error_rad> <hard_error_rad>; body_error covers legs, waist and head");
+        configureDriveControl();
+    }
+
     // ================== 核心分发逻辑 ==================
 
     rclcpp_action::GoalResponse handle_goal_move_pose(
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const MovePose::Goal> goal)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        std::string safety_error;
+        if (!motion_safety_ || !motion_safety_->ready(safety_error)) {
+            RCLCPP_WARN(get_logger(),"Motion admission refused: %s",safety_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
         if (goal->enable_collision_check > 2) {
             RCLCPP_WARN(this->get_logger(), "enable_collision_check must be 0, 1 or 2");
             return rclcpp_action::GoalResponse::REJECT;
@@ -261,6 +588,12 @@ private:
         RCLCPP_INFO(this->get_logger(), "Received movement request for part_id: %u", goal->arm_id);
         if (miracleAlgo_ptr_->staticBalance() && !whole_body_module_->is_idle()) {
             RCLCPP_WARN(this->get_logger(), "Static COM whole-body operation owns all movable body joints");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        std::string constraint_error;
+        if (!com_interfaces::validateTcpLevelGoal(goal->keep_tcp_level, goal->tcp_level_tolerance_rad,
+                goal->arm_id, true, goal->control_mode, constraint_error)) {
+            RCLCPP_WARN(get_logger(), "%s", constraint_error.c_str());
             return rclcpp_action::GoalResponse::REJECT;
         }
         if (!goal->via_poses.empty()) {
@@ -488,6 +821,13 @@ private:
 
     void handle_accepted_move_pose(const std::shared_ptr<GoalHandleMovePose> goal_handle)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) {
+            auto result=std::make_shared<MovePose::Result>();
+            result->success=ACTION_FAIL;result->error_message="orderly shutdown before dispatch";
+            goal_handle->abort(result);return;
+        }
+
         const auto goal = goal_handle->get_goal();
 
         // 全身模式由协调模块统一规划，再把轨迹分发给手臂和腿部。
@@ -544,7 +884,30 @@ private:
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const MoveJoints::Goal> goal)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        std::ostringstream names, positions; positions.precision(9);
+        for(std::size_t j=0;j<goal->joint_name.size();++j)names << (j?",":"") << goal->joint_name[j];
+        for(std::size_t j=0;j<goal->position.size();++j)positions << (j?",":"") << goal->position[j];
+        RCLCPP_INFO(get_logger(),
+            "MoveJoints goal task_id=%s arm_id=%u control_mode=%u speed=%.9g acceleration_scale=%.9g "
+            "jerk_scale=%.9g collision_check=%u timeout_ms=%u names=[%s] positions_rad=[%s]",
+            goal->task_id.c_str(),static_cast<unsigned>(goal->arm_id),static_cast<unsigned>(goal->control_mode),
+            goal->speed,goal->acceleration_scale,goal->jerk_scale,
+            static_cast<unsigned>(goal->enable_collision_check),static_cast<unsigned>(goal->timeout_ms),
+            names.str().c_str(),positions.str().c_str());
+        std::string safety_error;
+        if (!motion_safety_ || !motion_safety_->ready(safety_error)) {
+            RCLCPP_WARN(get_logger(),"Motion admission refused: %s",safety_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
         std::string body_error;
+        if (!com_interfaces::validateTcpLevelGoal(goal->keep_tcp_level, goal->tcp_level_tolerance_rad,
+                goal->arm_id, false, goal->control_mode, body_error)) {
+            RCLCPP_WARN(get_logger(), "%s", body_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (!com_interfaces::validateLegBodyMotionGoal(goal->arm_id, goal->leg_motion_mode,
                 goal->body_tilt_deg, goal->body_height_m, goal->joint_name, goal->position,
                 goal->speed, goal->timeout_ms, goal->control_mode, goal->acceleration_scale,
@@ -724,6 +1087,13 @@ private:
 
     void handle_accepted_move_joints(const std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) {
+            auto result=std::make_shared<MoveJoints::Result>();
+            result->success=ACTION_FAIL;result->error_message="orderly shutdown before dispatch";
+            goal_handle->abort(result);return;
+        }
+
         const auto goal = goal_handle->get_goal();
 
         // 【任务分发】：将 goal_handle 丢给对应的部件模块去执行
@@ -751,6 +1121,15 @@ private:
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const ControlGripper::Goal> goal)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        if (head_startup_policy_.enabled) {
+            std::string error;
+            if (!motion_safety_->ready(error)) {
+                RCLCPP_WARN(get_logger(),"Tool admission refused during startup/fault: %s",error.c_str());
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+        }
         (void)uuid;
         RCLCPP_INFO(this->get_logger(), "Received movement request for gripper_id: %u", goal->gripper_id);
 
@@ -805,6 +1184,13 @@ private:
     void handle_accepted_control_gripper(
         const std::shared_ptr<GoalHandleControlGripper> goal_handle)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) {
+            auto result=std::make_shared<ControlGripper::Result>();
+            result->success=ACTION_FAIL;result->error_message="orderly shutdown before dispatch";
+            goal_handle->abort(result);return;
+        }
+
         std::string start_error;
         if (!dual_arm_module_->start_execution_control_gripper(
                 goal_handle, start_error))
@@ -825,6 +1211,15 @@ private:
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const ControlSuck::Goal> goal)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        if (head_startup_policy_.enabled) {
+            std::string error;
+            if (!motion_safety_->ready(error)) {
+                RCLCPP_WARN(get_logger(),"Tool admission refused during startup/fault: %s",error.c_str());
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+        }
         (void)uuid;
         RCLCPP_INFO(
             this->get_logger(), "Received suction request for suck_id: %u",
@@ -881,6 +1276,13 @@ private:
     void handle_accepted_control_suck(
         const std::shared_ptr<GoalHandleControlSuck> goal_handle)
     {
+        std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+        if (motion_control_pkg::execution::shutdownRequested()) {
+            auto result=std::make_shared<ControlSuck::Result>();
+            result->success=ACTION_FAIL;result->error_message="orderly shutdown before dispatch";
+            goal_handle->abort(result);return;
+        }
+
         std::string start_error;
         if (!dual_arm_module_->start_execution_control_suck(
                 goal_handle, start_error))
@@ -902,23 +1304,34 @@ private:
 
 int main(int argc, char ** argv)
 {
-    rclcpp::init(argc, argv);
-    auto node = std::make_shared<RobotControlNode>();
-
-    try {
-        //调用 init 初始化模块和 Action Server，安全传递 shared_from_this
-        node->init();
-        // Default callbacks may wait for the model lock held by a planner.
-        // The separate acquisition/WBC subscription group must keep running.
-        rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions{}, 2);
-        executor.add_node(node);
-        executor.spin();
-    } catch (const std::exception &e) {
-        RCLCPP_FATAL(rclcpp::get_logger("robot_control_node"), "Startup failed: %s", e.what());
-        node.reset();
-        rclcpp::shutdown();
-        return 1;
+    using namespace motion_control_pkg::execution;
+    installShutdownSignalHandlers();
+    // Default rclcpp handlers invalidate the context before measured stop can
+    // finish. Ctrl+C / SIGTERM now request the same coordinator exactly once.
+    rclcpp::init(argc,argv,rclcpp::InitOptions{},rclcpp::SignalHandlerOptions::None);
+    auto node=std::make_shared<RobotControlNode>();
+    int result=0;
+    try { node->init(); }
+    catch (const std::exception& error) {
+        RCLCPP_ERROR(node->get_logger(),"Startup failed; entering orderly shutdown: %s",error.what());
+        result=1;requestShutdown();
     }
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions{},2);
+    executor.add_node(node);
+    std::thread spin([&] {
+        try {executor.spin();}
+        catch (const std::exception& error) {
+            RCLCPP_ERROR(node->get_logger(),"Executor failed: %s",error.what());
+            requestShutdown();
+        }
+    });
+    while (!shutdownRequested()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    node->beginShutdown();
+    while (!node->advanceShutdown()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    executor.cancel();
+    spin.join();
+    executor.remove_node(node);
     rclcpp::shutdown();
-    return 0;
+    node.reset();
+    return result;
 }

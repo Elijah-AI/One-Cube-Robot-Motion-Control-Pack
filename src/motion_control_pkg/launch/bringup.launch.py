@@ -3,6 +3,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -15,6 +16,7 @@ def generate_launch_description():
     # driver_package_dir = get_package_share_directory('miracle_driver')
     
     motion_control_pkg = FindPackageShare('motion_control_pkg').find('motion_control_pkg')
+    head_home_file = os.path.join(motion_control_pkg, 'config', 'head_startup_home.yaml')
     # param_file = os.path.join(motion_control_pkg, 'launch', 'config', 'motion_control_config.yaml')
     param_file = "/opt/onecube/motion_control/config/motion_control_config.yaml"
 
@@ -25,6 +27,12 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                'planning_worker_count',
+                default_value='2',
+                choices=['1', '2', '4'],
+                description='Planning workers: 1 serial, 2/4 parallel validation; dual-arm IK uses two',
+            ),
             DeclareLaunchArgument(
                 'driver_config',
                 default_value=os.environ.get(
@@ -51,13 +59,21 @@ def generate_launch_description():
                 executable='motion_control_node',
                 name='motion_control',
                 output='screen',
+                # Infinite grace: a failed measured shutdown must retain PDO and
+                # feedback, never be converted to SIGKILL by launch's 5+5 s default.
+                # 1e309 parses as +inf in both launch's typed float and expression.
+                sigterm_timeout='1e309',
+                sigkill_timeout='1e309',
                 parameters=[
+                    head_home_file,
                     param_file,
                     {
                         'urdf_path': urdf_file, 
                         'mesh_dir': mesh_dir, 
                         'EtherCAT_bus_config': driver_config,
                         'active_arm_configuration': active_arm_configuration,
+                        'planning_worker_count': ParameterValue(
+                            LaunchConfiguration('planning_worker_count'), value_type=int),
                         'collision_pointcloud_topic': LaunchConfiguration('collision_pointcloud_topic'),
                     }
                 ],

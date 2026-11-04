@@ -1,10 +1,9 @@
+#include "motion_control_pkg/execution/shutdown_request.hpp"
+#include "motion_control_pkg/execution/motion_safety.hpp"
 #include "motion_control_pkg/sdk/sdk_command_gate.hpp"
 
 #include <cmath>
 #include <cstdio>
-#include <iomanip>
-#include <iostream>
-#include <sstream>
 #include <thread>
 
 namespace motion_control_pkg::sdk
@@ -34,30 +33,27 @@ bool toolMatchesFeedback(
          arraysNear(expected.dynamics, actual.tool_dynamics);
 }
 
-const char * channelName(ArmChannel channel) noexcept
-{
-  return channel == ArmChannel::kLeft ? "left_arm" : "right_arm";
-}
-
-void printJoints(
-  ArmChannel channel, std::size_t batch_id,
-  const std::array<double, kArmDof> & joints)
-{
-  constexpr double kDegreesToRadians = 0.017453292519943295;
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(6);
-  stream << "[SdkCommandGate] batch=" << batch_id
-         << " channel=" << channelName(channel)
-         << " joints_rad=[";
-  for (std::size_t index = 0; index < joints.size(); ++index) {
-    if (index != 0U) {
-      stream << ", ";
-    }
-    stream << (joints[index] * kDegreesToRadians);
+// Fence each SDK transaction separately. Settling/readback waits must not hold
+// the monitor mutex. A partly applied mode transaction requires explicit reset.
+class ModeCommandFence {
+public:
+  explicit ModeCommandFence(unsigned channels)
+      : safety_(motion_control_pkg::execution::motionSafety()) {
+    if (safety_) permit_.emplace(safety_->configuration(channels,error_));
   }
-  stream << "]";
-  std::cout << stream.str() << std::endl;
-}
+  ~ModeCommandFence() {
+    if (permit_ && *permit_ && !complete_)
+      permit_->failed("arm control mode transaction incomplete");
+  }
+  explicit operator bool() const {return !permit_ || static_cast<bool>(*permit_);}
+  const std::string& error() const {return error_;}
+  void complete() {complete_=true;}
+private:
+  std::shared_ptr<motion_control_pkg::execution::MotionSafety> safety_;
+  std::string error_;
+  std::optional<motion_control_pkg::execution::MotionSafety::CommandPermit> permit_;
+  bool complete_{false};
+};
 
 }  // namespace
 
@@ -73,6 +69,7 @@ SdkCommandResult SdkCommandGate::connect(
   const std::array<unsigned char, 4> & ip)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (execution::shutdownRequested()) return fail("shutdown: connect refused");
   if (!device_.checkCompatibility()) {
     return fail("type_compatibility");
   }
@@ -85,9 +82,11 @@ SdkCommandResult SdkCommandGate::connect(
 SdkCommandResult SdkCommandGate::release()
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (released_) return SdkCommandResult::ok();
   if (!device_.release()) {
     return fail("release");
   }
+  released_=true;
   return SdkCommandResult::ok();
 }
 
@@ -100,8 +99,17 @@ void SdkCommandGate::disableLogging()
 SdkCommandResult SdkCommandGate::readState(DualArmDeviceState & state)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (released_) return fail("driver already released");
   if (!device_.readState(state)) {
     return fail("read_state");
+  }
+  const auto observed = std::chrono::steady_clock::now();
+  for (std::size_t a=0;a<kArmCount;++a) {
+    const int seq=state.arms[a].feedback_sequence, previous=last_feedback_sequence_[a];
+    if (seq<0 || seq>1000000 || (seq<previous && !(previous>900000 && seq<100000)))
+      return fail("feedback_sequence_invalid_or_reversed");
+    if (seq!=previous) { last_feedback_sequence_[a]=seq; feedback_acquired_[a]=observed; }
+    state.arms[a].acquired=feedback_acquired_[a];
   }
   return SdkCommandResult::ok();
 }
@@ -109,6 +117,9 @@ SdkCommandResult SdkCommandGate::readState(DualArmDeviceState & state)
 SdkCommandResult SdkCommandGate::initializePositionMode(
   int velocity_ratio, int acceleration_ratio)
 {
+  // Runtime recovery must not silently clear a drive fault or reinitialize it.
+  if (motion_control_pkg::execution::motionSafety())
+    return fail("startup initialization refused after motion monitor installation");
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
@@ -123,7 +134,7 @@ SdkCommandResult SdkCommandGate::initializePositionMode(
           "clear_left_servo_error" : "clear_right_servo_error");
       }
     }
-    if (!device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
       return fail("startup_clear_error_commit");
     }
   }
@@ -150,6 +161,9 @@ SdkCommandResult SdkCommandGate::initializePositionMode(
 SdkCommandResult SdkCommandGate::configureControlModes(
   const std::vector<ArmControlModeCommand> & commands)
 {
+  if (const auto safety=motion_control_pkg::execution::motionSafety(); safety && safety->latched())
+    return fail("control mode change refused while motion fault is latched");
+
   if (commands.empty()) {
     return fail("empty_control_mode_command");
   }
@@ -198,8 +212,11 @@ SdkCommandResult SdkCommandGate::configureControlModes(
   }
 
   std::lock_guard<std::mutex> transition_lock(mode_transition_mutex_);
+  const unsigned channels=(seen[0]?1U:0U)|(seen[1]?2U:0U);
 
   if (!has_impedance) {
+    ModeCommandFence fence(channels);
+    if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
       return fail("position_mode_begin");
@@ -219,14 +236,17 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_left_joint_limits" : "set_right_joint_limits");
       }
     }
-    if (!device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
       return fail("position_mode_commit");
     }
+    fence.complete();
     return SdkCommandResult::ok();
   }
 
   // 先写入工具参数并回读确认，再设置 K/D 和扭矩/阻抗模式。
   {
+    ModeCommandFence fence(channels);
+    if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
       return fail("tool_parameters_begin");
@@ -240,9 +260,10 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_left_tool_parameters" : "set_right_tool_parameters");
       }
     }
-    if (!device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
       return fail("tool_parameters_commit");
     }
+    fence.complete();
   }
 
   if (options_.tool_parameter_settle_time.count() > 0) {
@@ -256,6 +277,7 @@ SdkCommandResult SdkCommandGate::configureControlModes(
     DualArmDeviceState state;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (released_ || execution::shutdownRequested()) return fail("driver released or shutdown requested");
       if (!device_.readState(state)) {
         return fail("tool_parameters_readback");
       }
@@ -285,6 +307,8 @@ SdkCommandResult SdkCommandGate::configureControlModes(
   }
 
   {
+    ModeCommandFence fence(channels);
+    if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
       return fail("impedance_parameters_begin");
@@ -320,9 +344,10 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_right_cartesian_impedance_gains");
       }
     }
-    if (!device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
       return fail("impedance_parameters_commit");
     }
+    fence.complete();
   }
 
   if (options_.impedance_parameter_settle_time.count() > 0) {
@@ -330,6 +355,8 @@ SdkCommandResult SdkCommandGate::configureControlModes(
   }
 
   {
+    ModeCommandFence fence(channels);
+    if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
       return fail("impedance_mode_begin");
@@ -354,9 +381,10 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_left_impedance_type" : "set_right_impedance_type");
       }
     }
-    if (!device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
       return fail("impedance_mode_commit");
     }
+    fence.complete();
   }
 
   if (options_.impedance_mode_settle_time.count() > 0) {
@@ -392,6 +420,25 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
     return fail("right_arm_disabled_by_configuration");
   }
 
+  using namespace motion_control_pkg::execution;
+  const auto safety = motionSafety();
+  std::optional<MotionSafety::CommandPermit> permit;
+  std::vector<double> left_rad, right_rad;
+  constexpr double radians = 0.017453292519943295;
+  if (left_joints) for (double q:*left_joints) left_rad.push_back(q*radians);
+  if (right_joints) for (double q:*right_joints) right_rad.push_back(q*radians);
+  if (safety) {
+    std::string error;
+    permit.emplace(safety->command((left_joints?kLeftSafety:0U)|(right_joints?kRightSafety:0U),error));
+    if (!*permit) return SdkCommandResult::failure(error);
+    if ((left_joints && !permit->validate(kLeftSafety,left_rad)) ||
+        (right_joints && !permit->validate(kRightSafety,right_rad)))
+      return SdkCommandResult::failure("joint command rejected by motion safety");
+  }
+  const auto fail_motion = [&](const std::string& operation) {
+    if (permit) permit->failed(operation);
+    return fail(operation);
+  };
   std::lock_guard<std::mutex> lock(mutex_);
   const auto batch_start_time = std::chrono::steady_clock::now();
   const auto batch_start_timestamp_ms = std::chrono::duration_cast<
@@ -427,7 +474,7 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
         static_cast<long long>(failure_timestamp_ms),
         static_cast<long long>(begin_elapsed_us));
     }
-    return fail(
+    return fail_motion(
       "joint_command_begin; begin_elapsed_us=" +
       std::to_string(begin_elapsed_us) + "; since_last_commit_us=" +
       (has_last_joint_command_commit_time_ ?
@@ -436,12 +483,12 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
   if (left_joints &&
     !device_.setJointPosition(ArmChannel::kLeft, *left_joints))
   {
-    return fail("set_left_joint_position");
+    return fail_motion("set_left_joint_position");
   }
   if (right_joints &&
     !device_.setJointPosition(ArmChannel::kRight, *right_joints))
   {
-    return fail("set_right_joint_position");
+    return fail_motion("set_right_joint_position");
   }
   const bool commit_succeeded = device_.commitCommandBatch();
   const auto batch_end_time = std::chrono::steady_clock::now();
@@ -459,17 +506,18 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
   //   static_cast<long long>(batch_elapsed_us),
   //   commit_succeeded ? "true" : "false");
   if (!commit_succeeded) {
-    return fail("joint_command_commit");
+    return fail_motion("joint_command_commit");
+  }
+  if (permit) {
+    if ((left_joints && !permit->committed(kLeftSafety,left_rad)) ||
+        (right_joints && !permit->committed(kRightSafety,right_rad)))
+      return fail_motion("motion command history invalid");
   }
   last_joint_command_commit_time_ = batch_end_time;
   has_last_joint_command_commit_time_ = true;
   ++joint_command_batch_id_;
-  if (left_joints) {
-    printJoints(ArmChannel::kLeft, joint_command_batch_id_, *left_joints);
-  }
-  if (right_joints) {
-    printJoints(ArmChannel::kRight, joint_command_batch_id_, *right_joints);
-  }
+  // Do not flush stdout per trajectory point while holding the command fence.
+  // Bounded counters/timings are exposed by the motion safety diagnostic topic.
   return SdkCommandResult::ok();
 }
 
@@ -477,6 +525,7 @@ bool SdkCommandGate::beginCommandBatchWithRetry()
 {
   const auto deadline = std::chrono::steady_clock::now() + options_.clear_timeout;
   do {
+    if (released_ || execution::shutdownRequested()) return false;
     if (device_.beginCommandBatch()) {
       return true;
     }

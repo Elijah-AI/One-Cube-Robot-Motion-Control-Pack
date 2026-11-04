@@ -4,6 +4,12 @@
 
 ## 专题说明
 
+- [机器人源码同步与配套 SDK](ROBOT_SYNC_20261104.md)
+- [头部启动回零](HEAD_STARTUP_HOMING.md)
+- [腿腰和头部精确到位](PRECISION_ARRIVAL.md)
+- [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)
+- [全身 DH 参数](WHOLE_BODY_DH_PARAMETERS.md)
+
 - [全身运控与点云接口](MOTION_WBC_USAGE.md)
 - [20 关节实测反馈](MEASURED_JOINT_FEEDBACK.md)
 - [身体倾角与竖直升降](LEG_BODY_MOTION.md)

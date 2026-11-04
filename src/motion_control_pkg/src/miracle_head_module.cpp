@@ -1,3 +1,8 @@
+#include "motion_control_pkg/execution/latest_progress.hpp"
+#include "motion_control_pkg/execution/precision_parameters.hpp"
+#include "motion_control_pkg/motion/precision_approach.hpp"
+#include "motion_control_pkg/execution/motion_safety.hpp"
+#include "motion_control_pkg/execution/ethercat_trajectory.hpp"
 #include "motion_control_pkg/motion/scoped_collision_scene.hpp"
 /*
 #####################################################################################
@@ -71,6 +76,7 @@ namespace miracle {
         if (!node_ptr) {
             return;
         }
+        precision_policy_ = motion_control_pkg::execution::precisionParameters(*node_ptr, "head_precision");
         // function init
         // m_function_map["get_follow_trajectory_status"] = std::bind(&MiracleHeadModule::_getFollowTrajectoryState, this, std::placeholders::_1);
         // m_function_map["set_head_joint_angles"] = std::bind(&MiracleHeadModule::__setJointAngles, this, std::placeholders::_1);
@@ -225,10 +231,15 @@ namespace miracle {
             return;
         }
 
-        joint_state_msg_.header.stamp = node_ptr->get_clock()->now();
-        joint_state_msg_.position = m_joints_cur_pos;
-        joint_state_msg_.velocity = m_joints_cur_speed;
-        joint_state_msg_.effort = m_joints_cur_current;
+        motion_control_pkg::execution::JointCompletionFeedback measured;
+        std::string error;
+        if (!motion_control_pkg::execution::readEthercatChainFeedback(m_bus_manager,m_jointID,measured,error))return;
+        const auto age=std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now()-measured.acquired).count();
+        joint_state_msg_.header.stamp = node_ptr->now()-rclcpp::Duration::from_nanoseconds(age);
+        joint_state_msg_.position = measured.position;
+        joint_state_msg_.velocity = measured.velocity;
+        joint_state_msg_.effort.clear();
         joint_state_pub_->publish(joint_state_msg_);
     }
 
@@ -238,7 +249,7 @@ namespace miracle {
         int loop_cnt2 = 0;
         while(!m_recv_thread_stop) {
 
-            getJointPosAndVel(m_joints_cur_pos, m_joints_cur_speed, m_module_status);
+            if (!getJointPosAndVel(m_joints_cur_pos, m_joints_cur_speed, m_module_status)) { usleep(TRAJ_CYCLE_US); continue; }
             // m_module_status[HEAD_STATUS_WORK_STATE] = 0;
     
             // RCLCPP_INFO(rclcpp::get_logger("head module"),"%s angle: %f:%f:%f:%f", m_module_name, m_joints_cur_pos[0], m_joints_cur_pos[1], m_joints_cur_pos[2],
@@ -278,11 +289,23 @@ namespace miracle {
     bool MiracleHeadModule::getJointPosAndVel(std::vector<double> &actu_pos, std::vector<double> &actu_vel, std::vector<uint64_t> &error_code) {
         
         std::vector<DriverSDK::motorActualStruct> status_data;
-        if (!m_bus_manager || !m_bus_manager->getMotorActualSnapshot(status_data)) {
-            RCLCPP_WARN(rclcpp::get_logger("head_module")," %s: status_data is empty!", m_module_name);
+        std::chrono::steady_clock::time_point acquired;
+        std::uint64_t sequence=0;
+        if (!m_bus_manager || !m_bus_manager->getTimedMotorActualSnapshot(status_data,acquired,sequence) ||
+            sequence==0 || acquired>std::chrono::steady_clock::now() ||
+            std::chrono::steady_clock::now()-acquired>=std::chrono::milliseconds(100)) {
+            static rclcpp::Clock feedback_log_clock(RCL_STEADY_TIME);
+            RCLCPP_WARN_THROTTLE(rclcpp::get_logger("head_module"),feedback_log_clock,2000,
+                "%s: timestamped EtherCAT feedback unavailable or stale",m_module_name);
             return false;
         }
 
+        for (auto id:m_jointID) {
+            if (id>=status_data.size())return false;
+            const auto& m=status_data[id];
+            if (!std::isfinite(m.pos)||!std::isfinite(m.vel)||
+                !motion_control_pkg::sdk::ethercatFeedbackValid(m))return false;
+        }
         try {
             for(size_t i = 0; i < actu_pos.size(); i++) {
 
@@ -322,6 +345,7 @@ namespace miracle {
         }
         catch (const std::exception &e) {
             RCLCPP_ERROR(rclcpp::get_logger("head_module"),"%s %s get motor data error %s", m_module_name, __func__, e.what());
+            return false;
         }
 
         
@@ -423,6 +447,7 @@ namespace miracle {
 
     void MiracleHeadModule::execution_loop_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle)
     {
+        const auto action_started_at = std::chrono::steady_clock::now();
         const auto goal = goal_handle->get_goal();
         auto feedback = std::make_shared<MoveJoints::Feedback>();
         auto result = std::make_shared<MoveJoints::Result>();
@@ -479,23 +504,6 @@ namespace miracle {
         //     max_acc *= 1.5; 未停止直接重新规划时用
         //     max_jerk *= 1.5;
         // } else {
-        bool pos_same = true;
-        for (int i = 0; i < HEAD_JOINTNUM; i++) {
-            if (abs(angles[i] - m_joints_cur_pos[i]) > JOINT_THRESHOLD) {
-                pos_same = false;
-                break;
-            }
-        }
-        if (pos_same) {
-            RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s %s %f from [%f,%f] to [%f,%f] almost same", m_module_name, __func__, motion_rate, m_joints_cur_pos[0], m_joints_cur_pos[1],
-                    angles[0], angles[1]);
-            result->success = ACTION_SUCCESS;
-            result->error_message = "joint angles already at target";
-            goal_handle->succeed(result);
-            is_executing_head_.store(false);  
-            return;
-        }
-
         if (!m_bus_manager || !m_bus_manager->enableMotors(m_jointID)) {
             RCLCPP_ERROR(rclcpp::get_logger("head_module"),
                          "%s refused to start: motor enable safety check failed", m_module_name);
@@ -519,23 +527,57 @@ namespace miracle {
             std::vector<std::vector<double>> traj_vel_new;
             std::vector<std::vector<double>> traj_acc_new;
 
-            int all_point_ok = m_galgo->computeMoveJTrajectory<HEAD_JOINTNUM>(ID_HEAD, plan_dt, max_velocity, max_acc, max_jerk, joint_cur_pos, joint_cur_vel,
-                                                               joint_cur_acc, angles, traj_pos_new, traj_vel_new, traj_acc_new);
+            motion_control_pkg::execution::JointCompletionFeedback measured;
+            std::string measured_error;
+            if (!motion_control_pkg::execution::readEthercatChainFeedback(m_bus_manager, m_jointID, measured, measured_error))
+                throw std::runtime_error(measured_error);
+            if (std::any_of(measured.velocity.begin(), measured.velocity.end(), [](double v) {
+                    return std::abs(v) > motion_control_pkg::execution::kGoalVelocityToleranceRadSec; }))
+                throw std::runtime_error("Joint chain must be stationary before MoveJ");
+            joint_cur_pos = measured.position;
+            joint_cur_vel.assign(joint_cur_pos.size(), 0.0);
+            joint_cur_acc.assign(joint_cur_pos.size(), 0.0);
+            motion_control_pkg::motion::PrecisionApproach approach;
+            std::string precision_error;
+            const bool precision_ok = motion_control_pkg::motion::planPrecisionApproach(
+                joint_cur_pos, angles, precision_policy_,
+                [&](const auto& from, const auto& to, bool slow, auto& p, auto& v, auto& a, std::string& error) {
+                    const double scale = slow ? precision_policy_.speed_scale : 1.0;
+                    const int code = m_galgo->computeMoveJTrajectory<HEAD_JOINTNUM>(ID_HEAD, plan_dt,
+                        slow ? std::min(max_velocity*scale,precision_policy_.velocity_cap) : max_velocity,
+                        slow ? std::min(max_acc*scale,precision_policy_.acceleration_cap) : max_acc,
+                        slow ? std::min(max_jerk*scale,precision_policy_.jerk_cap) : max_jerk,
+                        from, std::vector<double>(from.size(),0.0), std::vector<double>(from.size(),0.0),
+                        to, p, v, a, motion_rate*scale);
+                    if (code != 0) error = "precision Ruckig planning failed: " + std::to_string(code);
+                    return code == 0;
+                }, approach, precision_error);
+            if (!precision_ok) throw std::runtime_error(precision_error);
+            precision_gate_ = approach.gate;
+            traj_pos_new = std::move(approach.positions);
+            traj_vel_new = std::move(approach.velocities);
+            traj_acc_new = std::move(approach.accelerations);
+            std::vector<double> urdf_velocity;
+            if (!m_galgo->getChainVelocityLimits(ID_HEAD, urdf_velocity))
+                throw std::runtime_error("cannot validate precision trajectory velocity limits");
+            for (auto& v : urdf_velocity) v=std::min(v*motion_rate,max_velocity);
+            if (!motion_control_pkg::motion::validateCommandDerivatives(traj_pos_new,plan_dt,urdf_velocity,
+                    std::vector<double>(HEAD_JOINTNUM,max_acc),std::vector<double>(HEAD_JOINTNUM,max_jerk),precision_error))
+                throw std::runtime_error(precision_error);
+            RCLCPP_INFO(rclcpp::get_logger("head_precision"),
+                "MoveJ precision: goal_tolerance=%.6f rad, slow_suffix=%d, samples=%zu, planned_motion=%.3f s",
+                precision_policy_.completion.position_tolerance,
+                precision_gate_ != motion_control_pkg::motion::kNoApproachGate, traj_pos_new.size(),
+                (traj_pos_new.size()-1)*plan_dt);
 
-            if (0 != all_point_ok) {
-                RCLCPP_ERROR(rclcpp::get_logger("head_module"),"%s %s Error %d for movej", m_module_name, __func__, all_point_ok);
-                result->success = ACTION_FAIL;
-                result->error_message = "head joint trajectory failed, error:" + std::to_string(all_point_ok);
-                goal_handle->abort(result);
-                is_executing_head_.store(false);  
-                return;
-            }
+
+
 
             motion_control_pkg::motion::checkChainCollision(*m_galgo, goal->enable_collision_check, ID_HEAD, traj_pos_new);
             m_traj_pos = traj_pos_new;
             m_traj_vel = traj_vel_new;
             m_traj_acc = traj_acc_new;
-            followTrajectoryHandle(goal_handle);
+            followTrajectoryHandle(goal_handle, action_started_at);
 
         } catch (const std::exception &e) {
             RCLCPP_ERROR(rclcpp::get_logger("head_module"),"%s format %s err:%s", m_module_name, __func__, e.what());
@@ -550,94 +592,70 @@ namespace miracle {
 
     }
 
-    void MiracleHeadModule::followTrajectoryHandle(std::shared_ptr<GoalHandleMoveJoints> goal_handle) {
-
-        // const auto goal = goal_handle->get_goal();
-        auto feedback = std::make_shared<MoveJoints::Feedback>();
+    void MiracleHeadModule::followTrajectoryHandle(std::shared_ptr<GoalHandleMoveJoints> goal_handle,
+        const std::chrono::steady_clock::time_point& action_started_at) {
+        using namespace motion_control_pkg::execution;
         auto result = std::make_shared<MoveJoints::Result>();
-
-        // pthread_mutex_lock(&m_traj_mutex);
-        m_traj_point_index = 0;
-        m_traj_point_cnt = m_traj_pos.size();
-        int loop_counter = 0;
-        // pthread_mutex_unlock(&m_traj_mutex);
-        RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s +%s total_cnt %d", m_module_name, __func__, m_traj_point_cnt);
-        while (m_traj_point_index < m_traj_point_cnt) {
-            if (goal_handle->is_canceling()) {
-                // ... 急停操作 ...
-                result->success = ACTION_FAIL;
-                result->error_message = " Goal canceled by client";
-                goal_handle->canceled(result);
-                RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s Goal canceled by client.", m_module_name);
-                // 结束执行前，释放繁忙标记
-                is_executing_head_.store(false);
-                return;
+        MotionSafetyScope safety_scope(8U);
+        auto feedback = std::make_shared<MoveJoints::Feedback>();
+        const auto goal = goal_handle->get_goal();
+        const auto started = JointCompletionGuard::Clock::now();
+        const auto deadline = action_started_at + std::chrono::milliseconds(goal->timeout_ms);
+        const auto check = [&](std::string& error) {
+            if (goal_handle->is_canceling()) { error = "head trajectory canceled"; return false; }
+            if (!rclcpp::ok()) { error = "ROS shutdown during head trajectory"; return false; }
+            if (goal->timeout_ms <= 0 || JointCompletionGuard::Clock::now() >= deadline) {
+                error = "head trajectory timeout"; return false;
             }
-            for (int i = 0; i < HEAD_JOINTNUM; i++) {
-                m_traj_buffer_pos[i] = float(m_traj_pos[m_traj_point_index][i]);
+            return true;
+        };
+        const auto publish = [&](float progress) {
+            feedback->progress_rate = progress;
+            feedback->dual_task_status = progress < 95 ? MoveJoints::Feedback::STATUS_EXECUTING :
+                MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION;
+            feedback->task_status = progress < 95 ? "executing" : "waiting for measured settling";
+            feedback->current_step_info = feedback->task_status;
+            if (auto node = lockNode(__func__)) feedback->header.stamp = node->now();
+            goal_handle->publish_feedback(feedback);
+        };
+        {
+            LatestProgressPublisher progress(publish);
+            const auto progress_check = [&](std::string& error) {
+                if (!check(error)) return false;
+                if (progress.failed()) {error=progress.error();return false;}
+                return true;
+            };
+            try {
+                result->success = executeEthercatTrajectory(m_traj_pos, m_bus_manager, m_jointID,
+                    [&](const std::vector<double>& q) { return setMulJointPos(q, m_jointID); },
+                    progress_check, [&](float value){progress.update(value);}, deadline, result->final_distance_error, result->error_message, precision_policy_, precision_gate_);
+            } catch (const std::exception& e) {
+                result->error_message=e.what();
+                safety_scope.finish(false,result->error_message);
+                progress.stop();throw std::runtime_error(result->error_message);
+            } catch (...) {
+                result->error_message="unknown precision trajectory execution exception";
+                safety_scope.finish(false,result->error_message);
+                progress.stop();throw std::runtime_error(result->error_message);
             }
-
-            m_traj_point_index++;
-
-            RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s %d:%d, check:[%f:%f] cur[%f:%f]", m_module_name, m_traj_point_index, m_traj_point_cnt,
-                        m_traj_buffer_pos[0], m_traj_buffer_pos[1], m_joints_cur_pos[0], m_joints_cur_pos[1]);
-
-            if (!setMulJointPos(m_traj_buffer_pos, m_jointID)) {
-                result->success = ACTION_FAIL;
-                result->error_message = "head motor command rejected";
-                goal_handle->abort(result);
-                is_executing_head_.store(false);
-                return;
-            }
-            
-            //限流反馈
-            if (loop_counter % 100 == 0) {
-                feedback->task_status  = 1;
-                feedback->progress_rate = static_cast<float>(m_traj_point_index)/m_traj_point_cnt * 100.0;
-
-                feedback->current_step_info = "joint command";
-                if (auto node_ptr = lockNode(__func__)) {
-                    feedback->header.stamp = node_ptr->get_clock()->now();
-                }
-                goal_handle->publish_feedback(feedback);
-            }
-            loop_counter++;
-
-            usleep(TRAJ_CYCLE_US);   //按ethercat周期发送
-        }
-
-        double final_error = 0.0;//std::numeric_limits<double>::infinity();
-        std::vector<DriverSDK::motorActualStruct> actual_data;
-        if (m_bus_manager && m_bus_manager->getMotorActualSnapshot(actual_data)) {
-            for (int i = 0; i < HEAD_JOINTNUM; ++i) {
-                const auto &actual = actual_data[m_jointID[i]];
-                final_error = std::max(
-                    final_error,
-                    std::abs(static_cast<double>(m_traj_buffer_pos[i]) - actual.pos));
-            }
-        } else {
-            for (int i = 0; i < HEAD_JOINTNUM; ++i) {
-                final_error = std::max(
-                    final_error,
-                    std::abs(static_cast<double>(m_traj_buffer_pos[i]) - m_joints_cur_pos[i]));
+            // Fence/confirm a failed motion before waiting for observer I/O.
+            if (!result->success) safety_scope.finish(false,result->error_message);
+            progress.stop();
+            if (progress.failed() && result->success) {
+                result->success=false;result->error_message=progress.error();
             }
         }
-        result->final_distance_error = final_error;
-        if (final_error > JOINT_REACH_THRESHOLD) {
-            result->success = ACTION_FAIL;
-            result->error_message = "head failed to reach final position";
-            goal_handle->abort(result);
-        } else {
-            result->success = ACTION_SUCCESS;
-            result->error_message = "head reached target";
-            goal_handle->succeed(result);
-        }
-
-        // 正常结束，恢复空闲状态
+        result->execution_time = std::chrono::duration<double>(JointCompletionGuard::Clock::now() - action_started_at).count();
+        result->timing_breakdown_valid = true;
+        result->ik_time = 0.0;
+        result->planning_time = std::chrono::duration<double>(started - action_started_at).count();
+        result->motion_time = std::chrono::duration<double>(JointCompletionGuard::Clock::now() - started).count();
+        result->success = safety_scope.finish(result->success && !goal_handle->is_canceling(), result->error_message);
+        if (goal_handle->is_canceling()) goal_handle->canceled(result);
+        else if (result->success) { publish(100.0F); goal_handle->succeed(result); }
+        else goal_handle->abort(result);
         is_executing_head_.store(false);
-        RCLCPP_INFO(rclcpp::get_logger("head_module"),"%s -%s %d", m_module_name, __func__, m_traj_point_index);
     }
-
 
     // bool MiracleHeadModule::isRunMode(CallbackResult &r) {
     //     if (!m_bus_manager) { // || isMotorError()) !m_inited || 

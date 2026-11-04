@@ -122,13 +122,20 @@ inline CartesianLineSampleError evaluateCartesianLineSample(
 
   const Eigen::Vector3d delta = goal.translation() - start.translation();
   const double squared_distance = delta.squaredNorm();
-  if (!std::isfinite(squared_distance) || squared_distance <= 1.0e-12) {
-    result.error_message = "Cartesian line translation is too short to validate";
+  if (!std::isfinite(squared_distance)) {
+    result.error_message = "Cartesian line distance is not finite";
     return result;
   }
-
-  result.progress =
-    (sample.translation() - start.translation()).dot(delta) / squared_distance;
+  if (squared_distance > 1.0e-12) {
+    result.progress = (sample.translation() - start.translation()).dot(delta) / squared_distance;
+  } else {
+    // A pure rotation still has a signed path coordinate. Projection on the
+    // shortest rotation axis detects backwards motion and wrong-axis rotations.
+    const Eigen::AngleAxisd total(start.rotation().transpose() * goal.rotation());
+    const Eigen::AngleAxisd actual(start.rotation().transpose() * sample.rotation());
+    result.progress = total.angle() > 1.0e-10 ?
+        actual.angle() * actual.axis().dot(total.axis()) / total.angle() : 0.0;
+  }
   const double clamped_progress = std::clamp(result.progress, 0.0, 1.0);
   const Eigen::Vector3d expected_translation =
     start.translation() + clamped_progress * delta;

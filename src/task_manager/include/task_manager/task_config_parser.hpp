@@ -75,6 +75,8 @@ struct MovePoseParam
   std::vector<std::vector<double>> via_poses; ///< 连续 MoveP 中间 TCP 位姿 [x,y,z,qx,qy,qz,qw]
   bool enable_move_line;                  ///< 是否启用笛卡尔直线运动
   bool whole_body_waist_only{false};       ///< 全身 MoveP 仅使用腰部 J4 和所选手臂
+  bool keep_tcp_level{false};             ///< 仅 WBC arm_id=5/6/7 可开启腿腰运动中的 TCP 水平补偿
+  double tcp_level_tolerance_rad{0.02};    ///< 水平倾角容差，rad
   float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
   float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1
@@ -174,6 +176,8 @@ struct MoveJointsParam
   /// @}
   uint8_t enable_collision_check{0};            ///< 是否启用碰撞检测
   float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
+  bool keep_tcp_level{false};             ///< MoveJoints 不支持该约束，必须保持 false
+  double tcp_level_tolerance_rad{0.02};
   float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1
   int64_t timeout_ms;                     ///< 操作超时时间 (毫秒)，默认 5000ms

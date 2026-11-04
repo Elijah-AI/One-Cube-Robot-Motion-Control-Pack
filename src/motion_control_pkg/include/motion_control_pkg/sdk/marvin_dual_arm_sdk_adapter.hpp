@@ -20,8 +20,11 @@ public:
   bool release() override;
   void disableLogging() override;
   bool readState(DualArmDeviceState & state) override;
+  bool emergencyStop(bool left, bool right) override;
+  bool readServoError(ArmChannel channel, std::size_t joint, long& error) override;
   bool beginCommandBatch() override;
   bool clearServoError(ArmChannel channel) override;
+  bool setServoOff(ArmChannel channel) override;
   bool setPositionMode(ArmChannel channel) override;
   bool setTorqueMode(ArmChannel channel) override;
   bool setJointLimits(

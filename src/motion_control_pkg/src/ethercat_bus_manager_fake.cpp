@@ -1,3 +1,4 @@
+#include "motion_control_pkg/execution/ethercat_command_safety.hpp"
 #include "ethercat_bus_manager.hpp"
 
 #include <algorithm>
@@ -5,6 +6,10 @@
 #include "rclcpp/rclcpp.hpp"
 
 namespace miracle {
+
+bool EthercatBusManager::beginHeadPitchStartupRecovery(
+    double, double, double, std::string&) { return true; }
+void EthercatBusManager::endHeadPitchStartupRecovery() noexcept {}
 
 namespace {
 
@@ -116,6 +121,9 @@ bool EthercatBusManager::getTimedMotorActualSnapshot(
 
 bool EthercatBusManager::enableMotors(const std::vector<uint16_t> &motor_ids, double timeout_seconds)
 {
+    if (const auto safety=motion_control_pkg::execution::motionSafety(); safety && safety->latched())
+        return false;
+
     if (!ready_ || motor_ids.empty() || timeout_seconds <= 0.0) {
         return false;
     }
@@ -123,6 +131,14 @@ bool EthercatBusManager::enableMotors(const std::vector<uint16_t> &motor_ids, do
     std::lock_guard<std::mutex> enable_lock(enable_mutex_);
     std::lock_guard<std::mutex> target_lock(target_mutex_);
     std::lock_guard<std::mutex> actual_lock(actual_mutex_);
+
+    if (motion_control_pkg::execution::motionSafety()) {
+        // Match the real manager: runtime calls may confirm readiness but may
+        // not automatically restore enable state after a drive fault.
+        return std::all_of(motor_ids.begin(),motor_ids.end(),[&](auto id){
+            return id<motor_enable_ready_.size() && motor_enable_ready_[id];
+        });
+    }
 
     for (uint16_t motor_id : motor_ids) {
         if (motor_id >= motor_target_buffer_.size() ||
@@ -151,14 +167,17 @@ bool EthercatBusManager::updateMotorTargets(
     const std::vector<uint16_t> &motor_ids,
     const std::vector<DriverSDK::motorTargetStruct> &motor_target_data)
 {
+    motion_control_pkg::execution::EthercatCommandSafety safety(motor_ids,motor_target_data);
+    if (!safety) return false;
+
     if (!ready_ || motor_ids.size() != motor_target_data.size()) {
-        return false;
+        safety.failed(); return false;
     }
 
     std::lock_guard<std::mutex> target_lock(target_mutex_);
     std::lock_guard<std::mutex> actual_lock(actual_mutex_);
     if (motor_target_buffer_.empty()) {
-        return false;
+        safety.failed(); return false;
     }
 
     for (size_t i = 0; i < motor_ids.size(); ++i) {
@@ -167,7 +186,7 @@ bool EthercatBusManager::updateMotorTargets(
             std::find(active_motors_.begin(), active_motors_.end(), motor_id) == active_motors_.end() ||
             (motor_target_data[i].enabled != 0 && motor_target_data[i].enabled != 1) ||
             (motor_target_data[i].enabled == 1 && !motor_enable_ready_[motor_id])) {
-            return false;
+            safety.failed(); return false;
         }
     }
 
@@ -187,7 +206,7 @@ bool EthercatBusManager::updateMotorTargets(
         }
     }
 
-    return true;
+    return safety.committed();
 }
 
 void EthercatBusManager::disableAll()
@@ -209,3 +228,12 @@ void EthercatBusManager::disableAll()
 }
 
 }  // namespace miracle
+
+namespace miracle {
+bool EthercatBusManager::requestShutdownDisable(std::string& error) {
+    error="physical shutdown confirmation unavailable with pseudo driver"; return false;
+}
+bool EthercatBusManager::releaseAfterShutdown(std::string& error) {
+    error="physical shutdown confirmation unavailable with pseudo driver"; return false;
+}
+}

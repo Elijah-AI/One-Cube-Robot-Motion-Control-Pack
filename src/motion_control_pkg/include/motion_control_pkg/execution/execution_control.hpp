@@ -52,6 +52,8 @@ public:
     return std::chrono::duration<double>(deadline_ - std::chrono::steady_clock::now()).count();
   }
 
+  std::chrono::steady_clock::time_point timePoint() const noexcept { return deadline_; }
+
   bool expired() const noexcept
   {
     return std::chrono::steady_clock::now() >= deadline_;

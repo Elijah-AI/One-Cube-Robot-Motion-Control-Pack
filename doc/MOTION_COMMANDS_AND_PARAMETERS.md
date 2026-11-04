@@ -1,8 +1,26 @@
 # ylf_wbc 运控指令与参数完整说明
 
-更新日期：2026-10-08。范围：本仓库 `src/motion_control_pkg` 的实际 ROS 入口、`com_interfaces` 的运控 Action、对应的任务 YAML 适配和只读 WBC observer。本文与本次源码一起提交；运行机器必须使用同版本接口与二进制。源码、配置上传不代表机器人已部署、重启或完成实机验收。
+
+
+ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
+
+更新日期：2026-11-04。范围：当前本地 `ylf_wbc/src/motion_control_pkg` 的实际 ROS 入口、`com_interfaces` 的运控 Action、对应的任务 YAML 适配和只读 WBC observer。运行机器必须使用同版本接口与二进制；本文区分本地源码默认值与 本次核对的 x86 `it@192.168.10.18:/home/it/ylf_wbc` 源码与配置；每次上传、编译、安装、重启和实机验收仍须分别核对，不能由文档日期推定运行版本。
+
+本次更新重点：
+
+- [手臂与身体跟踪误差保护开关](#65-手臂与身体跟踪误差保护开关)：`arm_error`、`body_error` 独立配置，启动均默认关闭；单纯跟踪超限后等待静止及旧线程退出，再解除拦截。
+- [六轴开机清错与 x86 安装](#24-六轴开机清错与-x86-安装)：启动清错由 27–30 扩展为 27–32，补入两个头部从站；仅在 OP/PDO 稳定后复位，再保持去使能等待正常使能。
+- [身体运动的反馈快照](#111-身体运动反馈快照与采样前进)：身体倾角、升降读取仍新鲜的同一设备帧时，不再消耗 WBC 发布者的采样前进记录；设备采集时间与停止/到位的新帧要求保持有效。
+- [4 ms 控制与进度发布隔离](#113-4-ms-控制与进度发布隔离)：发送循环只保存最新进度，独立 100 ms 定时线程发布；补充周期超时诊断及其他发布路径核查。
+
+
+- [WBC 双臂 TCP 全程保持水平](#45-wbc-双臂-tcp-全程保持水平)：MovePose `arm_id=7`、`keep_tcp_level=true`，腿腰运动时双臂同步补偿；默认关闭，倾角容差默认 0.02 rad。包含直接 Action 和任务 YAML 示例。
+- [腰腿和头部 0.002 rad 精定位](#35-腰腿和头部精定位)：普通 MoveJ 默认低速接近原始目标，以新鲜实测反馈确认到位；WBC 腰腿使用同一精定位判据，保留全身同步轨迹。双臂关节到位容差仍为 0.01 rad。
+- 头部启动回零：默认低速回到 `[0,0]`，启动恢复专用 pitch 下界为 -0.7 rad；正常运动仍使用 URDF 限位，见第 2.2、8.6 节。
 
 ## 目录
+
+本次同步范围为机器人上的 `com_interfaces`、`motion_control_pkg`、`onecube_robot_description` 及配套 x86 DriverSDK；不包含本地尚未部署的独立 LEG TCP 水平补偿扩展。
 
 1. [指令总览与单位](#1-指令总览与单位)
 2. [编译、启动与生效配置](#2-编译启动与生效配置)
@@ -29,6 +47,11 @@
 | 夹爪 | `/Control/control_gripper` | `com_interfaces/action/ControlGripper` | 左/右/双夹爪 |
 | 吸盘 | `/Control/control_suck` | `com_interfaces/action/ControlSuck` | 左/右/双吸盘 GPIO |
 | 取消运动 | 上述运动 Action 的 `/_action/cancel_goal` | `action_msgs/srv/CancelGoal` | 软件取消；工具 Action 当前拒绝取消 |
+| 软件停止 | `/Control/stop_motion` | `std_srvs/srv/Trigger` | 锁存软件故障，拦截后续运动指令；停止确认异步进行 |
+| 手臂跟踪误差开关 | `/Control/arm_error` | `rcl_interfaces/srv/SetParametersAtomically` | 双臂共用，默认关闭；由 `arm_error` 原子配置 rad 限制，见第 6.5 节 |
+| 身体跟踪误差开关 | `/Control/body_error` | `rcl_interfaces/srv/SetParametersAtomically` | 腿、腰、头共用，默认关闭；由 `body_error` 原子配置 rad 限制，见第 6.5 节 |
+| 清除软件运动故障 | `/Control/reset_motion_fault` | `std_srvs/srv/Trigger` | 资源释放、反馈健康且静止确认后清除软件锁存，不清驱动故障、不使能或自动恢复运动 |
+| 在线驱动急停 / 清错 | `/Control/drive_control` | `com_interfaces/srv/DriveControl` | 天机左/右/双臂及 EtherCAT 腿/腰四轴；独立报告调用与反馈确认，保持停止、不自动使能 |
 | 只读观察 | `wbc_model_node` / `wbc_model.launch.py` | 话题 | 计算 COM、支撑区域、反馈有效性，不下发运动 |
 
 `MoveP`、`MoveL` 不是独立的 ROS Action 名。仓库存在 `HardwareCheck`、`HardwareReset`、`AdjustBasePose`、`PickAndPlace` 等接口文件，但它们不等于当前运控主节点提供相应服务；实际服务以 `ros2 action list -t` 和服务端实现为准。底盘行驶、硬件急停、通用清故障/复位不属于上述四个入口。
@@ -50,6 +73,36 @@
 
 目标是工具 TCP，工具变换是法兰/模型末端到 TCP 的变换。目标 `PoseStamped.header.frame_id` 必须明确，通常为 `base_link`；手臂/全身的其他坐标系必须存在于加载的 URDF 模型中，转换使用当前状态的模型 FK，不能仅发布一个任意 TF 就认为可用。Action 顶层 `header.frame_id` 不能代替各目标 PoseStamped 的 frame。
 
+双臂安装外参、`body_link` 到 J1 的关系及 DH 约定见[全身 DH 报告第 3.1 节](WHOLE_BODY_DH_PARAMETERS.md#31-肩部安装变换)。沿用当前七轴模型时，安装标定使用 `body_link` 到 `arm-l-base_link/arm-r-base_link` 的固定变换；安装基座到 J1 的 0.1745 m 已包含在臂内 DH 中。
+
+### 1.1 功能与参数速查
+
+以下“默认”指接口或源码默认值；运行配置可以覆盖节点参数。速度、目标和超时应显式提供，消息初始化值不一定是有效请求。
+
+| 功能 | 配置入口 | 当前支持范围及限制 |
+|---|---|---|
+| WBC 全程末端水平 | `keep_tcp_level=false` | 默认关闭；仅 MovePose 5/6/7 可设 true。TCP XY 相对固定且水平的 base_link 保持水平，允许竖直轴转向，禁止翻面 |
+| 水平容差 | `tcp_level_tolerance_rad=0.02` | 单位 rad，有效范围 `[0.0001,0.1]`；约束最终 4 ms 指令点、点间插值及实测姿态 |
+| WBC 腿腰补偿 | MovePose `arm_id=5/6/7` + 水平约束 | 腿腰与手臂使用联合时间参数化；5/6 约束对应单臂，7 约束双臂 |
+| 仅腰参与 WBC | `whole_body_waist_only=false` | 设 true 时冻结腿 J1/J2/J3，只允许 WBC MoveP |
+| 笛卡尔直线 | `enable_move_line=false` | 设 true 为 MoveL；支持单臂、双臂、WBC，也覆盖原地改变姿态 |
+| 连续经过点 | `via_poses=[]` | 仅单臂配置位姿 MoveP，最多 64 点，中间点不要求停稳 |
+| 双臂同步 | `synchronization_mode=0` | 同时开始和结束；值 1 虽有枚举但被拒绝 |
+| 碰撞检查 | `enable_collision_check=0` | 1 自碰撞；2 自碰撞及环境点云；碰撞检查不等于每条路由都能自动绕障 |
+| 目标位置偏移 | `bound_size` 及左右版本 | 在规划坐标系直接叠加 XYZ，实际未用作碰撞包络 |
+| 速度及平滑程度 | `speed`、`acceleration_scale`、`jerk_scale` | speed `(0,1]`；后两者 `[0,1]`，0 沿用倍率 1，非零仅手臂 0/1/2 |
+| 位置/阻抗模式 | `control_mode=0` | 1 对应手臂 MoveJ 关节阻抗、MoveP/MoveL 笛卡尔阻抗；须关闭水平约束，普通任务 YAML 不转发此字段 |
+| 腿部定身体朝向 | LEG 两关节目标 | 第三腿关节补偿，保持身体起始朝向与腰角；身体位置可变 |
+| 身体倾角/升降 | `leg_motion_mode=1/2/3` | 分别为绝对倾角、相对高度、绝对高度；独立腿部动作不支持 keep_tcp_level |
+| 腰部相对旋转 | YAML `relative_position=false` | 设 true 仅用于 LEG 的单个 body_joint 简写，由任务层扩为四关节目标 |
+| 腰腿/头部精定位 | `leg_precision.*`、`head_precision.*` | 启动参数，默认最终误差 ≤0.002 rad、连续稳定 200 ms；普通 MoveJ 有低速接近段，见第 3.5、8.5 节 |
+| 头部启动回零 | `head_startup_home.enabled=true` | 一次启动回零；pitch 恢复下界 -0.7 rad，普通限位不变；期间阻止其他运动/工具任务 |
+| COM/ZMP 支撑约束 | `wbc_static_com_enabled`、`wbc_dynamic_zmp_enabled` | 节点参数，均默认 false；动态依赖静态以及完整有效状态，独立于几何碰撞开关 |
+| 视觉位姿目标及偏移 | YAML `use_config_pose`、`vision_*` | 视觉缓存、基准系/视觉局部平移、旋转、目标向下、保持当前 TCP 高度 |
+| 动作编排与恢复 | YAML `parallel_actions`、`move_compound`、结果分支等 | 任务层功能，详见第 10 节；仍受底层资源和运动约束限制 |
+
+WBC 启用水平约束时，要求起点已水平、目标与水平兼容。单独 LEG 动作不支持该约束，也不会自动扩成全身动作；需要手臂补偿时应使用 WBC。`force_vertical_down` 仅生成目标姿态；全程约束需在 WBC 动作中显式设置 `keep_tcp_level: true`。
+
 ## 2. 编译、启动与生效配置
 
 ### 2.1 编译与接口版本
@@ -65,9 +118,9 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build \
 source install/setup.bash
 ```
 
-ARM64 驱动及 NPU 视觉依赖应在相应平台准备。x86 运控 CMake 选择 pseudo EtherCAT 后端，但双臂 SDK 仍有实际连接逻辑，不能据此随意启动运控。只读 observer 使用下述独立入口。
+ARM64 驱动及 NPU 视觉依赖应在相应平台准备。x86 可显式设置 `ONECUBE_USE_REAL_DRIVER_SDK=ON` 并指定配套 DriverSDK；未匹配真实驱动时可能使用 pseudo EtherCAT 后端。双臂 SDK 仍有实际连接逻辑，不能据此随意启动运控。只读 observer 使用下述独立入口。
 
-`MoveJoints.action` 含身体运动新字段，须按 `com_interfaces → motion_control_pkg → task_manager` 重建并安装消费者。不同接口版本不可混用。本地逐包 CMake 安装可使用仓库根 [setup_local.bash](../setup_local.bash)，标准 colcon 安装使用 `install/setup.bash`。检查安装前缀：
+`MoveJoints.action` 含身体运动字段，`MoveJoints.action` / `MovePose.action` 均含 `keep_tcp_level` 和 `tcp_level_tolerance_rad`，须按 `com_interfaces → motion_control_pkg → task_manager` 重建并安装消费者。不同接口版本不可混用。0.002 rad 精定位使用节点启动参数，无需向 Action 添加精度字段。本地逐包 CMake 安装可使用仓库根 [setup_local.bash](../setup_local.bash)，标准 colcon 安装使用 `install/setup.bash`。检查安装前缀：
 
 ```bash
 ros2 pkg prefix com_interfaces
@@ -100,6 +153,8 @@ launch 固定读取 **`/opt/onecube/motion_control/config/motion_control_config.
 
 URDF 来自安装的 `onecube_robot_description/urdf/onecube_robot_description.urdf`；Marvin 配置来自安装的 `motion_control_pkg/config/ccs_m6_40.MvKDCfg`。双臂 SDK 连接 IP 在当前实现中固定为 `192.168.1.190`，不是 ROS 参数。
 
+当前代码默认开启一次**头部启动回零**：等待全身反馈有效且静止，校验路径后将 yaw/pitch 低速移到 `[0,0]`，到位后才开放正常运动和工具任务。启动可接受 pitch 起点最低 -0.7 rad；正常 yaw 范围仍为 `[-2.92,2.92]`、pitch 为 `[-0.62,0.41]` rad。失败锁存故障，不自动重试。默认速度上限 0.1 rad/s、总超时 180 s；关闭方式及其他启动参数见第 8.6 节和[头部启动回零说明](HEAD_STARTUP_HOMING.md)。
+
 核对运行参数：
 
 ```bash
@@ -120,11 +175,84 @@ ros2 launch motion_control_pkg wbc_model.launch.py \
 
 `wbc_model.launch.py` 只有 `urdf_path` 和 `config` 两个参数，默认分别取安装模型与 `config/wbc_model.yaml`。该入口不启动运控，不使能 COM 运动保护；可用 `-DWBC_MODEL_ONLY=ON` 只编译模型/observer。
 
+### 2.4 六轴开机清错与 x86 安装
+
+2026-11-02 起，开机复位对象为 EtherCAT **27、28、29、30、31、32** 六个从站。原逻辑仅复位腿/腰 27–30；两个头部从站可能保留 `0xFF32`，使全身反馈校验和头部回零预检失败。启动先等待六从站 OP、PDO 完整且连续稳定 2 s，再发送 `enabled=-1` 约 200 ms，释放为 `enabled=0` 并确认故障清除。清错阶段保持实测位置，不执行使能或回零；后续正常使能与头部回零是单独步骤。日志应包含 `Startup fault reset alias 31/32` 和 `EtherCAT startup fault reset confirmed`，仍需读回故障码确认。
+
+`0xFF32` 的含义应结合主站状态判断：运控退出后主站空闲、从站 PREOP，与运控运行期间 OP 下的故障是不同状态。`enabled=-1` 写入成功不等于错误已清除。
+
+本次跟踪开关使用已有标准服务类型，未增加 MoveJoints/MovePose 字段，task_manager 无需因本次开关重编译。已配置好 SDK 和依赖的 x86 工作区可串行构建并回归：
+
+```bash
+cd /home/it/ylf_wbc
+source /opt/ros/humble/setup.bash
+source install/local_setup.bash
+cmake -S src/motion_control_pkg -B build/motion_control_pkg -DBUILD_TESTING=ON
+CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build build/motion_control_pkg --parallel 1
+ctest --test-dir build/motion_control_pkg --output-on-failure -j1
+```
+
+常规更新先对旧运控请求正常退出，待 `shutdown=COMPLETE` 后再安装、重新 source 并启动。也可在维护授权下先备份并安装，但运行中的旧进程仍使用旧代码，必须另行关闭和重启；构建成功或覆盖安装均不代表新版本已运行。
+
+```bash
+cmake --install build/motion_control_pkg
+source install/local_setup.bash
+export ROS_DOMAIN_ID=42 ROS_LOCALHOST_ONLY=0 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 launch motion_control_pkg bringup.launch.py \
+  driver_config:=/opt/onecube/driver_sdk/configuration.xml
+```
+
+新进程的手臂及身体跟踪误差开关均从 OFF 开始。另开已 source 同一工作区、DDS 配置一致的终端执行第 6.5 节的 `arm_error`、`body_error` 命令。
+
+本次已同步的头部恢复模板为 pitch 下界 `-0.7 rad`、命令速度上限 `0.1 rad/s`。普通限位依据加载的 URDF，当前 pitch 上界保持 `0.41 rad`；URDF 腰部速度上限为 `1.31 rad/s`，头部 yaw/pitch 均为 `0.61 rad/s`。
+
+### 2.5 规划线程数与四线程启动
+
+**`planning_worker_count:=4` 仍然可用。** 本地源码和 x86 已安装的 `bringup.launch.py` 都保留该参数，启动时将其作为整数传给运控节点。默认值为 **2**，仅接受 **1、2、4**；这是节点启动时的只读参数，修改文件或执行 `ros2 param set` 不会调整已有线程池，也不属于每个 Action/任务动作的 `params`。
+
+生产 bringup 在 YAML 配置之后传入该 launch 参数，因此仅修改 YAML 中的同名字段可能被 launch 的默认值 2 覆盖；应在启动命令中显式指定。
+
+| 参数值 | 规划行为 |
+|---|---|
+| `1` | 串行规划，不创建并行规划线程池 |
+| `2`（默认） | 创建两个持久规划线程；双臂笛卡尔路径的左右臂 IK 可同时计算，较长路径的批量 FK、碰撞检查可分块并行 |
+| `4` | 创建四个持久规划线程；较长路径的批量 FK、碰撞检查最多使用四线程；双臂 IK 仍只有左右两个任务，使用其中两个线程 |
+
+四线程启动示例：先按第 2.4 节正常退出已有运控并确认 `shutdown=COMPLETE`，再在下一次启动时指定：
+
+```bash
+cd /home/it/ylf_wbc
+source /opt/ros/humble/setup.bash
+source install/local_setup.bash
+export ROS_DOMAIN_ID=42 ROS_LOCALHOST_ONLY=0 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+ros2 launch motion_control_pkg bringup.launch.py \
+  driver_config:=/opt/onecube/driver_sdk/configuration.xml \
+  planning_worker_count:=4
+```
+
+各线程使用独立的 Pinocchio `Data`、IK 工作区和碰撞 `GeometryData`，共享只读模型与几何资源。协调线程仍串行管理规划调用和场景，线程池在所有活动任务结束后才返回或传播异常；参数设为 4 不表示四个运动 Goal 可以同时占用同一资源。
+
+批量 FK 和批量碰撞检查仅在点数达到 `32 × planning_worker_count` 时启用线程池：2 线程至少 64 点，4 线程至少 128 点；更短的批处理走串行路径。双臂 IK 的两个任务不使用这个批量点数门槛。仅已接入这些接口的规划步骤使用该线程池，其他步骤仍按各自实现执行。增加线程只影响这些 CPU 规划阶段，不改变 ROS executor 线程数、4 ms 指令周期、URDF 速度限制、SDK 下发顺序或运动资源规则；实际收益取决于轨迹长度、规划耗时和 CPU 负载，4 线程不保证比 2 线程更快。
+
+核对入口及启动后的配置：
+
+```bash
+ros2 launch motion_control_pkg bringup.launch.py --show-args
+ros2 param get /motion_control_ns/motion_control planning_worker_count
+```
+
+四线程成功配置时，启动日志包含 `Planning workers: 4 (private caches, shared immutable model)`；对应运控进程的 Linux 线程名应包含 `wbc_plan_0`、`wbc_plan_1`、`wbc_plan_2`、`wbc_plan_3`。若存在同名节点导致参数服务返回空值，结合该运控进程的启动参数文件、启动日志和线程名交叉核对。
+
+历史核对：2026-11-03 在 x86 `/home/it/ylf_wbc` 核对时，运行实例的启动值仍为 **2**，可见 `wbc_plan_0/1`；已安装 launch 的 `--show-args` 确认接受 1/2/4。本次 `parallel_planning` 离线回归通过，覆盖 2/4 持久线程并发、双臂 IK 串并行一致性、批量 FK、1/2/4 碰撞检查及取消/异常恢复。测试不连接厂商 SDK、不下发运动；本次文档更新未切换运行实例的线程数。
+
+实现依据：[启动参数](../src/motion_control_pkg/launch/bringup.launch.py)、[节点初始化](../src/motion_control_pkg/src/main_node.cpp)、[并行规划](../src/motion_control_pkg/src/parallel_planning.cpp)、[持久线程池](../src/motion_control_pkg/include/motion_control_pkg/motion/planning_worker_pool.hpp)、[离线回归](../src/motion_control_pkg/test/parallel_planning_test.cpp)。
+
 ## 3. MoveJoints：手臂、头部、腰腿
 
 ### 3.1 Goal 全字段
 
-未赋值的消息字段一般为零、false、空字符串/空数组；这不代表是有效运动请求。建议总是明确填写任务 ID、速度、超时、碰撞模式与目标。
+除显式声明默认值的字段外，未赋值的消息字段一般为零、false、空字符串/空数组；这不代表是有效运动请求。`keep_tcp_level` 默认 false，水平容差默认 0.02 rad。建议总是明确填写任务 ID、速度、超时、碰撞模式与目标。
 
 | 字段 | 类型/单位 | 含义与限制 |
 |---|---|---|
@@ -132,6 +260,8 @@ ros2 launch motion_control_pkg wbc_model.launch.py \
 | `task_id` | string | 业务追踪 ID，客户端建议非空且唯一 |
 | `arm_id` | uint8 | 0/1/2/3/4，见总表 |
 | `control_mode` | uint8 | 0 位置；1 手臂关节阻抗。头/腿普通旧路由不会因此成为阻抗控制；身体专用和双关节补偿要求 0 |
+| `keep_tcp_level` | bool，默认 false | 所有 MoveJoints 均须为 false；仅 WBC MovePose 支持开启 |
+| `tcp_level_tolerance_rad` | float64，默认 0.02 rad | 有限且在 `[0.0001,0.1]`；即使关闭约束也要求有效值 |
 | `joint_name` | string[] | 单臂完整唯一七关节；头部两关节；腿部规则见下文 |
 | `position` | float64[]，rad | 与 joint_name 对应的绝对目标；头部/普通四关节腿路由按固定顺序读取位置 |
 | `left_joint_name` / `right_joint_name` | string[7] | arm_id=2 的左右七关节名 |
@@ -156,7 +286,7 @@ ros2 launch motion_control_pkg wbc_model.launch.py \
 ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 '{task_id: left_j, arm_id: 0, control_mode: 0,
   joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L],
-  position: [0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+  position: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
   speed: 0.1, acceleration_scale: 0.5, jerk_scale: 0.5,
   enable_collision_check: 1, timeout_ms: 30000}' --feedback
 
@@ -164,22 +294,25 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 '{task_id: dual_j, arm_id: 2, control_mode: 0,
   left_joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L],
-  left_position: [0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+  left_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
   right_joint_name: [Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R],
-  right_position: [0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+  right_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
   synchronization_mode: 0, speed: 0.1, enable_collision_check: 1,
   timeout_ms: 30000}' --feedback
 
 # 头部 MoveJ：yaw、pitch
 ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 '{task_id: head_j, arm_id: 3, joint_name: [head_yaw_joint, head_pitch_joint],
-  position: [0.0, 0.0], speed: 0.1, enable_collision_check: 1, timeout_ms: 30000}' --feedback
+  position: [0.0, 0.0], speed: 0.02, enable_collision_check: 1, timeout_ms: 30000}' --feedback
 
-# 腿和腰四关节绝对目标，不能只给单个 body_joint 到底层 Action
+
+[motion_control_node-1] [WARN] [1793069645.906726196] [motion_control_ns.motion_control]: Motion admission refused: motion fault latched: invalid EtherCAT motor feedback: 31
+
+# 腿腰关节目标使用四关节绝对目标；keep_tcp_level 必须为 false
 ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 '{task_id: leg_j, arm_id: 4,
   joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint],
-  position: [0.0, 0.0, 0.0, 0.0], speed: 0.1,
+  position: [-1.0, 2.2, -1.225, 0.0], speed: 0.1,
   enable_collision_check: 1, timeout_ms: 30000}' --feedback
 ```
 
@@ -200,7 +333,7 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 
 ### 3.4 身体倾角与竖直升降
 
-这些模式使用空 `joint_name/position`、位置控制、零额外 acceleration/jerk scale。
+这些模式使用空 `joint_name/position`、位置控制、零额外 acceleration/jerk scale。下表描述独立身体运动；`keep_tcp_level` 必须为 false。
 
 | 模式 | 目标 | 保持的量 |
 |---|---|---|
@@ -210,11 +343,13 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 
 绝对身体高度不是 TCP 高度，也不是相机到地面距离。倾角 0°不等于 J3=0 rad。倾角模式不要给高度；升降模式不要给倾角。启用动态 ZMP 时当前身体专用模式拒绝执行，静态 COM 和碰撞检查仍可使用。
 
+这些独立腿部 MoveJoints 模式不支持 `keep_tcp_level: true`；需要手臂补偿时使用 WBC MovePose。详见 [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)。
+
 ```bash
 # 身体竖直
 ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 '{task_id: upright, arm_id: 4, leg_motion_mode: 1, body_tilt_deg: 0.0,
-  speed: 0.1, enable_collision_check: 1, timeout_ms: 30000}' --feedback
+  speed: 0.1, enable_collision_check: 1, timeout_ms: 300000}' --feedback
 
 # 相对上升 2 cm；下降填 -0.02
 ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
@@ -227,7 +362,34 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
   speed: 0.1, enable_collision_check: 1, timeout_ms: 30000}' --feedback
 ```
 
-身体专用运动预约上半身资源，要求完整、新鲜、无故障的反馈。到位要求腿关节误差 ≤0.01 rad、朝向误差 ≤0.01 rad；升降还要求身体位置误差 ≤0.001 m，并在三组不同序号反馈上确认停止。FK 到位误差不是外部计量精度。详见 [身体运动说明](LEG_BODY_MOTION.md)。
+身体专用运动预约上半身资源，要求完整、新鲜、无故障的反馈。当前默认到位要求腿腰各关节误差 ≤0.002 rad、身体朝向误差 ≤0.01 rad；升降还要求身体位置误差 ≤0.001 m。关节速度须 ≤0.01 rad/s，至少 5 帧递增反馈且连续稳定 200 ms；腿腰判据来自 `leg_precision.*`。FK 到位误差不是外部计量精度。运动定义见 [身体运动说明](LEG_BODY_MOTION.md)，最新到位策略见下一节。
+
+### 3.5 腰腿和头部精定位
+
+**0.002 rad（约 0.115°）是每个关节相对原始目标的实测到位容差**。当前代码默认启用，无需更改第 3.2 节的 Action 格式；任务 YAML 的腰部 J4/body_joint 简写展开后也使用腿腰策略。它不能直接换算成 TCP 毫米定位精度，也不改变 IK 求解阈值。
+
+| 运动路径 | 默认最终关节误差 | 低速接近行为 |
+|---|---|---|
+| 普通腰腿 MoveJ，含腰 J4/body_joint | 每轴 ≤0.002 rad | 先接近，再执行一次低速末段 |
+| 头部 yaw/pitch MoveJ | 每轴 ≤0.002 rad | 同上 |
+| 腿部 MovePose、两关节定身体朝向、身体倾角/升降 | 腿腰每轴 ≤0.002 rad | 沿原约束路径执行，收紧实测到位判据 |
+| WBC MovePose（5/6/7）的腿腰 | 腿腰每轴 ≤0.002 rad | 保留手臂与腿腰同步轨迹，不独立重放腿腰末段 |
+| 单臂、双臂及 WBC 中的手臂 | 每轴 ≤0.01 rad | 保持原有手臂完成策略 |
+
+普通腰腿/头部 MoveJ 的默认执行过程：
+
+1. 按起点与目标的**最大单关节位移**判断是否分段。大于 0.03 rad 时，先到达离目标最大关节差为 0.03 rad 的接近点；小于等于 0.03 rad 时整段低速。
+2. 分段动作在接近点以规划零速度、零加速度结束第一段，并等待实测位置进入接近点 0.01 rad 范围、速度和稳定时间满足条件。这是进入末段的交接判据，最终仍必须满足 0.002 rad。
+3. 执行已经规划和校验的低速末段，目标保持原始关节角。默认末段速度取原规划速度上限的 20%，并限制在 0.03 rad/s 以内；加速度、jerk 也按 20% 缩放，分别不超过 0.2 rad/s²、0.5 rad/s³，同时遵守 URDF 速度限制。
+4. 末点下发后持续检查实测反馈：所有目标关节误差 ≤0.002 rad、实测及差分速度 ≤0.01 rad/s、至少 5 帧有效递增反馈，并连续稳定 200 ms，才返回成功。
+
+两段采用 Ruckig 规划，保持原有碰撞及跟踪检查，并校验实际 4 ms 指令轨迹。低速末段是本次动作预先规划的一部分，只执行一次；不会在到位失败后自动追加目标偏置、循环补发或重新发起动作。等待期间保持最后目标。
+
+如果已经静止但误差仍超限，连续 1.5 s 没有至少 0.0002 rad 的改善，则返回 `completion stalled at original target`。错误信息包含最大误差、最差关节索引、目标、实测和容差；索引从 0 开始，腿腰固定顺序中的 J4/body_joint 对应 3。持续静差应检查驱动位置环、负载、摩擦、零位和反馈分辨率，降低规划速度本身不能保证消除静差。
+
+独立腰腿/头部每次到位等待默认最多 5 s；WBC 保持原来的 3 s 完成等待上限，两者都受 `timeout_ms` 总预算限制。分段接近和 200 ms 稳定确认会增加耗时；剩余预算不足时拒绝继续下发。取消、反馈失效、驱动异常或命令拒绝仍按原有失败处理退出。
+
+可配置项见[精定位启动参数](#85-精定位启动参数)，完整实现、验证入口与边界见[腿腰和头部精确到位](PRECISION_ARRIVAL.md)。0.002 rad 是编码器反馈的成功判据，真机可达精度仍需实测确认。
 
 ## 4. MovePose：MoveP、MoveL、双臂和全身
 
@@ -238,6 +400,8 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 | `header` / `task_id` | Header / string | 顶层追踪信息，目标坐标系在各 PoseStamped 内 |
 | `arm_id` | uint8 | 0/1/2 手臂，5/6/7 全身；旧 LEG=4 见下文；HEAD=3 不支持 |
 | `control_mode` | uint8 | 0 位置；1 手臂笛卡尔阻抗；全身的腰腿仍下发位置轨迹 |
+| `keep_tcp_level` | bool，默认 false | 仅 arm_id=5/6/7 且 control_mode=0 可设 true；所选手臂补偿腿腰运动，全程水平；起点和目标须已满足 |
+| `tcp_level_tolerance_rad` | float64，默认 0.02 rad | 有限且在 `[0.0001,0.1]`；以 base_link 为参考，允许竖直轴转向但禁止翻面 |
 | `target_pose` | PoseStamped | 单臂/单臂全身 TCP 目标，m + 四元数 |
 | `bound_size` | float32[] | 空或三有限值；**实现是目标 XYZ 平移偏移，不是碰撞包络尺寸**，通常填 `[0,0,0]` |
 | `via_poses` | PoseStamped[] | 单臂 MoveP 连续经过点，最多 64 个；每个带 frame；空为普通单目标 |
@@ -265,8 +429,8 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 ros2 action send_goal /Control/move_pose com_interfaces/action/MovePose \
 '{task_id: left_p, arm_id: 0, control_mode: 0,
   target_pose: {header: {frame_id: base_link}, pose: {
-    position: {x: 0.4, y: 0.25, z: 1.0},
-    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    position: {x: 0.22295545050928492, y: 0.458363216197255, z: 1.0478599556914261},
+    orientation: {x: 0.0031107532158121828, y: 0.9999639233833763, z: -0.006919606196158049, w: -0.003820235103448852}}},
   bound_size: [0.0, 0.0, 0.0], enable_move_line: false,
   speed: 0.1, enable_collision_check: 1, timeout_ms: 60000}' --feedback
 ```
@@ -305,6 +469,47 @@ ros2 action send_goal /Control/move_pose com_interfaces/action/MovePose \
 ### 4.4 旧腿部 MovePose 路由
 
 `arm_id=4` 分发到腿部 `computeMovePTrajectory`，目标为腿链末端，代码强制目标 Y=0，并直接使用 x/z 和四元数。该路径没有实现普通手臂完整的 frame 转换、via、工具偏移或 MoveL 选择语义，不应当作通用六自由度 TCP 指令。身体倾角/升降应使用第 3.4 节的专用 MoveJoints 模式。
+
+### 4.5 WBC 双臂 TCP 全程保持水平
+
+启用方式是 **MovePose `arm_id=7` + `keep_tcp_level=true` + 位置模式 `control_mode=0`**。腿腰姿态变化时，双臂同步调整关节，保持各自工具 TCP 的 XY 平面平行于 `base_link` 的 XY 平面。约束对象是 TCP 朝向；手臂各连杆不需要水平，也不要求两个 TCP 同高或保持固定间距。
+
+| 配置 | 作用 |
+|---|---|
+| `keep_tcp_level: true` | 显式开启；省略或 false 则关闭 |
+| `tcp_level_tolerance_rad: 0.02` | TCP 法向倾角容差，约 1.15°；有限值且在 `[0.0001,0.1]` rad 内，关闭时也须合法 |
+| `arm_id: 7` | 双臂 TCP 同时受约束；5/6 只约束左/右 TCP |
+| `enable_move_line: false` | WBC MoveP，补偿中间路径的 TCP 倾角 |
+| `enable_move_line: true` | WBC MoveL，同时保持直线几何要求 |
+| `whole_body_waist_only: true` | 仅 MoveP 可用，固定腿 J1/J2/J3，由腰 J4 和所选手臂联动 |
+
+动作开始时，所选 TCP 必须已经水平；每侧按自己的起点选择 TCP Z 朝上或朝下分支，目标也须在该分支内。允许绕竖直轴转向，禁止翻面。若起点不水平，应先用关闭约束的准备动作到达经核实的水平姿态，再开启本功能；系统不会自动插入调平动作或改写不兼容目标。
+
+以下直接 Action 示例假定左右 TCP 起点均为 Z 朝下，目标四元数 `[1,0,0,0]` 也为 Z 朝下。位置仅演示格式，使用前须替换为现场可达目标；若某侧起点朝上，该侧目标也应选朝上姿态，例如 `[0,0,0,1]`。
+
+```bash
+ros2 action send_goal /Control/move_pose com_interfaces/action/MovePose \
+'{task_id: wbc_dual_tcp_level, arm_id: 7, control_mode: 0,
+  left_target_pose: {header: {frame_id: base_link}, pose: {
+    position: {x: 0.4, y: 0.25, z: 1.0},
+    orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}}},
+  right_target_pose: {header: {frame_id: base_link}, pose: {
+    position: {x: 0.4, y: -0.25, z: 1.0},
+    orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}}},
+  left_bound_size: [0.0, 0.0, 0.0], right_bound_size: [0.0, 0.0, 0.0],
+  synchronization_mode: 0, enable_move_line: false, whole_body_waist_only: false,
+  keep_tcp_level: true, tcp_level_tolerance_rad: 0.02,
+  use_force_control: false, speed: 0.1,
+  enable_collision_check: 1, timeout_ms: 60000}' --feedback
+```
+
+改为 MoveL 时将 `enable_move_line` 设 true，并保持 `whole_body_waist_only=false`。任务 YAML 的完整动作片段见第 10.3 节。WBC 根据 TCP 目标解算腿腰与手臂，接口没有同时指定某个腰腿关节角的字段；独立 LEG MoveJ 不支持开启 `keep_tcp_level`；本次发布仅包含 WBC MovePose 的水平约束。
+
+全程约束使用实际 `left_arm_tool_tf/right_arm_tool_tf`，覆盖最终 4 ms 指令点、点间关节插值及执行/到位期间的实测 TCP 姿态。腿腰与手臂共用时间参数，不能只检查起终点水平。普通手臂 `arm_id=0/1/2`、头部、独立腿部 MovePose 均不支持启用；MoveJoints 仅 `arm_id=4` 支持；阻抗模式也会被拒绝。水平补偿不可行、越限、碰撞或监控异常时动作失败，不转为关闭约束执行。
+
+参考系为固定 `base_link`，底盘须固定且水平；当前没有 IMU 重力补偿。该约束也没有加入双臂刚性抓持的固定相对位姿或受力约束。`force_vertical_down` 只生成视觉目标姿态，不能代替全程水平约束。
+
+**水平倾角容差 0.02 rad 与关节精定位容差 0.002 rad 分别配置。** 即使收紧 `leg_precision.goal_tolerance_rad`，也不会自动改变 `tcp_level_tolerance_rad` 或手臂关节容差。两项功能可在同一个 WBC 动作中共同生效：路径保持 TCP 水平，结束时腿腰按精定位判据到位。详细定义及源码入口见 [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)。
 
 ## 5. ControlGripper 与 ControlSuck
 
@@ -376,9 +581,18 @@ Feedback：`header`、`task_status`、`progress_rate`、`current_step_info`、`d
 
 ### 6.2 完成、超时与资源
 
-`Goal accepted` 仅表示接单，不能代表 IK 可达、轨迹可下发或实测到位。WBC 末点下发后仍等待参与手臂和四个腰腿关节的实测反馈：位置误差 ≤0.01 rad、实测/差分速度 ≤0.01 rad/s，手臂 `low_speed=true`，至少 5 组新反馈且连续稳定 100 ms。完成等待最多 3 s，同时受 Action 总超时限制；序号 100 ms 不前进、驱动错误、非有限值等都失败。阈值为代码常量，不能用不存在的 ROS 参数修改。
+`Goal accepted` 仅表示接单，不能代表 IK 可达、轨迹可下发或实测到位。WBC 末点下发后仍等待参与手臂和四个腰腿关节的实测反馈，当前默认判据为：
 
-单臂旧路径 `timeout_ms<=0` 内部有 5000 ms 回退，双臂要求正超时；WBC 的正超时用于阶段检查及执行/完成等待。旧头部/普通腿路径没有统一实现严格的总超时守卫，填入 timeout 不保证所有阶段在该时限内退出。统一建议给正数，并通过客户端超时和取消处理异常，不承诺硬实时截止。
+| 部位 | 关节位置误差 | 实测及差分速度 | 有效反馈及稳定要求 |
+|---|---|---|---|
+| 所选手臂 | 每轴 ≤0.01 rad | ≤0.01 rad/s | `low_speed=true`，至少 5 帧新反馈、连续 100 ms |
+| 腿腰 | 每轴 ≤0.002 rad | ≤0.01 rad/s | 至少 5 帧新反馈、连续 200 ms，读取 `leg_precision.*` |
+
+WBC 同时检查由实测关节 FK 得到的所选 TCP 目标误差：位置 ≤0.003 m、姿态 ≤0.02 rad。开启 `keep_tcp_level` 后，到位等待期间水平监控也保持有效。这些 TCP 判据与腰腿 0.002 rad 关节判据必须分别满足。
+
+WBC 完成等待最多 3 s，同时受 Action 总超时限制；腿腰精定位参数中的 `completion_timeout_sec` 不改变这个 3 s 上限。反馈序号 100 ms 不前进、驱动错误、非有限值、腿腰静差停滞等都会失败。手臂完成判据及 WBC 3 s 上限保持代码常量；腰腿/头部使用第 8.5 节的启动只读参数。
+
+单臂路径 `timeout_ms<=0` 内部有 5000 ms 回退，双臂/WBC 要求正超时。当前头部和普通腿路径也已将动作开始时间计入轨迹下发及到位等待的截止时间，正超时不足时拒绝下发或结束执行。规划/SDK 调用不承诺硬实时可抢占，统一建议显式给正数并处理 Action 终态。
 
 单臂、双臂、腰腿和工具分别有资源占用；双臂整体运动要求左右都空闲，全身及身体模式还会占用相应腰腿/上半身资源。任务层并行并不代表两个动作可以争用同一资源。
 
@@ -392,6 +606,70 @@ ros2 service call /Control/move_pose/_action/cancel_goal action_msgs/srv/CancelG
 ```
 
 MoveJ 改服务路径为 `/Control/move_joints/_action/cancel_goal`。取消请求获准后仍需观察终态与实测停止。退出 `ros2 action send_goal` 终端不等于停止；软件取消不替代硬件急停。
+
+### 6.4 全局软件停止和故障锁存
+
+`/Control/stop_motion` 与 `/Control/reset_motion_fault` 均为 `std_srvs/srv/Trigger`，请求体为空。停止服务安装软件指令拦截并锁存故障；返回成功表示已提交该软件操作，实测静止确认异步进行，应观察 `/Control/motion_safety`。它不提供已验证的驱动 Quick Stop、STO 或制动控制。
+
+复位服务要求运动资源全部释放、旧执行线程退出、反馈健康且已确认静止，仅清除软件锁存，不清除驱动故障、不重新使能、不自动继续旧轨迹。实测反馈过期、腿/头跟踪误差越界、水平约束越界、下发失败、执行中取消/超时等均可能触发软件故障。机械臂跟踪功能默认关闭；显式开启后的单纯机械臂跟踪超限按第 6.5 节处理，不形成持久锁存。
+
+在线驱动维护使用 `/Control/drive_control`（`com_interfaces/srv/DriveControl`）：
+
+| 字段 | 值与语义 |
+|---|---|
+| `target` | `0` 左臂 A；`1` 右臂 B；`2` 双臂；`3` 腿/腰四轴（J1/J2/J3/腰，EtherCAT 别名 30/29/28/27） |
+| `operation` | `0` 在线急停；`1` 清除驱动故障 |
+| `command_issued`（响应） | SDK 已调用或总线已写入；不能单独证明硬件停止/清错 |
+| `feedback_confirmed`（响应） | 新鲜且前进的设备帧确认去使能和静止；清错另检查错误码 |
+| `success`（响应） | 只有调用和反馈均确认才为 true |
+| `message`（响应） | 原始驱动状态/错误码或拒绝、超时原因 |
+
+服务先锁存整机运动，阻断 WBC 等旧轨迹继续下发，再针对选中驱动操作。手臂使用 `EStop("A"/"B"/"AB")` 和 `OnClearErr_A/B()`；清错检查控制器状态与各关节 `SERVO*ERR*` 返回值。腿/腰在现有总线线程中使用 `enabled=0` 去使能、`enabled=-1` 清错 200 ms 后保持 `enabled=0`；不改变头部目标。清错要求资源空闲、部件已静止且处于去使能或故障状态，急停无需先满足这些条件。
+
+确认门限：反馈年龄 ≤100 ms，至少 5 组新帧连续稳定 ≥100 ms，速度 ≤0.01 rad/s，窗口位移 ≤0.001 rad。缺少真实 PDO 时间戳的旧腿部 SDK 不允许清错，也不能确认停止；不会将重复读缓存计作新帧。急停可中断同类驱动的清错等待。该网络操作不提供硬件急停/STO/抱闸确认，也不自动使能、软件复位或继续运动。调用后应分别检查请求返回值与实测反馈确认。
+
+### 6.5 手臂与身体跟踪误差保护开关
+
+`arm_error` 控制左右手臂；`body_error` 统一控制三个腿关节、腰部 `body_joint`、头部 yaw/pitch。两组相互独立，**每次进程启动均默认 OFF**，仅在运动资源空闲且没有待处理停止/故障时允许切换。
+
+所有经过共用发送门的运动使用相同规则，包括 MoveJ、MoveP/MoveL、受支持的位置/阻抗模式、预规划轨迹及 WBC 输出。任务节点无需在 Goal 或 YAML 中新增字段。旧 `error` 命令及 `/Control/arm_tracking` 服务已分别更名为 `arm_error` 和 `/Control/arm_error`。
+
+```bash
+cd /home/it/ylf_wbc
+source /opt/ros/humble/setup.bash
+source install/local_setup.bash
+export ROS_DOMAIN_ID=42 ROS_LOCALHOST_ONLY=0 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+arm_error status          # 查看两组实际开关、限制与整机安全状态
+body_error status
+arm_error 0.02 0.08        # 开启双臂跟踪误差保护，单位 rad
+body_error 0.02 0.08       # 开启腿、腰、头的跟踪误差保护，单位 rad
+arm_error off
+body_error off
+```
+
+直接输入命令名或追加 `on` 会在交互终端提示填写限制；无交互输入时必须提供限制。只填第一个数时，立即停止限制默认为 `0.08 rad`。`ros2 run motion_control_pkg arm_error ...` 与 `ros2 run motion_control_pkg body_error ...` 为等价入口。
+
+| 配置 | 输入与含义 |
+|---|---|
+| `enabled` | 各组独立开关，每次进程启动默认 OFF |
+| `position_error_rad` | 第一个数；误差严格大于该值并持续 `motion_tracking_dwell_sec`（默认 80 ms）时终止本次任务 |
+| `hard_error_rad` | 第二个数；误差严格大于该值时立即拦截后续轨迹点，不等待持续时间 |
+| 数值校验 | 必须有限，且 `0 < position_error_rad <= hard_error_rad`；非法输入不会改变原配置 |
+| 参考量 | 按实测采集时刻匹配此前实际发送的关节指令；控制器指令回显仅用于诊断 |
+| 保持监控 | 开启某组后，其他链运动期间该组未参与运动的关节也以实测保持参考使用同一组限制 |
+
+服务 `/Control/arm_error` 和 `/Control/body_error` 均使用 `rcl_interfaces/srv/SetParametersAtomically`，开启时原子提交 `enabled=true` 与两个 rad 限制，关闭时只提交 `enabled=false`。它们不是通用节点参数更新接口。`motion_tracking_error_rad` 与 `motion_tracking_hard_error_rad` 仅提供身体组初始限制值，不会开启 `body_error`；运行时开关及当前实际限制以 `/Control/motion_safety` 为准。
+
+两组的单纯位置跟踪超限采用同一处理流程：
+
+1. 拦截后续轨迹点，保持最后已发送指令，本次 Action 返回失败，相关旧执行线程结束。
+2. 用新鲜、递增的设备反馈确认所有已配置链静止：至少 5 帧、连续 100 ms，实测及位置差分速度不超过 `0.01 rad/s`。
+3. 静止确认且所有旧执行线程退出后，自动解除本次跟踪拦截，下一任务无需 `/Control/reset_motion_fault`。旧轨迹不自动继续。
+
+停止期间状态为 `ERROR_TRACKING_STOPPING`、`ERROR_TRACKING_STANDSTILL_CONFIRMED` 或 `ERROR_TRACKING_STOP_UNCONFIRMED`。未确认停止时继续阻止新任务。恢复后回到 `MONITORING`，`last_error_stop` 保留带 `arm_error` 或 `body_error` 标记的原因；状态还分别报告两组的 ON/OFF、`*_limit_rad` 与 `*_hard_limit_rad`。
+
+开关仅控制相对已发送指令的位置误差门槛及普通运动中的保持偏移检查。URDF 位置/速度限制、反馈有效性和年龄、驱动错误、最终到位要求（腿/腰/头仍为 `0.002 rad`）、TCP/碰撞约束、显式停止及启动回零的专用约束继续执行。这些实际故障仍锁存；若跟踪停止期间出现这类故障，停止升级为普通故障，不能自动解除。软件停止不代表驱动 Quick Stop、STO 或抱闸确认。
 
 ## 7. 碰撞与环境点云
 
@@ -469,6 +747,81 @@ right_tool_dynamics: [0.35746, -0.36386, -128.866, -0.79,
 ```
 
 工具几何 TF 使用 m，而本参数 MCP 使用 mm，两者不能混淆。完整模板快照见附录；校验实现见 [impedance_configuration.hpp](../src/motion_control_pkg/include/motion_control_pkg/execution/impedance_configuration.hpp)。
+
+### 8.4 实测运动监控参数
+
+这些是运控节点启动参数，不是每个 Action 的字段。机械臂跟踪开关和两个 rad 限制独立通过第 6.5 节配置：
+
+| 参数 | 源码默认 | 含义 |
+|---|---|---|
+| `motion_tracking_error_rad` | 0.02 | 身体组初始持续误差限制，不自动开启；以 body_error 状态为准 |
+| `motion_tracking_hard_error_rad` | 0.08 | 身体组初始立即停止限制，不自动开启；以 body_error 状态为准 |
+| `motion_tracking_dwell_sec` | 0.08 | 普通误差超过阈值的持续时间 |
+| `motion_feedback_max_age_sec` | 0.1 | 最大有效反馈年龄 |
+| `motion_stop_confirmation_timeout_sec` | 3.0 | 软件故障后等待实测静止的时间预算 |
+
+仅显式启用约束的 WBC 动作注册水平监控，使用该动作的 `tcp_level_tolerance_rad`；所需手臂及腿腰反馈的跨通道时间差上限为 20 ms。URDF 关节限位、控制器限位、轨迹导数检查、实测反馈与到位检查不依赖 `enable_collision_check`。
+
+### 8.5 精定位启动参数
+
+腰腿前缀为 `leg_precision`，头部前缀为 `head_precision`，各自独立。例如完整参数名为 `leg_precision.goal_tolerance_rad`。WBC 读取同一套腿腰完成判据，双臂不读取这两组参数。以下均为**节点启动时只读参数**，不能放入任务动作 `params` 或通过 `ros2 param set` 热更新。
+
+| 参数后缀 | 默认值 | 含义及范围 |
+|---|---|---|
+| `goal_tolerance_rad` | 0.002 | 最终每轴位置误差，`(0,0.1]` rad |
+| `stopped_velocity_rad_s` | 0.01 | 实测及差分速度上限，`(0,0.1]` rad/s |
+| `stable_time_sec` | 0.2 | 连续稳定时间，`[0.1,5]` s；同时至少 5 帧新反馈 |
+| `stall_time_sec` | 1.5 | 静止后无有效改善的判定时间，`[0,30]` s；0 关闭停滞诊断，超时仍有效 |
+| `minimum_progress_rad` | 0.0002 | 重置停滞计时的最小改善量，必须 >0 且小于最终容差 |
+| `completion_timeout_sec` | 5.0 | 独立腰腿/头部每次到位等待上限，须 ≥稳定时间且 ≤30 s；仍受 Action 总超时限制 |
+| `approach_enabled` | true | 普通 MoveJ 低速接近开关；false 只关闭低速接近，保留最终精度要求 |
+| `approach_distance_rad` | 0.03 | 最大关节差定义的接近距离，须 >最终容差且 ≤0.1 rad |
+| `approach_speed_scale` | 0.2 | 低速段速度、加速度、jerk 的缩放，`(0,1]` |
+| `approach_velocity_rad_s` | 0.03 | 低速段速度上限，`(0,0.1]` rad/s |
+| `approach_acceleration_rad_s2` | 0.2 | 低速段加速度上限，`(0,1]` rad/s² |
+| `approach_jerk_rad_s3` | 0.5 | 低速段 jerk 上限，`(0,5]` rad/s³ |
+
+完整配置模板见 [precision_arrival.yaml](../src/motion_control_pkg/config/precision_arrival.yaml)，默认值已在代码中启用。需要覆盖时，将对应配置合入实际启动读取的 YAML 的 `ros__parameters` 下；生产 bringup 的配置路径见第 2.2 节，仅修改仓库模板不会更改运行节点。
+
+```yaml
+/motion_control_ns/motion_control:
+  ros__parameters:
+    leg_precision:
+      goal_tolerance_rad: 0.002
+      stable_time_sec: 0.2
+      approach_enabled: true
+    head_precision:
+      goal_tolerance_rad: 0.002
+      stable_time_sec: 0.2
+      approach_enabled: true
+```
+
+只读核对当前节点的实际参数：
+
+```bash
+ros2 param get /motion_control_ns/motion_control leg_precision.goal_tolerance_rad
+ros2 param get /motion_control_ns/motion_control leg_precision.approach_enabled
+ros2 param get /motion_control_ns/motion_control head_precision.goal_tolerance_rad
+```
+
+如果参数不存在，先核对运行节点及安装前缀是否为新版本。到位精度与第 8.4 节的运行跟踪误差阈值分开配置；精定位不会把 `motion_tracking_error_rad` 自动改为 0.002。
+
+### 8.6 头部启动回零参数
+
+前缀为 `head_startup_home`，以下同样为启动时只读参数。边界数组顺序均为 `[yaw,pitch]`。
+
+| 参数后缀 | 默认值 | 含义 |
+|---|---|---|
+| `enabled` | true | 启用一次启动回零；false 恢复普通 URDF 限位检查且不自动回零 |
+| `recovery_lower_rad` | `[URDF yaw 下界,-0.7]` | 当前模型为 `[-2.92,-0.7]` rad，只允许扩展负方向 pitch |
+| `recovery_upper_rad` | URDF 上界 | 当前模型为 `[2.92,0.41]` rad，不允许扩大 yaw 或正向 pitch 范围 |
+| `velocity_rad_s` | 0.1 | 回零速度上限，还受 URDF 速度限制 |
+| `acceleration_rad_s2` | 0.05 | 回零加速度上限 |
+| `jerk_rad_s3` | 0.1 | 回零 jerk 上限 |
+| `feedback_wait_sec` | 30.0 | 等待全身有效静止反馈的上限 |
+| `timeout_sec` | 180.0 | 包含启动等待、规划、执行和到位的总超时 |
+
+回零到位至少要求两轴误差 ≤0.002 rad、5 帧递增反馈、连续稳定 200 ms；若 `head_precision` 配置更严格则采用更严格条件。启动例外在回零成功或失败后收回，URDF 和正常 MoveJ 限位不变。恢复流程、失败处理与配置示例见 [HEAD_STARTUP_HOMING.md](HEAD_STARTUP_HOMING.md) 和 [head_startup_home.yaml](../src/motion_control_pkg/config/head_startup_home.yaml)。
 
 ## 9. COM、ZMP 与 observer 参数
 
@@ -569,6 +922,8 @@ ros2 run motion_control_pkg wbc_zmp_audit /path/to/robot.urdf \
 | `speed` | move_pose 默认 0.5；move_joints 必填；建议显式给值 |
 | `use_force_control` / `timeout_ms` | move_pose 必填，当前力控应 false |
 | `whole_body_waist_only` / `enable_move_line` | 默认 false，限制同 Action |
+| `keep_tcp_level` | 默认 false；仅 move_pose 的 arm_id=5/6/7（包括复合动作中的 WBC 子动作）可显式设 true；其他动作设 true 被拒绝 |
+| `tcp_level_tolerance_rad` | 默认 0.02，有限且在 `[0.0001,0.1]` rad |
 | `hand_action_type` | 默认空，当前保留空 |
 | `acceleration_scale/jerk_scale` | 默认 0，范围 `[0,1]`，限制同 Action |
 | `vision_result_key` | 默认空；使用命名视觉缓存时需 use_config_pose=false 和显式 frame |
@@ -580,6 +935,9 @@ ros2 run motion_control_pkg wbc_zmp_audit /path/to/robot.urdf \
 | `delay_ms` | 动作节点字段，不在 params 内；执行前延时，默认 0 |
 | `parallel_actions` | 同一序列内多个动作并行，仍受底层资源冲突检查 |
 | `action_type: move_compound` | params.sub_actions 非空，只支持 move_pose/move_joints；整体 timeout_ms 默认 30000 |
+| `on_success` / `on_failure` | 动作级结果分支，可配置后续动作和成功/失败处理策略 |
+| `feedback_check` / `retry_actions` | 动作级反馈条件检查及调整重试；主要读取视觉结果字段，不等于关节闭环跟踪监控 |
+| `ik_failure_recovery` / `if_recovery_applied` | 受限的 WBC IK 失败升高重试及条件下降恢复，见下一节 |
 
 **当前普通任务解析/客户端没有把 `control_mode` 作为通用参数转发到运动 Goal**，生成消息保持位置模式 0；填写 YAML `control_mode: 1` 不能据此启用阻抗。身体模式解析会校验此键必须为 0。需要阻抗时应使用明确设置 control_mode 的直接 Action 客户端。
 
@@ -608,6 +966,33 @@ ros2 run motion_control_pkg wbc_zmp_audit /path/to/robot.urdf \
 IK 恢复使用动作级 `ik_failure_recovery` 与 `if_recovery_applied`，详细约束见 [LAPTOP_IK_LEG_RECOVERY.md](LAPTOP_IK_LEG_RECOVERY.md)；只有匹配的 IK 失败才进入恢复，不能把反馈超时当成 IK 不可达。
 
 ### 10.3 YAML 示例
+
+**双臂 TCP 全程保持水平的 WBC MoveP**：下例与第 4.5 节 Action 对应，左右起点均须已满足 TCP Z 朝下的水平姿态。七元素目标数组依次为 `[x,y,z,qx,qy,qz,qw]`；示例坐标需替换为现场核实的可达值。
+
+```yaml
+- action_type: move_pose
+  params:
+    arm_id: 7
+    use_config_pose: true
+    frame_id: base_link
+    left_target_pose: [0.4, 0.25, 1.0, 1.0, 0.0, 0.0, 0.0]
+    right_target_pose: [0.4, -0.25, 1.0, 1.0, 0.0, 0.0, 0.0]
+    left_bound_size: [0.0, 0.0, 0.0]
+    right_bound_size: [0.0, 0.0, 0.0]
+    synchronization_mode: 0
+    use_force_control: false
+    enable_move_line: false
+    whole_body_waist_only: false
+    keep_tcp_level: true
+    tcp_level_tolerance_rad: 0.02
+    enable_collision_check: 1
+    speed: 0.1
+    timeout_ms: 60000
+```
+
+使用 MoveL 时改 `enable_move_line: true`；仅腰参与的 MoveP 改 `whole_body_waist_only: true`。本动作的腰腿默认按 0.002 rad 判定到位，手臂仍为 0.01 rad；无需在任务动作里填写 `leg_precision` 或额外的精定位开关。
+
+下面为原有的单臂加腰 MoveP 与独立身体升降片段，未启用 TCP 水平约束。独立升降动作不会自动补偿手臂 TCP 姿态。
 
 ```yaml
 - action_type: move_pose
@@ -644,14 +1029,14 @@ ros2 launch task_manager task_manager.launch.py \
 
 当前仓库主配置：`node_id=1`，`slave_id=1`，`listen_ip=127.0.0.1`，`listen_port=12000`，因此在任务节点所在主机本地访问。不能沿用旧文档中的固定远程 IP。`laptop_assembly_two_piece` 为 40010/50010；测试任务 40011/50011 已从本次发布配置移除。
 
-文档寄存器号减 40000 为 Modbus 原始零基地址：40010→10，50010→10010。mbpoll 明确加 `-0`，避免默认一基寻址混淆。
+按当前 `task_manager` 的 `MODBUS_PROTOCOL_ADDR_OFFSET=40001`，配置寄存器号减 40001 为 Modbus 原始零基地址：40010→9，50010→10009。mbpoll 明确加 `-0`，避免默认一基寻址混淆。
 
 ```bash
 # 只读查询任务状态：0 空闲、1 执行中、2 成功、3 失败
-mbpoll 127.0.0.1 -p 12000 -a 1 -t 4 -0 -r 10010 -c 1 -1
+mbpoll 127.0.0.1 -p 12000 -a 1 -t 4 -0 -r 10009 -c 1 -1
 
 # 触发笔记本任务，会实际执行整个任务流程
-mbpoll 127.0.0.1 -p 12000 -a 1 -t 4 -0 -r 10 -1 1
+mbpoll 127.0.0.1 -p 12000 -a 1 -t 4 -0 -r 9 -1 1
 ```
 
 触发后应读取状态和日志，不以寄存器写入成功代替动作完成。其余任务同样按实际主配置转换地址。任务前置条件、分支、重试及其他非运控任务接口见 [TASK_NODE_COMMANDS.md](TASK_NODE_COMMANDS.md)。
@@ -665,6 +1050,8 @@ mbpoll 127.0.0.1 -p 12000 -a 1 -t 4 -0 -r 10 -1 1
 | `/wbc/joint_states` | `sensor_msgs/msg/JointState`，双臂 14 + 腰腿 4 + 头 2 的实测反馈 |
 | `/head_joint_states` | 头部两个关节 |
 | `/leg_joint_states` | 腰腿四关节 |
+| `/Control/motion_safety` | 软件停止/故障状态、静止确认、反馈年龄、误差、指令计数及 arm_error/body_error 开关/限制，String 类型 |
+| `/Control/shutdown_state` | x86 正常退出阶段：RUNNING、STOPPING、DISABLING、DISABLED_STATIONARY_CONFIRMED、COMPLETE 或 FAILED_HOLD |
 | `/SafeNode/heartbeat` / `/SafeNode/status` | HeartBeat / NodeStatus，节点健康信息 |
 
 ```bash
@@ -682,14 +1069,72 @@ ros2 topic echo /Control/MotorInfo --once
 | Action 不存在或字段不匹配 | 安装前缀、同版本 com_interfaces、节点启动、DDS domain |
 | Goal rejected | frame、四元数、speed、同步模式、工具类型、参数组合和资源占用 |
 | IK failed / Cartesian substep | 当前状态与目标、关节冻结、碰撞对、COM 和求解预算 |
+| TCP level start / target tilts or flips | 起点不水平，或目标倾角/朝上朝下分支不兼容；核对实际 TCP 外参及 base_link 下的目标姿态 |
+| TCP level projection / interpolation / tilt 超差 | 路径水平补偿、插值认证或实测监控未通过；核对当前关节、限位、轨迹及反馈时序 |
 | 外部点云等待失败 | SyncedRobotVision 类型、配置话题、QoS、持续有效发布，当前最多等待 5 s |
 | whole-body completion timed out | 已经进入末点到位阶段；看误差、速度、low_speed 和反馈序号，非 IK 阶段 |
+| completion stalled at original target | 已静止但残余误差超出精定位容差，1.5 s 无至少 0.0002 rad 改善；检查 worst_joint_index、目标/实测、驱动位置环和负载 |
+| precision approach handover / insufficient timeout for precision suffix | 接近点未稳定或剩余预算不足；检查反馈与 timeout_ms，末段不会自动重试 |
+| leg_precision/head_precision 参数不存在 | 运行二进制或 overlay 可能仍是旧版本；核对进程实际可执行文件与安装前缀 |
+| 启动后正常 Action 暂被拒绝 | 查看 /Control/motion_safety 中 head_startup_home 状态；WAITING/RUNNING 正在回零，FAILED 需排查，不会自动恢复任务 |
+| ERROR_TRACKING_STOPPING / ERROR_TRACKING_STOP_UNCONFIRMED | 本次 arm_error/body_error 跟踪超限后的停止确认仍未结束；先核对新帧、实测静止和旧线程，不通过新目标强行继续 |
+| status_data is empty / timestamped EtherCAT feedback unavailable | 同时核对状态字、故障码、OP/PDO、采样时间及序号；该聚合报错不能单独证明链路断开 |
 | motor enable rejected / drive fault | 驱动状态与真实反馈，修改几何不能消除电机故障 |
 | 工具拒绝或不动作 | 对应 tool 类型、com_port、两元素数组、串口设备状态 |
 | 改 YAML 没效果 | 实际加载路径、安装文件、启动缓存、是否已重启对应进程 |
 | 同一目标上次可达本次失败 | 比较起始关节、碰撞云、未参与关节和约束；不能只比较终点 |
 
 当前 WBC IK 的迭代/权重预算是源码常量，详见 [WBC_IK_TUNING.md](WBC_IK_TUNING.md)；没有可任意 ros2 param set 的同名调参接口。规划成功、Goal 接受、上传源码、构建成功、部署安装、运行新二进制、实机到位分别需要各自证据。
+
+### 11.1 身体运动反馈快照与采样前进
+
+身体倾角/竖直升降的预检与首个执行周期可能读取同一帧，WBC 100 Hz 发布者也可能同时读取反馈。快照读取现使用独立的采样前进记录，不再消耗发布者的历史，避免将仍有效的重复读取误报为 `hardware sample did not advance`。快照保留原设备采集时间，不会把读缓存的时刻当成新采集。
+
+WBC 发布、轨迹到位和停止确认仍要求真实设备帧前进；陈旧、倒序、缺失、非有限反馈和驱动故障继续拒绝。若机械臂 UDP 反馈真正停发，或设备序号一直不变，不能靠快照读取或关闭机械臂误差跟踪恢复有效反馈。
+
+2026-11-02 验证记录：本机完整回归 14/14、x86 完整回归 18/18 通过。已直接安装到 x86 `/home/it/ylf_wbc/install` 并重启，验证 `error` 开启、rad 限制读回和关闭，最终保持 OFF。单纯跟踪超限、等待静止及旧线程退出后自动解除等分支由离线测试验证；本次未发送新的机械臂运动 Goal。SDK 反馈曾中断；在确认厂家直连 SDK 上位机完全退出后重新连接，并持续检查设备帧与安全状态。厂家直连 SDK 的连接与仅通过 ROS Action 操作的上位机应分别排查。
+
+### 11.2 正常退出与安装生效
+
+x86 对一次 SIGINT/SIGTERM 启动正常退出流程：关闭接单、等待旧线程结束及实测静止、提交双臂和 EtherCAT 六轴去使能、确认去使能后的新帧与连续 500 ms 静止，再释放驱动，最终输出 `shutdown=COMPLETE`。`brake_feedback=UNAVAILABLE` 表示没有独立抱闸读回证明。
+
+`FAILED_HOLD` 保留驱动与反馈读取，重复 Ctrl+C 不绕过未完成的确认。应先查看哪一路状态、速度、反馈年龄或序号未通过，不将反复信号视为已安全退出。源码上传、编译和安装不能证明旧进程已换成新版本；还需核对 `/proc/<pid>/exe`、安装二进制哈希、实际加载的 SDK 以及最新启动日志。
+
+### 11.3 4 ms 控制与进度发布隔离
+
+2026-11-02 的腰腿 MoveJ 曾报 `preplanned dispatch missed 4 ms deadline at sample 1300`。原周期检查覆盖整个采样回调，该回调内还同步执行 ROS Action 反馈发布；仅凭旧错误无法区分线程唤醒延迟、目标写入耗时与发布耗时。此次移除发送循环内的同步进度发布，并保留原 4 ms 截止规则、超时、取消、反馈新鲜度和停止确认。
+
+普通头/腰腿 MoveJ、MovePose，身体倾角/升降，固定身体姿态的腿 MoveJ，以及单/双臂 MoveJ、MoveP、MoveL 的周期循环，现在只通过无锁原子变量写入最新进度。每个活动轨迹使用独立的 **100 ms 定时线程**（上限约 10 Hz，不占用 ROS 实测反馈 executor），读取并发布最新值。没有更新时不重复发布；慢订阅者不会形成待发进度队列，也不会在恢复后集中补发。WBC 的父动作进度也移出子任务监督循环，避免发布阻塞取消及状态检查。
+
+规划、进入执行和最终到位等阶段反馈仍可在周期循环之外发布。动作结束前停止并回收进度线程，再发布 Result，避免动作完成后继续发布旧反馈。执行失败先触发运动停止/确认，再等待正在进行的发布结束。进度发布异常会使本次动作失败；进度百分比本身不作为实测到位证明。
+
+周期超时日志新增字段，例如：
+
+```text
+preplanned dispatch missed 4 ms deadline at sample 1300 phase=after_sample wake_late_us=60 sample_us=4200 late_us=4260
+```
+
+- `phase=before_sample`：线程唤醒时已错过截止，本点尚未发送。
+- `phase=after_sample`：采样回调完成后检测到超时，本点可能已发送，后续点取消。
+- `wake_late_us`：相对计划时间的唤醒延迟。
+- `sample_us`：采样回调耗时；before_sample 时为 0。
+- `late_us`：检测时相对计划时间的总延迟。
+
+仍以实际时间差达到 4 ms 判定超时，不提高阈值或补发过期点。如果新版再次报错，可先用这些字段区分调度延迟和采样路径耗时，再结合 SDK/PDO、CPU 调度及系统负载继续定位。隔离发布能排除这条同步阻塞路径，不能仅凭离线测试认定此前实机错误已完全消失。
+
+本次验证：本机编译及 **15/15** 回归、x86 真实 SDK 编译及 **19/19** 回归全部通过。新增测试在反馈发布被阻塞时仍完成 1500 个模拟 4 ms 采样，并校验原截止取消规则、最新值合并、发布异常与 Result 前线程回收。x86 已直接安装并于 2026-11-02 18:35 左右切回 `/home/it/ylf_wbc`，头部启动回零完成；进程 3774387 与安装文件哈希一致，代码段和 Build ID 与本次构建一致，两个 SDK 哈希保持不变。30 秒被动观察得到 3001 个不同的 WBC 采集时间，无倒序或重复；接单开放、`state=MONITORING`、`active_workers=0`、`arm_tracking=OFF`。此次未重新发送此前失败的腰腿/并行动作，原动作的实机复测仍待现场执行。按随后要求，新版已于 18:40 正常退出，日志确认 `DISABLED_STATIONARY_CONFIRMED` 后进入 `shutdown=COMPLETE`，未使用强制结束，最终保持运控停止。
+
+### 11.4 其他发布路径核查
+
+| 发布路径 | 当前实现 | 后续优化方向 |
+|---|---|---|
+| `/wbc/joint_states` | 独立反馈回调组，10 ms 周期；保留设备采集时间及采样前进校验 | 保留 100 Hz；任务端有反馈新鲜度要求，不能简单降频 |
+| `/Control/MotorInfo`（含 TCP） | 10 ms 定时回调内更新模型、计算 FK 后可靠发布 | 进一步测量模型锁等待及发布耗时；可将观测计算与最新快照发布分开，保留采集时间 |
+| `/head_joint_states`、`/leg_joint_states` | 4 ms 状态采集线程每 12 次同步发布一次，约 20.8 Hz | 可迁移到独立状态发布定时器，避免 DDS 延迟拖慢采集线程；这不是此次已隔离的指令发送线程 |
+| 夹爪 Action 反馈 | 随 20 ms 串口状态轮询同步发布，最高约 50 Hz | 可独立合并最新实测夹爪状态，避免发布影响取消/超时轮询；需保留整组状态的一致性 |
+| HeadPose、心跳、安全状态 | 已分别在 33 ms、1 s、100 ms 定时回调发布 | 当前无已确认的 4 ms 发送线程内发布问题；按实测耗时决定是否继续分离 |
+
+以上是源码核查结果。此次只修改轨迹进度发布与周期超时诊断；状态话题频率、QoS、设备采集时间、SDK、URDF 和任务接口均保持原配置。
 
 ## 12. 接口原文与参数配置快照
 
@@ -718,6 +1163,12 @@ std_msgs/Header header
 string task_id
 uint8 arm_id
 uint8 control_mode
+
+# Compatibility fields: keep_tcp_level must remain false for all MoveJoints.
+# Enabling it is rejected. TCP level compensation is only supported by
+# MovePose WHOLE_BODY_LEFT/RIGHT/BOTH (WBC); tolerance must still be valid.
+bool keep_tcp_level false
+float64 tcp_level_tolerance_rad 0.02
 
 # ARM_LEFT/ARM_RIGHT 使用下列可变长字段，必须提供完整、唯一的七个关节。
 # LEG: 四个关节维持原有 MoveJ；仅给 leg_joint1/2/3 中两个不同关节时，
@@ -811,6 +1262,14 @@ std_msgs/Header header
 string task_id
 uint8 arm_id
 uint8 control_mode
+
+# Optional WBC-only TCP constraint; defaults off. Only WHOLE_BODY_LEFT/RIGHT/BOTH
+# in position mode may enable it; other arm_id values are rejected when true.
+# Selected arms compensate leg/waist motion throughout WBC MoveP/MoveL.
+# TCP XY stays parallel to base_link XY, preserving initial TCP Z up/down.
+# Start and target must already satisfy it; yaw is free, targets are not rewritten.
+bool keep_tcp_level false
+float64 tcp_level_tolerance_rad 0.02
 
 # ARM_LEFT/ARM_RIGHT 使用 target_pose/bound_size。
 # Optional continuous MoveP via TCP poses; single arm only, no intermediate stops.
@@ -941,7 +1400,7 @@ float32 progress_rate
 
 ### 运控 YAML 模板完整快照
 
-此模板不是机器人当前运行参数快照。部分历史字段未被读取，见第 8 节。
+此模板不是机器人当前运行参数快照。部分历史字段未被读取，见第 8 节。精定位与头部启动回零的新增参数分别见第 8.5、8.6 节及其独立模板；下方旧模板未列出它们时，仍使用代码默认值。
 
 ```yaml
 /motion_control_ns/motion_control:

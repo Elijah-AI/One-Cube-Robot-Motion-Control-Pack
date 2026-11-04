@@ -2,6 +2,7 @@
 #define MOTION_CONTROL_PKG_SDK_SDK_COMMAND_GATE_HPP_
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <mutex>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "motion_control_pkg/sdk/dual_arm_device_interface.hpp"
+#include "motion_control_pkg/sdk/drive_control.hpp"
 
 namespace motion_control_pkg::sdk
 {
@@ -61,8 +63,12 @@ public:
 
   SdkCommandResult connect(const std::array<unsigned char, 4> & ip);
   SdkCommandResult release();
+  SdkCommandResult disableForShutdown();
+  bool readShutdownFeedback(std::vector<DriveAxis>& axes, std::string& detail);
   void disableLogging();
   SdkCommandResult readState(DualArmDeviceState & state);
+  // Caller must fence all motion and reject clearing while resources are busy.
+  DriveControlResult controlDrives(bool left, bool right, bool clear_fault);
 
   SdkCommandResult initializePositionMode(
     int velocity_ratio = 10, int acceleration_ratio = 10);
@@ -89,9 +95,14 @@ private:
   SdkCommandGateOptions options_;
   mutable std::mutex mutex_;
   mutable std::mutex mode_transition_mutex_;
+  std::mutex drive_clear_mutex_;
+  std::atomic<std::uint64_t> drive_epoch_{0};
   std::chrono::steady_clock::time_point last_joint_command_commit_time_{};
   bool has_last_joint_command_commit_time_{false};
   std::size_t joint_command_batch_id_{0};
+  std::array<int, kArmCount> last_feedback_sequence_{{-1,-1}};
+  std::array<std::chrono::steady_clock::time_point, kArmCount> feedback_acquired_{};
+  bool released_{false};
 };
 
 }  // namespace motion_control_pkg::sdk

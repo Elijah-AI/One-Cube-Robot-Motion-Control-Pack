@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "motion_control_pkg/execution/execution_control.hpp"
+#include "motion_control_pkg/execution/motion_safety.hpp"
 
 namespace motion_control_pkg::execution
 {
@@ -26,6 +27,10 @@ public:
 
   bool succeed(const std::shared_ptr<ResultT> & result)
   {
+    if (!MotionSafetyScope::beforeTerminal(true, result->error_message)) {
+      result->success = false;
+      return abort(result);
+    }
     if (!terminal_.tryFinish(TerminalState::kSucceeded)) {
       return false;
     }
@@ -35,6 +40,7 @@ public:
 
   bool abort(const std::shared_ptr<ResultT> & result)
   {
+    MotionSafetyScope::beforeTerminal(false, result->error_message);
     if (!terminal_.tryFinish(TerminalState::kAborted)) {
       return false;
     }
@@ -44,6 +50,7 @@ public:
 
   bool cancel(const std::shared_ptr<ResultT> & result)
   {
+    MotionSafetyScope::beforeTerminal(false, result->error_message);
     if (!terminal_.tryFinish(TerminalState::kCanceled)) {
       return false;
     }

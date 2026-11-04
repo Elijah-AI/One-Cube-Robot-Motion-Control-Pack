@@ -11,6 +11,7 @@
 // 以及开机自检/复位任务序列。
 
 #include "task_manager/task_config_parser.hpp"
+#include "com_interfaces/tcp_level_goal.hpp"
 #include "task_manager/log_helper.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
 #include <rclcpp/rclcpp.hpp>
@@ -609,6 +610,13 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
 
   // 机械臂位姿移动参数（对应 MovePose.action）
   act.arm_param.arm_id = p["arm_id"].as<uint8_t>();
+  act.arm_param.keep_tcp_level = p["keep_tcp_level"] ? p["keep_tcp_level"].as<bool>() : false;
+  act.arm_param.tcp_level_tolerance_rad = p["tcp_level_tolerance_rad"] ?
+    p["tcp_level_tolerance_rad"].as<double>() : 0.02;
+  std::string level_error;
+  if (!com_interfaces::validateTcpLevelGoal(act.arm_param.keep_tcp_level,
+      act.arm_param.tcp_level_tolerance_rad, act.arm_param.arm_id, true, 0, level_error))
+    throw std::invalid_argument(level_error);
   act.arm_param.enable_collision_check = parse_collision_mode(p);
   act.arm_param.use_config_pose = p["use_config_pose"].as<bool>();
   act.arm_param.use_force_control = p["use_force_control"].as<bool>();
@@ -798,6 +806,14 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
 
   // 关节空间移动参数
   act.move_joints_param.arm_id = p["arm_id"].as<uint8_t>();
+  act.move_joints_param.keep_tcp_level = p["keep_tcp_level"] ? p["keep_tcp_level"].as<bool>() : false;
+  act.move_joints_param.tcp_level_tolerance_rad = p["tcp_level_tolerance_rad"] ?
+    p["tcp_level_tolerance_rad"].as<double>() : 0.02;
+  std::string level_error;
+  if (!com_interfaces::validateTcpLevelGoal(act.move_joints_param.keep_tcp_level,
+      act.move_joints_param.tcp_level_tolerance_rad, act.move_joints_param.arm_id, false,
+      p["control_mode"] ? p["control_mode"].as<uint8_t>() : 0, level_error))
+    throw std::invalid_argument(level_error);
   act.move_joints_param.enable_collision_check = parse_collision_mode(p);
   act.move_joints_param.acceleration_scale = scale("acceleration_scale");
   act.move_joints_param.jerk_scale = scale("jerk_scale");

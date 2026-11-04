@@ -1,3 +1,4 @@
+#include "motion_control_pkg/execution/head_startup_home.hpp"
 #include "motion_control_pkg/motion/jerk_limited_retiming.hpp"
 /*
 #####################################################################################
@@ -228,6 +229,7 @@ MiracleMAlgo::MiracleMAlgo(const std::string& urdf_path, const std::string& mesh
     
     data_ = std::make_shared<pinocchio::Data>(model_);
     geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
+    ++geometry_revision_;
 
     std::vector<std::string> left_joint_names = {
         "Joint1_L", "Joint2_L", "Joint3_L", "Joint4_L",
@@ -368,6 +370,7 @@ void MiracleMAlgo::setupInternalCollisionPairs() {
     }
     
     geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
+    ++geometry_revision_;
     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "Internal collision pairs configured. Total active pairs: %d", added_pairs);
 }
 
@@ -383,6 +386,7 @@ void MiracleMAlgo::disableCollisionPair(const std::string& geom1_name, const std
     
     geom_model_.removeCollisionPair(pinocchio::CollisionPair(id1, id2));
     geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
+    ++geometry_revision_;
 }
 
 void MiracleMAlgo::addExternalCollisionBox(const std::string& name, 
@@ -413,6 +417,7 @@ void MiracleMAlgo::addExternalCollisionBox(const std::string& name,
     }
 
     geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
+    ++geometry_revision_;
     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "Added external object '%s'. New collision pairs: %d. Total active pairs: %zu",
                 name.c_str(), added_pairs, geom_model_.collisionPairs.size());
 }
@@ -531,6 +536,7 @@ void MiracleMAlgo::addExternalCollisionPointcloud(const std::string& name, pcl::
     }
 
     geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
+    ++geometry_revision_;
 
     RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"),
                 "Added external object '%s' as OcTree. "
@@ -606,6 +612,7 @@ void MiracleMAlgo::removeExternalCollisionObject(const std::string& name) {
             // Remove from GeometryModel (this automatically updates collisionPairs and their indices!)
             geom_model_.removeGeometryObject(name);
             geom_data_ = std::make_shared<pinocchio::GeometryData>(geom_model_);
+    ++geometry_revision_;
             
             size_t removed_pairs = old_pairs_size - geom_model_.collisionPairs.size();
             
@@ -668,8 +675,56 @@ bool MiracleMAlgo::validateChainSamples(int module_id,
     return true;
 }
 
+bool MiracleMAlgo::validateHeadStartupPath(const std::vector<double>& full_start,
+    const std::vector<std::vector<double>>& path, const std::vector<double>& lower,
+    const std::vector<double>& upper, std::string& error) {
+    std::lock_guard<std::recursive_mutex> lock(pinocchio_data_mutex_);
+    if (full_start.size()!=static_cast<std::size_t>(model_.nq) || path.empty() ||
+        head_q_indices_.size()!=2 || lower.size()!=2 || upper.size()!=2) {
+        error="invalid head startup path dimensions";return false;
+    }
+    auto q=toEigenConfig(full_start);
+    std::vector<double> previous;
+    for(auto idx:head_q_indices_)previous.push_back(q[idx]);
+    const auto initial=previous;
+    if(path.front()!=initial || path.back()!=std::vector<double>{0.,0.}) {
+        error="head startup path must connect measured start to exact zero";return false;
+    }
+    // Self collision is mandatory for startup. Restore the caller's mode on
+    // every exit without modifying joint limits or the shared model.
+    const auto old_mode=setCollisionCheckMode(1);
+    struct Restore { MiracleMAlgo& algo; uint8_t mode; ~Restore(){algo.setCollisionCheckMode(mode);} } restore{*this,old_mode};
+    for(const auto& point:path) {
+        if(!motion_control_pkg::execution::headHomeCommandInward(initial,previous,point)) {
+            error="head startup path is not monotonically toward zero";return false;
+        }
+        previous=point;
+        for(std::size_t j=0;j<2;++j)q[head_q_indices_[j]]=point[j];
+        for(int j=0;j<model_.nq;++j) {
+            auto lo=model_.lowerPositionLimit[j], hi=model_.upperPositionLimit[j];
+            for(std::size_t k=0;k<2;++k)if(static_cast<std::size_t>(j)==head_q_indices_[k]) {lo=lower[k];hi=upper[k];}
+            if(!std::isfinite(q[j]) || !std::isfinite(lo) || !std::isfinite(hi) || lo>hi || q[j]<lo-1e-8 || q[j]>hi+1e-8) {
+                error="head startup path violates recovery or other joint bounds";return false;
+            }
+        }
+        pinocchio::updateGeometryPlacements(model_,*data_,geom_model_,*geom_data_,q);
+        applyCollisionCheckMode();
+        if(pinocchio::computeCollisions(geom_model_,*geom_data_,true)) {
+            error="head startup path self collision";return false;
+        }
+    }
+    error.clear();return true;
+}
+
 bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
-    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(pinocchio_data_mutex_);
+    applyCollisionCheckMode();
+    return isFullQValidWithData(full_q, *data_, *geom_data_);
+}
+
+bool MiracleMAlgo::isFullQValidWithData(const Eigen::VectorXd& full_q,
+    pinocchio::Data& data, pinocchio::GeometryData& geometry_data)
+{
     if (full_q.size() != model_.nq || !full_q.allFinite()) {
         std::cerr << "[isFullQValid] Unsupported input size: " << full_q.size()
                   << ". Expected " << model_.nq << std::endl;
@@ -687,12 +742,11 @@ bool MiracleMAlgo::isFullQValid(const Eigen::VectorXd& full_q) {
 
     // No additional torso-angle cap: joint limits come from the URDF.
     // Collision validity remains independent of the COM/ZMP path checks.
-    pinocchio::updateGeometryPlacements(model_, *data_, geom_model_, *geom_data_, full_q);
-    applyCollisionCheckMode();
-    if (pinocchio::computeCollisions(geom_model_, *geom_data_, false)) {
+    pinocchio::updateGeometryPlacements(model_, data, geom_model_, geometry_data, full_q);
+    if (pinocchio::computeCollisions(geom_model_, geometry_data, false)) {
         std::ostringstream coll_pairs;
         for (size_t k = 0; k < geom_model_.collisionPairs.size(); ++k) {
-            if (geom_data_->activeCollisionPairs[k] && geom_data_->collisionResults[k].isCollision()) {
+            if (geometry_data.activeCollisionPairs[k] && geometry_data.collisionResults[k].isCollision()) {
                 const auto& pair = geom_model_.collisionPairs[k];
                 coll_pairs << "  "
                            << geom_model_.geometryObjects[pair.first].name
@@ -1132,12 +1186,17 @@ bool MiracleMAlgo::solveIK(const Eigen::VectorXd& q_init,
 }
 
 bool MiracleMAlgo::solveIKWithLockedData(
-    const Eigen::VectorXd& q_init,
-    const Eigen::Isometry3d& goal,
-    Eigen::VectorXd& q_res,
-    int mode,
-    SingleArmIkWorkspace& workspace,
+    const Eigen::VectorXd& q_init, const Eigen::Isometry3d& goal,
+    Eigen::VectorXd& q_res, int mode, SingleArmIkWorkspace& workspace,
     bool continuous_path)
+{
+    return solveIKWithData(q_init, goal, q_res, mode, workspace, *data_, continuous_path, {});
+}
+
+bool MiracleMAlgo::solveIKWithData(
+    const Eigen::VectorXd& q_init, const Eigen::Isometry3d& goal,
+    Eigen::VectorXd& q_res, int mode, SingleArmIkWorkspace& workspace,
+    pinocchio::Data& data, bool continuous_path, const PlanningStop& stop)
 {
     double eps = 5e-5;
     const int IT_MAX = 1000;
@@ -1240,12 +1299,13 @@ bool MiracleMAlgo::solveIKWithLockedData(
 
     Eigen::VectorXd& err = workspace.error;
     for (int i=0; i<IT_MAX; i++) {
-        // pinocchio::forwardKinematics(model_, *data_, q_res);
-        // pinocchio::updateFramePlacements(model_, *data_);
-        pinocchio::computeJointJacobians(model_, *data_, q_res);
-        pinocchio::updateFramePlacements(model_, *data_);
+        if (stop && stop()) return false;
+        // pinocchio::forwardKinematics(model_, data, q_res);
+        // pinocchio::updateFramePlacements(model_, data);
+        pinocchio::computeJointJacobians(model_, data, q_res);
+        pinocchio::updateFramePlacements(model_, data);
         
-        const pinocchio::SE3 iMd = data_->oMf[ee_id].actInv(oMdes);
+        const pinocchio::SE3 iMd = data.oMf[ee_id].actInv(oMdes);
         err = pinocchio::log6(iMd).toVector();
         //打印误差
         // RCLCPP_INFO(rclcpp::get_logger("MiracleMAlgo"), "[SolveIK] err norm: %f", err.norm());
@@ -1260,8 +1320,8 @@ bool MiracleMAlgo::solveIKWithLockedData(
         }
 
         J_tmp.setZero();
-        pinocchio::getFrameJacobian(model_, *data_, ee_id, pinocchio::LOCAL, J_tmp);
-        // pinocchio::computeFrameJacobian(model_, *data_, q_res, ee_id, pinocchio::LOCAL, J_tmp);
+        pinocchio::getFrameJacobian(model_, data, ee_id, pinocchio::LOCAL, J_tmp);
+        // pinocchio::computeFrameJacobian(model_, data, q_res, ee_id, pinocchio::LOCAL, J_tmp);
 
         // Mask out non-active joints该掩码用于过滤掉非活动关节，只考虑活动关节的Jacobian
         for(int j=0; j<model_.nv; ++j) {
@@ -1322,10 +1382,10 @@ bool MiracleMAlgo::solveIKWithLockedData(
                     continue;
                 }
 
-                pinocchio::forwardKinematics(model_, *data_, candidate);
-                pinocchio::updateFramePlacements(model_, *data_);
+                pinocchio::forwardKinematics(model_, data, candidate);
+                pinocchio::updateFramePlacements(model_, data);
                 const pinocchio::SE3 candidate_iMd =
-                    data_->oMf[ee_id].actInv(oMdes);
+                    data.oMf[ee_id].actInv(oMdes);
                 const double candidate_error_norm =
                     pinocchio::log6(candidate_iMd).toVector().norm();
                 if (std::isfinite(candidate_error_norm) &&
@@ -2774,13 +2834,28 @@ bool MiracleMAlgo::planSingleArmCartesianIkWaypoints(
     Eigen::Isometry3d& actual_start_pose,
     double* ik_time_seconds)
 {
+    std::lock_guard<std::recursive_mutex> lock(pinocchio_data_mutex_);
+    SingleArmIkWorkspace workspace;
+    return planSingleArmCartesianIkWaypointsWithData(is_left, start_q, goal,
+        max_translation_step_m, max_rotation_step_rad, arm_waypoints,
+        actual_start_pose, ik_time_seconds, *data_, workspace, {});
+}
+
+bool MiracleMAlgo::planSingleArmCartesianIkWaypointsWithData(
+    bool is_left, const std::vector<double>& start_q, const Eigen::Isometry3d& goal,
+    double max_translation_step_m, double max_rotation_step_rad,
+    std::vector<std::vector<double>>& arm_waypoints,
+    Eigen::Isometry3d& actual_start_pose, double* ik_time_seconds,
+    pinocchio::Data& data, SingleArmIkWorkspace& workspace, const PlanningStop& stop)
+{
     arm_waypoints.clear();
     actual_start_pose = Eigen::Isometry3d::Identity();
     if (ik_time_seconds != nullptr) {
         *ik_time_seconds = 0.0;
     }
     if (start_q.size() != static_cast<std::size_t>(model_.nq) ||
-        !goal.matrix().allFinite())
+        !goal.matrix().allFinite() ||
+        !std::all_of(start_q.begin(), start_q.end(), [](double v) { return std::isfinite(v); }))
     {
         RCLCPP_ERROR(
             rclcpp::get_logger("MiracleMAlgo"),
@@ -2788,14 +2863,13 @@ bool MiracleMAlgo::planSingleArmCartesianIkWaypoints(
         return false;
     }
 
-    std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     Eigen::VectorXd q_current = toEigenConfig(start_q);
-    pinocchio::forwardKinematics(model_, *data_, q_current);
-    pinocchio::updateFramePlacements(model_, *data_);
+    pinocchio::forwardKinematics(model_, data, q_current);
+    pinocchio::updateFramePlacements(model_, data);
 
     const pinocchio::FrameIndex ee_id =
         is_left ? left_ee_frame_id_ : right_ee_frame_id_;
-    const pinocchio::SE3 start_se3 = data_->oMf[ee_id];
+    const pinocchio::SE3 start_se3 = data.oMf[ee_id];
     actual_start_pose.matrix() = start_se3.toHomogeneousMatrix();
     const auto sampling =
         motion_control_pkg::motion::computeCartesianLineSegmentCount(
@@ -2844,7 +2918,6 @@ bool MiracleMAlgo::planSingleArmCartesianIkWaypoints(
         return false;
     }
 
-    SingleArmIkWorkspace workspace;
     Eigen::VectorXd q_next(model_.nq);
     for (std::size_t segment = 1U; segment <= sampling.segments; ++segment) {
         const double alpha = static_cast<double>(segment) /
@@ -2853,8 +2926,8 @@ bool MiracleMAlgo::planSingleArmCartesianIkWaypoints(
             motion_control_pkg::motion::interpolateCartesianLine(actual_start_pose, goal, alpha);
 
         const auto ik_started_at = std::chrono::steady_clock::now();
-        const bool ik_ok = solveIKWithLockedData(
-            q_current, target, q_next, is_left ? 0 : 1, workspace, true);
+        const bool ik_ok = solveIKWithData(
+            q_current, target, q_next, is_left ? 0 : 1, workspace, data, true, stop);
         if (ik_time_seconds != nullptr) {
             *ik_time_seconds += std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - ik_started_at).count();
@@ -2953,27 +3026,31 @@ bool MiracleMAlgo::validateSingleArmCartesianTrajectory(
         rclcpp::get_logger("MiracleMAlgo"),
         "Cartesian line FK validation: Pinocchio lock acquired arm=%s wait=%.6f s",
         is_left ? "left" : "right", fk_lock_wait_seconds);
-    Eigen::VectorXd full_q = toEigenConfig(reference_full_q);
-    const pinocchio::FrameIndex ee_id =
-        is_left ? left_ee_frame_id_ : right_ee_frame_id_;
-    double previous_progress = -progress_tolerance;
-    Eigen::Isometry3d final_pose = Eigen::Isometry3d::Identity();
-    for (std::size_t sample_index = 0U;
-        sample_index < arm_trajectory.size(); ++sample_index)
-    {
-        const auto& arm_q = arm_trajectory[sample_index];
+    std::vector<std::vector<double>> configurations;
+    configurations.reserve(arm_trajectory.size());
+    for (const auto& arm_q : arm_trajectory) {
         if (arm_q.size() != indices.size()) {
             error_message = "Cartesian line FK validation arm sample dimension mismatch";
             log_fk_validation_end(false);
             return false;
         }
-        for (std::size_t joint = 0U; joint < indices.size(); ++joint) {
-            full_q[static_cast<Eigen::Index>(indices[joint])] = arm_q[joint];
-        }
-        pinocchio::forwardKinematics(model_, *data_, full_q);
-        pinocchio::updateFramePlacements(model_, *data_);
-        Eigen::Isometry3d sample_pose = Eigen::Isometry3d::Identity();
-        sample_pose.matrix() = data_->oMf[ee_id].toHomogeneousMatrix();
+        auto q = reference_full_q;
+        for (std::size_t joint = 0; joint < indices.size(); ++joint)
+            q[indices[joint]] = arm_q[joint];
+        configurations.push_back(std::move(q));
+    }
+    std::vector<Eigen::Isometry3d> poses;
+    const auto ee_id = is_left ? left_ee_frame_id_ : right_ee_frame_id_;
+    if (!getFramePosesAtConfigurations(model_.frames[0].name, model_.frames[ee_id].name,
+                                      configurations, poses)) {
+        error_message = "Cartesian line FK validation contains invalid configuration";
+        log_fk_validation_end(false);
+        return false;
+    }
+    double previous_progress = -progress_tolerance;
+    Eigen::Isometry3d final_pose = Eigen::Isometry3d::Identity();
+    for (std::size_t sample_index = 0; sample_index < poses.size(); ++sample_index) {
+        const auto& sample_pose = poses[sample_index];
         const auto sample_error =
             motion_control_pkg::motion::evaluateCartesianLineSample(
             start_pose, goal_pose, sample_pose);
@@ -3691,6 +3768,24 @@ bool MiracleMAlgo::toppraPlan(
     return true;
 }
 //--------------------------------------------------------------//
+
+bool MiracleMAlgo::getChainVelocityLimits(int module_id, std::vector<double>& limits) const {
+    const std::vector<int>* indices = nullptr;
+    switch (module_id) {
+        case 0: indices = &left_arm_v_indices_; break;
+        case 1: indices = &right_arm_v_indices_; break;
+        case 3: indices = &head_v_indices_; break;
+        case 4: indices = &leg_v_indices_; break;
+        default: limits.clear(); return false;
+    }
+    limits.clear();
+    for (const auto index : *indices) {
+        if (index < 0 || index >= model_.nv || !std::isfinite(model_.velocityLimit[index]) ||
+            model_.velocityLimit[index] <= 0) { limits.clear(); return false; }
+        limits.push_back(model_.velocityLimit[index]);
+    }
+    return !limits.empty();
+}
 
 bool MiracleMAlgo::getChainJointsLimt(int module_id, std::vector<double> &min_angles, std::vector<double> &max_angles) {
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);

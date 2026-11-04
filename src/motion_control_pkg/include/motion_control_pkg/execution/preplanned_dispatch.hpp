@@ -5,6 +5,7 @@
 #include <cmath>
 #include <exception>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -14,12 +15,17 @@
 
 namespace motion_control_pkg::execution
 {
+struct SteadyDispatchTiming {
+    auto now() const { return std::chrono::steady_clock::now(); }
+    void sleep_until(std::chrono::steady_clock::time_point time) const { std::this_thread::sleep_until(time); }
+};
+
 // Preparation must finish before the caller chooses the common start time.
-template<class SendSample>
+template<class SendSample, class Timing = SteadyDispatchTiming>
 bool dispatchPreplannedSamples(
     std::size_t count, std::chrono::steady_clock::time_point start,
     const std::shared_ptr<CancellationToken>& cancel,
-    SendSample send, std::string& error)
+    SendSample send, std::string& error, Timing timing = {})
 {
     if (count == 0U) {
         error = "preplanned trajectory is empty";
@@ -31,11 +37,30 @@ bool dispatchPreplannedSamples(
             error = "preplanned trajectory canceled";
             return false;
         }
-        std::this_thread::sleep_until(start + kDualArmControlPeriod * index);
+        const auto scheduled = start + kDualArmControlPeriod * index;
+        timing.sleep_until(scheduled);
         if (cancel && cancel->requested()) {
             error = "preplanned trajectory canceled";
             return false;
         }
+        // A whole-body schedule has one clock. Never shift one child clock or
+        // drain a backlog independently: cancel the shared group on a missed tick.
+        const auto woke = timing.now();
+        const auto missed_tick = [&](const char* phase, auto observed) {
+            if (observed - scheduled < kDualArmControlPeriod)
+                return false;
+            const auto us=[](auto duration) {
+                return std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+            };
+            std::ostringstream detail;
+            detail << "preplanned dispatch missed 4 ms deadline at sample " << index
+                << " phase=" << phase << " wake_late_us=" << us(woke-scheduled)
+                << " sample_us=" << us(observed-woke) << " late_us=" << us(observed-scheduled);
+            error = detail.str();
+            if (cancel) cancel->request();
+            return true;
+        };
+        if (missed_tick("before_sample",woke)) return false;
         bool sent = false;
         try {
             sent = send(index);
@@ -48,6 +73,7 @@ bool dispatchPreplannedSamples(
             if (cancel) cancel->request();
             return false;
         }
+        if (missed_tick("after_sample",timing.now())) return false;
     }
     error.clear();
     return true;

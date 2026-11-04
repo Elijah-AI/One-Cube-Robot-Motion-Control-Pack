@@ -1,0 +1,97 @@
+#!/usr/bin/python3
+"""Installed as arm_error and body_error; configure optional tracking limits."""
+import argparse
+import math
+import os
+import sys
+import time
+
+
+def parse_options(argv, command):
+    group = "双臂" if command == "arm_error" else "腿部、腰部及头部"
+    parser = argparse.ArgumentParser(prog=command,
+        description=group + "跟踪误差保护开关，进程启动时默认关闭。")
+    parser.add_argument("options", nargs="*", help="<误差rad> [立即停止rad=0.08] | off | status")
+    args = parser.parse_args(argv).options
+    if args in (["off"], ["status"]):
+        return args[0], None, None
+    if args and args[0] == "on":
+        args = args[1:]
+    if not args:
+        if not sys.stdin.isatty():
+            parser.error("开启时需填写 rad 限制，例如：" + command + " 0.02 0.08")
+        try:
+            args = input("输入误差限制(rad)和立即停止限制(rad)，例如 0.02 0.08：").split()
+        except EOFError:
+            parser.error("未输入 rad 限制")
+    try:
+        if len(args) not in (1, 2):
+            raise ValueError()
+        limit = float(args[0])
+        hard = float(args[1]) if len(args) == 2 else 0.08
+        if not math.isfinite(limit) or not math.isfinite(hard) or not 0 < limit <= hard:
+            raise ValueError()
+    except ValueError:
+        parser.error("限制必须为有限数值，且 0 < 误差限制 <= 立即停止限制，单位 rad")
+    return "on", limit, hard
+
+
+def main(argv=None, command=None):
+    command = command or os.path.basename(sys.argv[0])
+    if command not in ("arm_error", "body_error"):
+        raise RuntimeError("请通过已安装的 arm_error 或 body_error 命令运行")
+    mode, limit, hard = parse_options(argv, command)
+    import rclpy
+    from rclpy.parameter import Parameter
+    from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+    from rcl_interfaces.srv import SetParametersAtomically
+    from std_msgs.msg import String
+
+    rclpy.init(args=[])
+    node = rclpy.create_node(command + "_cli_" + str(os.getpid()))
+    try:
+        if mode == "status":
+            states = []
+            qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                             reliability=ReliabilityPolicy.RELIABLE)
+            subscription = node.create_subscription(String, "/Control/motion_safety",
+                                                     lambda msg: states.append(msg.data), qos)
+            end = time.monotonic() + 4
+            while not states and time.monotonic() < end:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            if not states:
+                raise RuntimeError("未收到运控状态，请检查运控是否启动和 ROS_DOMAIN_ID")
+            print(states[-1])
+            node.destroy_subscription(subscription)
+            return 0
+        client = node.create_client(SetParametersAtomically, "/Control/" + command)
+        if not client.wait_for_service(timeout_sec=4):
+            raise RuntimeError("未找到新版运控跟踪开关服务，请检查运控版本和 ROS_DOMAIN_ID")
+        request = SetParametersAtomically.Request()
+        parameters = [Parameter("enabled", value=mode == "on")]
+        if mode == "on":
+            parameters += [Parameter("position_error_rad", value=limit),
+                           Parameter("hard_error_rad", value=hard)]
+        request.parameters = [p.to_parameter_msg() for p in parameters]
+        future = client.call_async(request)
+        rclpy.spin_until_future_complete(node, future, timeout_sec=5)
+        if not future.done():
+            raise RuntimeError("开关请求未确认，请执行 " + command + " status 核对")
+        response = future.result()
+        if response is None or not response.result.successful:
+            raise RuntimeError(response.result.reason if response else "开关请求失败")
+        print(response.result.reason)
+        return 0
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

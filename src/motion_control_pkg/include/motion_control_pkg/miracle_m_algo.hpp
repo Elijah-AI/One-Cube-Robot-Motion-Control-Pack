@@ -44,6 +44,7 @@
 #include <Eigen/Dense>
 #include <mutex>
 #include <limits>
+#include "motion_control_pkg/motion/trajectory_derivative_limits.hpp"
 #include <optional>
 
 #include <pinocchio/multibody/model.hpp>
@@ -259,6 +260,24 @@ public:
      * @param description_path 
      */
     MiracleMAlgo(const std::string& urdf_path, const std::string& mesh_dir);
+    // Startup configuration: 1 preserves serial planning; 2/4 use persistent
+    // workers with private mutable caches and the same read-only model/meshes.
+    void configurePlanningWorkers(std::size_t count);
+    using PlanningStop = std::function<bool()>;  // Must be safe for concurrent reads.
+    bool planDualArmCartesianIkWaypoints(
+        const std::vector<double>& start_q,
+        const std::array<Eigen::Isometry3d, 2>& goals,
+        double translation_step, double rotation_step,
+        std::array<std::vector<std::vector<double>>, 2>& waypoints,
+        std::array<Eigen::Isometry3d, 2>& starts,
+        double& elapsed_seconds, const PlanningStop& stop = {});
+    bool getFramePosesAtConfigurations(
+        const std::string& source_frame, const std::string& target_frame,
+        const std::vector<std::vector<double>>& configurations,
+        std::vector<Eigen::Isometry3d>& poses);
+    bool validateFullConfigurations(
+        const std::vector<std::vector<double>>& configurations,
+        std::size_t& first_invalid, const PlanningStop& stop = {});
     // Startup-only, whole-body mode only; standalone arm IK is unchanged.
     void configureStaticBalance(const motion_control_pkg::wbc::StaticBalanceOptions& options);
     const motion_control_pkg::wbc::StaticBalance* staticBalance() const { return static_balance_.get(); }
@@ -268,6 +287,8 @@ public:
     bool isStaticBalanceValid(const Eigen::VectorXd& q) const;
     bool validateStaticBalancePath(const std::vector<std::vector<double>>& path,
                                    std::string& error, double sample_period = 0.0) const;
+
+    bool getChainVelocityLimits(int module_id, std::vector<double>& limits) const;
 
     ~MiracleMAlgo() = default;
     /*
@@ -508,6 +529,12 @@ public:
      * @return false 无效
      */
     bool isFullQValid(const Eigen::VectorXd& full_q);
+    // Startup-only path validation: normal limits for every joint except the
+    // explicit head recovery envelope. The model/URDF itself is never changed.
+    bool validateHeadStartupPath(const std::vector<double>& full_start,
+        const std::vector<std::vector<double>>& path,
+        const std::vector<double>& recovery_lower, const std::vector<double>& recovery_upper,
+        std::string& error);
     /**
      * @brief 二次插值
      * 
@@ -544,7 +571,7 @@ public:
     int computeMoveJTrajectory(int module_id, const double plan_dt, const double max_velocity, const double max_acc, const double max_jerk, const std::vector<double> joint_cur_pos, 
                               const std::vector<double> joint_cur_vel,  const std::vector<double> joint_cur_acc, const std::vector<double> joint_target_pos, 
                               std::vector<std::vector<double>>& traj_pos_new, std::vector<std::vector<double>>& traj_vel_new, 
-                              std::vector<std::vector<double>>& traj_acc_new) {   //,const std::string &module_name=" " 
+                              std::vector<std::vector<double>>& traj_acc_new, double motion_scale = 1.0) {
         // int num_joints = joint_cur_pos.size();
         // 根据当前模块id和joint_target_pos更新q_target中的角度
         Eigen::VectorXd q_target = toEigenConfig(_m_full_joint_state_msg);
@@ -578,18 +605,24 @@ public:
             return -1;
         }
 
+        std::vector<double> urdf_velocity;
+        if (!getChainVelocityLimits(module_id, urdf_velocity) || urdf_velocity.size() != num_joints ||
+            joint_cur_pos.size() != num_joints || joint_cur_vel.size() != num_joints ||
+            joint_cur_acc.size() != num_joints || !std::isfinite(plan_dt) || plan_dt <= 0 ||
+            !std::isfinite(max_velocity) || max_velocity <= 0 ||
+            !std::isfinite(max_acc) || max_acc <= 0 || !std::isfinite(max_jerk) || max_jerk <= 0 ||
+            !std::isfinite(motion_scale) || motion_scale <= 0 || motion_scale > 1)
+            return -4;
+        traj_pos_new.clear(); traj_vel_new.clear(); traj_acc_new.clear();
         ruckig::InputParameter<num_joints> input;
-        for(size_t i = 0; i < num_joints; ++i) {
+        for (size_t i = 0; i < num_joints; ++i) {
             input.current_position[i] = joint_cur_pos[i];
             input.current_velocity[i] = joint_cur_vel[i];
             input.current_acceleration[i] = joint_cur_acc[i];
-            // input.current_acceleration = {0.0, 2.5, -0.5};
-        
             input.target_position[i] = joint_target_pos[i];
             input.target_velocity[i] = 0.0;
-            // input.target_acceleration = {0.0, 0.0, 0.5};
-
-            input.max_velocity[i] = max_velocity;
+            input.target_acceleration[i] = 0.0;
+            input.max_velocity[i] = std::min(max_velocity, urdf_velocity[i] * motion_scale);
             input.max_acceleration[i] = max_acc;
             input.max_jerk[i] = max_jerk;
         }
@@ -609,30 +642,27 @@ public:
         std::array<double, num_joints> new_position, new_velocity, new_acceleration;
         // std::cout << "Trajectory duration: " << trajectory.get_duration() << " [s]." << std::endl;
 
-        for(double new_time = 0.0; new_time < total_time; new_time+=plan_dt) {
-            trajectory.at_time(new_time, new_position, new_velocity, new_acceleration);
-
-
-
-            std::vector<double> vec_pos{new_position.begin(), new_position.end()};
-            std::vector<double> vec_vel{new_velocity.begin(), new_velocity.end()};
-            std::vector<double> vec_acc{new_acceleration.begin(), new_acceleration.end()};
-                        
-            traj_pos_new.emplace_back(vec_pos);
-            traj_vel_new.emplace_back(vec_vel);
-            traj_acc_new.emplace_back(vec_acc);    
-
-        }    
-        
-        // trajectory.at_time(total_time, new_position, new_velocity, new_acceleration);
-        // std::vector<double> vec_pos{new_position.begin(), new_position.end()};
-        // std::vector<double> vec_vel{new_velocity.begin(), new_velocity.end()};
-        // std::vector<double> vec_acc{new_acceleration.begin(), new_acceleration.end()};
-
-        // traj_pos_new.emplace_back(vec_pos);
-        // traj_vel_new.emplace_back(vec_vel);
-        // traj_acc_new.emplace_back(vec_acc);
-
+        if (!std::isfinite(total_time) || total_time < 0 || total_time / plan_dt > 1000000)
+            return -4;
+        const auto ticks = static_cast<size_t>(std::ceil(total_time / plan_dt));
+        for (size_t tick = 0; tick <= ticks; ++tick) {
+            trajectory.at_time(std::min(total_time, tick * plan_dt), new_position, new_velocity, new_acceleration);
+            traj_pos_new.emplace_back(new_position.begin(), new_position.end());
+            traj_vel_new.emplace_back(new_velocity.begin(), new_velocity.end());
+            traj_acc_new.emplace_back(new_acceleration.begin(), new_acceleration.end());
+        }
+        // Preserve the exact requested terminal hold, including zero-duration goals.
+        traj_pos_new.back() = joint_target_pos;
+        traj_vel_new.back().assign(num_joints, 0.0);
+        traj_acc_new.back().assign(num_joints, 0.0);
+        std::string derivative_error;
+        if (!motion_control_pkg::motion::validateCommandDerivatives(traj_pos_new, plan_dt,
+                {input.max_velocity.begin(), input.max_velocity.end()},
+                {input.max_acceleration.begin(), input.max_acceleration.end()},
+                {input.max_jerk.begin(), input.max_jerk.end()}, derivative_error)) {
+            RCLCPP_ERROR(rclcpp::get_logger("computeMoveJTrajectory"), "%s", derivative_error.c_str());
+            return -5;
+        }
 
 
         // std::cout << "Position at time " << new_time << " [s]: " << join(new_position) << std::endl;
@@ -673,7 +703,7 @@ public:
                               const double max_jerk, const std::vector<double> joint_cur_pos, const std::vector<double> joint_cur_vel,
                               const std::vector<double> joint_cur_acc, std::vector<double> tgt_pose, std::vector<std::vector<double>>& traj_pos_new,
                               std::vector<std::vector<double>>& traj_vel_new, std::vector<std::vector<double>> &traj_acc_new,
-                              double* ik_time_seconds = nullptr) {   //, bool nearest=true
+                              double* ik_time_seconds = nullptr, double motion_scale = 1.0) {
         if (ik_time_seconds != nullptr) {
             *ik_time_seconds = 0.0;
         }
@@ -706,6 +736,10 @@ public:
         }
 
         std::vector<double> target_q(num_joints);
+        if (tgt_pose.size() != 7 || !std::all_of(tgt_pose.begin(), tgt_pose.end(),
+                [](double x) { return std::isfinite(x); }) ||
+            Eigen::Vector4d(tgt_pose[3], tgt_pose[4], tgt_pose[5], tgt_pose[6]).norm() < 1e-8)
+            return -5;
         //tgt_pose为7维向量，位置加四元数，转换为goal变量
         Eigen::Isometry3d goal = Eigen::Isometry3d::Identity();
         goal.translation() = Eigen::Vector3d(tgt_pose[0], tgt_pose[1], tgt_pose[2]);
@@ -734,82 +768,9 @@ public:
             target_q[j] = q_res[static_cast<Eigen::Index>((*q_indices_ptr)[j])];
         }
         
-        bool pos_same = true;
-        for (int i = 0; i < num_joints; i++) {
-            if (abs(target_q[i] - joint_cur_pos[i]) > JOINTS_THRESHOLD) {
-                pos_same = false;
-                break;
-            }
-        }
-        if (pos_same) {
-            RCLCPP_INFO(rclcpp::get_logger("computeMove PTrajectory"),"%s %lf from [%lf,%lf] to [%lf,%lf] almost same",  __func__, plan_dt, joint_cur_pos[0], joint_cur_pos[1],
-                    target_q[0], target_q[1]); 
-            return -6;
-        }
-        // rc = tracik_solver->CartToJnt(start_q, end_pose, target_q);
-
-        for (size_t j = 0; j < num_joints; j++) {
-            RCLCPP_INFO(rclcpp::get_logger("computeMove PTrajectory"),"Target joint%ld: %f", j, target_q[j]);
-        }
-
-        ruckig::InputParameter<num_joints> input;
-        for(size_t i = 0; i < num_joints; ++i) {
-            input.current_position[i] = joint_cur_pos[i];
-            input.current_velocity[i] = joint_cur_vel[i];
-            input.current_acceleration[i] = joint_cur_acc[i];
-            // input.current_acceleration = {0.0, 2.5, -0.5};
-        
-            input.target_position[i] = target_q[i];
-            input.target_velocity[i] = 0.0;
-            // input.target_acceleration = {0.0, 0.0, 0.5};
-    
-            input.max_velocity[i] = max_velocity;
-            input.max_acceleration[i] = max_acc;
-            input.max_jerk[i] = max_jerk;
-
-            // target_collision_detect.emplace_back(target_q[i]);
-        }
-        
-        ruckig::Ruckig<num_joints> otg;
-        ruckig::Trajectory<num_joints> trajectory;
-    
-        ruckig::Result result = otg.calculate(input, trajectory); // Working = 0,  The trajectory is calculated normally
-        if (result < 0) {// == ruckig::Result::ErrorInvalidInput) {
-            
-            RCLCPP_ERROR(rclcpp::get_logger("computeMove PTrajectory"),"%s Ruckig  calculate error %d",  __func__, (int)result);
-            return -7;
-        }
-    
-        // Get duration of the trajectory
-        double total_time = trajectory.get_duration();
-        std::array<double, num_joints> new_position, new_velocity, new_acceleration;
-        // std::cout << "Trajectory duration: " << trajectory.get_duration() << " [s]." << std::endl;
-
-
-        for(double new_time = 0.0; new_time < total_time; new_time+=plan_dt) {
-            trajectory.at_time(new_time, new_position, new_velocity, new_acceleration);
-    
-            std::vector<double> vec_pos{new_position.begin(), new_position.end()};
-            std::vector<double> vec_vel{new_velocity.begin(), new_velocity.end()};
-            std::vector<double> vec_acc{new_acceleration.begin(), new_acceleration.end()};
-    
-
-            traj_pos_new.emplace_back(vec_pos);
-            traj_vel_new.emplace_back(vec_vel);
-            traj_acc_new.emplace_back(vec_acc);    
-    
-        }    
-        
-        trajectory.at_time(total_time, new_position, new_velocity, new_acceleration);
-        std::vector<double> vec_pos{new_position.begin(), new_position.end()};
-        std::vector<double> vec_vel{new_velocity.begin(), new_velocity.end()};
-        std::vector<double> vec_acc{new_acceleration.begin(), new_acceleration.end()};
-    
-        traj_pos_new.emplace_back(vec_pos);
-        traj_vel_new.emplace_back(vec_vel);
-        traj_acc_new.emplace_back(vec_acc);
-        
-        return 0;
+        return computeMoveJTrajectory<num_joints>(module_id, plan_dt, max_velocity, max_acc, max_jerk,
+            joint_cur_pos, joint_cur_vel, joint_cur_acc, target_q,
+            traj_pos_new, traj_vel_new, traj_acc_new, motion_scale);
     }
 
     bool ruckigPlan(
@@ -894,6 +855,25 @@ private:
         SingleArmIkWorkspace& workspace,
         bool continuous_path = false);
 
+    // Caller freezes model/scene with pinocchio_data_mutex_. Worker helpers
+    // MUST NOT acquire that mutex or touch shared Data/GeometryData/state.
+    bool solveIKWithData(const Eigen::VectorXd& q_init,
+        const Eigen::Isometry3d& goal, Eigen::VectorXd& q_res, int mode,
+        SingleArmIkWorkspace& workspace, pinocchio::Data& data,
+        bool continuous_path, const PlanningStop& stop);
+    bool planSingleArmCartesianIkWaypointsWithData(bool is_left,
+        const std::vector<double>& start_q, const Eigen::Isometry3d& goal,
+        double translation_step, double rotation_step,
+        std::vector<std::vector<double>>& waypoints, Eigen::Isometry3d& start,
+        double* ik_seconds, pinocchio::Data& data, SingleArmIkWorkspace& workspace,
+        const PlanningStop& stop);
+    bool isFullQValidWithData(const Eigen::VectorXd& full_q,
+        pinocchio::Data& data, pinocchio::GeometryData& geometry_data);
+    struct PlanningWorkspaces;
+    PlanningWorkspaces& planningWorkspaces();
+    std::size_t planning_worker_count_{1};
+    std::uint64_t geometry_revision_{0};
+
     bool solveDualIK(const Eigen::VectorXd& q_init,
                      const Eigen::Isometry3d& left_goal,
                      const Eigen::Isometry3d& right_goal,
@@ -952,6 +932,9 @@ private:
     std::vector<double>  _m_right_arm_joint_state_msg;
     std::vector<double>  _m_lower_body_joint_state_msg;
     std::vector<double>  _m_head_joint_state_msg;
+
+    // Destroy/join workers before the model, scene and their protecting mutex.
+    std::shared_ptr<PlanningWorkspaces> planning_workspaces_;
 
     // rclcpp::Node::SharedPtr node_;
 };

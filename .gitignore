@@ -141,3 +141,32 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Offline regression sources required by the synchronized robot build.
+!/src/motion_control_pkg/test/
+/src/motion_control_pkg/test/*
+!/src/motion_control_pkg/test/drive_control_test.cpp
+!/src/motion_control_pkg/test/error_option_cli_test.py
+!/src/motion_control_pkg/test/error_tracking_option_test.cpp
+!/src/motion_control_pkg/test/ethercat_feedback_validity_test.cpp
+!/src/motion_control_pkg/test/ethercat_initial_enable_test.cpp
+!/src/motion_control_pkg/test/ethercat_startup_readiness_test.cpp
+!/src/motion_control_pkg/test/head_startup_geometry_test.cpp
+!/src/motion_control_pkg/test/head_startup_home_test.cpp
+!/src/motion_control_pkg/test/latest_progress_test.cpp
+!/src/motion_control_pkg/test/measured_feedback_test.cpp
+!/src/motion_control_pkg/test/orderly_shutdown_test.cpp
+!/src/motion_control_pkg/test/parallel_planning_test.cpp
+!/src/motion_control_pkg/test/precision_arrival_test.cpp
+!/src/motion_control_pkg/test/shutdown_gate_test.cpp
+!/src/motion_control_pkg/test/shutdown_launch_test.py
+!/src/motion_control_pkg/test/shutdown_signal_test.cpp
+!/src/motion_control_pkg/test/tcp_level_constraint_test.cpp
+!/src/motion_control_pkg/test/tcp_level_planning_test.cpp
+!/src/motion_control_pkg/test/tracking_diagnostics_test.cpp
+!/src/motion_control_pkg/test/x86_driver_ros_init_test.cpp
+
+# Matching x86 DriverSDK runtime shipped with this robot source snapshot.
+!/vendor/driver_sdk/lib/*.so
+!/vendor/driver_sdk/loong_third_party/lib/*.so
+!/vendor/driver_sdk/igh_install/lib/*.so*

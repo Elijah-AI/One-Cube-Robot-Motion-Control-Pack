@@ -1,0 +1,50 @@
+有序退出（SIGINT / Ctrl+C / SIGTERM）
+
+适用程序：/home/it/ylf_wbc 的 motion_control_node，需配套带
+onecube_shutdown_ethercat_v1 的 DriverSDK。直接运行节点与 bringup.launch.py
+均使用同一退出状态机。
+
+1. 收到信号立即锁住新 Action、清错、重新使能和常规 SDK 命令；主线程请求
+   MotionSafety 停止，保留 ROS executor、采集和 EtherCAT PDO 线程。
+2. 等待已接收的规划/执行/工具/头部开机回零线程退出，并确认全部已连接
+   关节的静止反馈：至少 5 个推进的设备帧、100 ms，速度 <= 0.01 rad/s，
+   窗口位移 <= 0.001 rad，数据年龄 <= 100 ms。最长等待 10 s。
+3. 双臂通过同一 SDK 批次请求 target state 0；EtherCAT 由唯一 PDO 写线程
+   将 alias 27..32（含腰腿和头部）持续置 enabled=0。命令返回成功只表示提交。
+4. 要求失能命令之后的反馈：双臂 state=0 且 low_speed=true；EtherCAT
+   CiA402 状态为 switch-on-disabled / ready-to-switch-on / switched-on。
+   所有关节连续静止 500 ms 后才能释放。最长等待 5 s。
+5. 显式释放双臂连接；停止并 join 总线工作线程；SDK 停止 PDO 线程后释放
+   EtherCAT master/domain；随后停止 executor、关闭 ROS context 并退出。
+
+当前硬件接口没有独立机械抱闸反馈，始终显示 brake_feedback=UNAVAILABLE。
+“失能且静止 500 ms”不能当作机械抱闸已闭合的证明。负载保持/抱闸动作需
+现场验收。本版本的离线测试不证明机器人实物停止、抱闸或负载保持。
+
+任何确认超时或提交/释放失败进入 FAILED_HOLD：保持禁止接单，不报告成功，
+不自动重试、复位或恢复运动。确认失败时保持仍可用的驱动与反馈。重复 Ctrl+C
+和 SIGTERM 不绕过确认。bringup.launch.py 关闭了默认 5+5 s 强杀升级；不要用
+kill -9 把停机确认当成已完成。外部 supervisor 的强杀策略需单独与此流程匹配。
+
+工具：已经开始的工具操作等待原有执行流程结束；当前 Jodell 接口没有经过
+验证的夹爪物理停止命令，不能把软件终止线程误报为夹爪停止。工具未结束会
+阻止关节失能和驱动释放。吸盘输出在模块最终析构时沿用原有关闭行为。
+
+查看退出状态（与运控使用同一终端环境/ROS domain）：
+ros2 topic echo /Control/shutdown_state std_msgs/msg/String --field data --qos-durability transient_local
+正常顺序：STOPPING -> DISABLING -> DISABLED_STATIONARY_CONFIRMED -> COMPLETE。
+/Control/motion_safety 也附带退出状态。
+/Control/stop_motion 仍只请求停止运动并锁存，不触发驱动释放或进程退出。
+
+目标机器启动示例（应先确认不存在另一份占用 master 的运控进程）：
+cd /home/it/ylf_wbc
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=42 ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI=file:///home/it/cyclonedds_eth1_peer.xml
+ros2 pkg prefix motion_control_pkg
+ros2 launch motion_control_pkg bringup.launch.py
+
+prefix 应为 /home/it/ylf_wbc/install/motion_control_pkg。GX12_test_real_driver_20261029
+是另一份程序，不带本版本的 stop_motion/motion_safety/shutdown_state 接口。

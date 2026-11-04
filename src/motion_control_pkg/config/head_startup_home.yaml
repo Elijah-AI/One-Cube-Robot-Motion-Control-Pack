@@ -1,0 +1,14 @@
+# Startup-only recovery. Axis order: [head_yaw_joint, head_pitch_joint].
+# -0.7 rad pitch lower bound selected by the user on 2026-10-30.
+# Ordinary motion always keeps the loaded URDF limits.
+/**:
+  ros__parameters:
+    head_startup_home:
+      enabled: true
+      recovery_lower_rad: [-2.92, -0.7]
+      recovery_upper_rad: [2.92, 0.41]
+      velocity_rad_s: 0.1
+      acceleration_rad_s2: 0.05
+      jerk_rad_s3: 0.1
+      feedback_wait_sec: 30.0
+      timeout_sec: 180.0

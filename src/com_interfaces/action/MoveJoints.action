@@ -17,6 +17,12 @@ string task_id
 uint8 arm_id
 uint8 control_mode
 
+# Compatibility fields: keep_tcp_level must remain false for all MoveJoints.
+# Enabling it is rejected. TCP level compensation is only supported by
+# MovePose WHOLE_BODY_LEFT/RIGHT/BOTH (WBC); tolerance must still be valid.
+bool keep_tcp_level false
+float64 tcp_level_tolerance_rad 0.02
+
 # ARM_LEFT/ARM_RIGHT 使用下列可变长字段，必须提供完整、唯一的七个关节。
 # LEG: 四个关节维持原有 MoveJ；仅给 leg_joint1/2/3 中两个不同关节时，
 # 自动补偿第三个关节，使 body_link 相对 base_link 的朝向在全程保持启动值。

@@ -1,3 +1,5 @@
+#include "motion_control_pkg/execution/latest_progress.hpp"
+#include "motion_control_pkg/execution/joint_completion.hpp"
 #include "miracle_lower_body_module.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
 #include "motion_control_pkg/motion/leg_body_motion.hpp"
@@ -43,6 +45,7 @@ void MiracleLowerBodyModule::execution_loop_body_motion(std::shared_ptr<GoalHand
   motion_control_pkg::execution::ActionTerminalGuard<GoalHandleMoveJoints, MoveJoints::Result> terminal(handle);
   const auto goal = handle->get_goal();
   auto result = std::make_shared<MoveJoints::Result>();
+  motion_control_pkg::execution::MotionSafetyScope safety_scope(4U);
   result->final_distance_error = std::numeric_limits<double>::infinity();
   const auto started = Clock::now();
   auto motion_started = Clock::time_point{};
@@ -198,49 +201,71 @@ void MiracleLowerBodyModule::execution_loop_body_motion(std::shared_ptr<GoalHand
     readAndCheck();
     if (jointError(measured, start) > JOINT_THRESHOLD)
       throw std::runtime_error("Leg moved during body planning; resend from measured state");
+    if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.joints.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+      throw std::runtime_error("Insufficient body-motion timeout for trajectory and settling");
     if (trajectory.joints.duration != 0) {
-      if (remaining() <= trajectory.joints.duration) throw std::runtime_error("Insufficient body-motion timeout remaining");
       if (!m_bus_manager->enableMotors(m_jointID, std::min(5.0, remaining())))
         throw std::runtime_error("Leg motor enable failed");
       readAndCheck();
       if (jointError(measured, start) > JOINT_THRESHOLD ||
           std::any_of(velocity.begin(), velocity.end(), [](double v) { return std::abs(v) > kStationary; }))
         throw std::runtime_error("Leg moved during enable; body path was not dispatched");
-      if (remaining() <= trajectory.joints.duration) throw std::runtime_error("Insufficient timeout after enable");
+      if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.joints.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+        throw std::runtime_error("Insufficient timeout for trajectory and settling after enable");
+      publish(MoveJoints::Feedback::STATUS_EXECUTING,0,"Executing body tilt/vertical trajectory");
+      motion_control_pkg::execution::LatestProgressPublisher progress(
+          [&](float value){publish(MoveJoints::Feedback::STATUS_EXECUTING,value,"Executing body tilt/vertical trajectory");});
       motion_started = Clock::now();
       auto tick = motion_started;
       m_traj_run = true;
       constexpr int64_t period_ns = TRAJ_CYCLE_US * 1000LL;
-      for (std::size_t n = 0; n < trajectory.joints.positions.size(); ++n) {
-        std::this_thread::sleep_until(tick);
-        const auto dispatch_started = Clock::now();
-        readAndCheck();
-        const auto& point = trajectory.joints.positions[n];
-        if (!setMulJointPos(point, m_jointID)) throw std::runtime_error("Body-motion leg command rejected");
-        std::copy(point.begin(), point.end(), commanded.begin());
-        if (n % 25 == 0) publish(MoveJoints::Feedback::STATUS_EXECUTING,
-            95.0F * n / trajectory.joints.positions.size(), "Executing body tilt/vertical trajectory");
-        const auto ns = [](Clock::time_point t) {
-          return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
-        };
-        tick = Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds(
-            motion_control_pkg::execution::nextStreamTick(ns(tick), ns(dispatch_started), ns(Clock::now()), period_ns))));
+      try {
+        for (std::size_t n = 0; n < trajectory.joints.positions.size(); ++n) {
+          std::this_thread::sleep_until(tick);
+          check();
+          if (progress.failed()) throw std::runtime_error(progress.error());
+          const auto dispatch_started = Clock::now();
+          readAndCheck();
+          const auto& point = trajectory.joints.positions[n];
+          if (!setMulJointPos(point, m_jointID)) throw std::runtime_error("Body-motion leg command rejected");
+          std::copy(point.begin(), point.end(), commanded.begin());
+          progress.update(95.0F * n / trajectory.joints.positions.size());
+          const auto ns = [](Clock::time_point t) {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+          };
+          tick = Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds(
+              motion_control_pkg::execution::nextStreamTick(ns(tick), ns(dispatch_started), ns(Clock::now()), period_ns))));
+        }
+      } catch (const std::exception& e) {
+        std::string detail=e.what();
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,detail);
+        progress.stop();throw std::runtime_error(detail);
+      } catch (...) {
+        std::string detail="unknown body trajectory execution exception";
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,detail);
+        progress.stop();throw std::runtime_error(detail);
       }
+      progress.stop();
+      if (progress.failed()) throw std::runtime_error(progress.error());
     }
-    const auto final_command_sequence = sequence;
-    unsigned stable = 0;
-    uint64_t stable_sequence = final_command_sequence;
+    using Guard = motion_control_pkg::execution::JointCompletionGuard;
+    const auto settling = Clock::now();
+    Guard guard({trajectory.joints.target.begin(), trajectory.joints.target.end()}, settling,
+        std::min(started + std::chrono::milliseconds(goal->timeout_ms), settling +
+            std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(precision_policy_.completion_timeout))),
+        false, precision_policy_.completion);
     publish(MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION, 95, "Checking measured body pose and held joints");
-    while (stable < 3) {
+    while (true) {
       std::this_thread::sleep_for(std::chrono::microseconds(TRAJ_CYCLE_US));
       const auto actual = readAndCheck();
       const bool reached = result->final_distance_error <= JOINT_REACH_THRESHOLD &&
           orientationError(actual, trajectory.target_body) <= JOINT_REACH_THRESHOLD &&
           (!trajectory.vertical || (actual.translation() - trajectory.target_body.translation()).norm() <= kBodyPositionCompletion) &&
           std::all_of(velocity.begin(), velocity.end(), [](double v) { return std::abs(v) <= kStationary; });
-      if (!reached) stable = 0;
-      else if (sequence > stable_sequence) ++stable;
-      stable_sequence = sequence;
+      const auto status = guard.update(sequence, {measured.begin(), measured.end()},
+          {velocity.begin(), velocity.end()}, Clock::now(), error, true, reached);
+      if (status == Guard::Status::Failed) throw std::runtime_error(error);
+      if (status == Guard::Status::Settled) break;
     }
     result->success = true;
     std::ostringstream description;

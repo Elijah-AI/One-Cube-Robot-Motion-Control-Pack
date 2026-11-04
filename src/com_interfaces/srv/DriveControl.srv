@@ -1,0 +1,16 @@
+# Explicit online drive maintenance. Does not enable drives or resume motion.
+uint8 LEFT_ARM=0
+uint8 RIGHT_ARM=1
+uint8 BOTH_ARMS=2
+uint8 LOWER_BODY=3
+uint8 EMERGENCY_STOP=0
+uint8 CLEAR_FAULT=1
+uint8 target
+uint8 operation
+---
+# success requires fresh, advancing disabled/stationary feedback.
+bool success
+# SDK invocation / EtherCAT write, not a hardware acknowledgement.
+bool command_issued
+bool feedback_confirmed
+string message

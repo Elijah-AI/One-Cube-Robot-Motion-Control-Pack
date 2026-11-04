@@ -39,6 +39,27 @@ class MiracleMAlgo;
 class DualArmModule
 {
 public:
+    motion_control_pkg::sdk::DriveControlResult controlDrives(bool left, bool right, bool clear_fault) {
+        if (!sdk_command_gate_ || !sdk_connected_)
+            return {false,false,"arm SDK is not connected"};
+        return sdk_command_gate_->controlDrives(left,right,clear_fault);
+    }
+    bool shutdownDriverConnected() const { return sdk_connected_; }
+    bool readShutdownFeedback(std::vector<motion_control_pkg::sdk::DriveAxis>& axes, std::string& error) {
+        return sdk_connected_ && sdk_command_gate_->readShutdownFeedback(axes,error);
+    }
+    bool disableForShutdown(std::string& error) {
+        if (!sdk_connected_) return true;
+        const auto result=sdk_command_gate_->disableForShutdown();
+        error=result.error_message; return static_cast<bool>(result);
+    }
+    bool releaseAfterShutdown(std::string& error) {
+        if (!sdk_connected_) return true;
+        const auto result=sdk_command_gate_->release();
+        error=result.error_message;
+        if (result) sdk_connected_=false;
+        return static_cast<bool>(result);
+    }
     sensor_msgs::msg::PointCloud2 collisionPointCloud() { return loadPointCloud(collision_pointcloud_topic_); }
 
 
@@ -61,7 +82,9 @@ public:
         feedback_bus_=std::move(bus);
     }
     bool read_body_motion_feedback(sensor_msgs::msg::JointState& state, std::string& error) {
-        return readMeasuredFeedback(state, error);
+        // Planning, first-tick and settling reads can observe the same PDO.
+        // Advancement belongs to the publisher and completion/safety guards.
+        return readMeasuredFeedback(state, error, false);
     }
     rclcpp::CallbackGroup::SharedPtr measuredFeedbackCallbackGroup() const {
         return measured_feedback_channel_->callbackGroup();
@@ -283,7 +306,8 @@ private:
 
     void heart_beat_cb();
     void motor_statu_cb();
-    bool readMeasuredFeedback(sensor_msgs::msg::JointState& output, std::string& error);
+    bool readMeasuredFeedback(sensor_msgs::msg::JointState& output, std::string& error,
+                              bool require_advancement);
     void head_status_cb();
     void init_motor_status();
 
@@ -326,6 +350,7 @@ private:
     rclcpp::Publisher<MotorStatus>::SharedPtr motor_status_pub_;
     std::unique_ptr<motion_control_pkg::wbc::FeedbackChannel> measured_feedback_channel_;
     std::shared_ptr<miracle::EthercatBusManager> feedback_bus_;
+    std::mutex measured_feedback_mutex_;
     motion_control_pkg::wbc::MeasuredFeedbackBuilder measured_feedback_{
         std::array<uint16_t,6>{{LEG_JOINT1,LEG_JOINT2,LEG_JOINT3,BODY_JOINT,HEAD_YAW_MOTOR_ID,HEAD_PITCH_MOTOR_ID}}};
     rclcpp::Publisher<MotorStatus>::SharedPtr head_status_pub_;
@@ -377,7 +402,7 @@ private:
     motion_control_pkg::sdk::DualArmDeviceState dual_arm_state_;
     double r_joints_command_[7];//右臂关节命令
     double l_joints_command_[7];//左臂关节命令
-    bool sdk_connected_ = false;
+    std::atomic<bool> sdk_connected_{false};
     bool init_robot_link_ = false;
     bool suck_gpio_initialized_ = false;
     bool left_suck_active_ = false;

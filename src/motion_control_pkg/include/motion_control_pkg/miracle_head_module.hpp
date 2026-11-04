@@ -35,6 +35,9 @@
 #define MIRACLE_HEAD_MODULE_HPP
 
 
+#include "motion_control_pkg/execution/precision_policy.hpp"
+#include "motion_control_pkg/execution/head_startup_home.hpp"
+#include "motion_control_pkg/motion/precision_approach.hpp"
 #include <iostream>
 #include <vector>
 
@@ -105,12 +108,16 @@ namespace miracle {
         /*
         ** use to follow handle
         */
-        void followTrajectoryHandle(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
+        void followTrajectoryHandle(std::shared_ptr<GoalHandleMoveJoints> goal_handle,
+            const std::chrono::steady_clock::time_point& action_started_at);
 
         /*
         ** for gmca
         **/
         void initGmcaModule(std::shared_ptr<MiracleMAlgo> &miracleAlgo);
+        bool runStartupHome(const motion_control_pkg::execution::HeadStartupHomePolicy& policy,
+            const std::shared_ptr<motion_control_pkg::execution::MotionSafety>& safety,
+            std::string& error);
 
         void updateStopState(bool stop);
         
@@ -161,6 +168,8 @@ namespace miracle {
 
         std::vector<int32_t> m_joint_zero;    //关节零点
         std::vector<int8_t>  m_joint_dir;     //关节方向
+        motion_control_pkg::execution::PrecisionPolicy precision_policy_;
+        std::size_t precision_gate_{motion_control_pkg::motion::kNoApproachGate};
         std::vector<uint16_t> m_jointID;
 
         std::thread execution_thread_move_joints_;

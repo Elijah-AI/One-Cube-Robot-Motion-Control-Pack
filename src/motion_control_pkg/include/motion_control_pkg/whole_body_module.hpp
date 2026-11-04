@@ -1,6 +1,7 @@
 #ifndef MOTION_CONTROL_PKG_WHOLE_BODY_MODULE_HPP_
 #define MOTION_CONTROL_PKG_WHOLE_BODY_MODULE_HPP_
 
+#include "motion_control_pkg/execution/precision_policy.hpp"
 #include <Eigen/Geometry>
 
 #include <array>
@@ -50,6 +51,7 @@ public:
     bool check_balance_feedback(const std::vector<double>& start, bool use_left,
                                bool use_right, bool before_dispatch, std::string& error) const;
 private:
+    motion_control_pkg::execution::PrecisionPolicy leg_precision_policy_;
     bool dynamic_zmp_enabled_{false};
     motion_control_pkg::wbc::ReferenceOptions reference_options_;
     std::unique_ptr<motion_control_pkg::wbc::WholeBodyState> balance_state_;

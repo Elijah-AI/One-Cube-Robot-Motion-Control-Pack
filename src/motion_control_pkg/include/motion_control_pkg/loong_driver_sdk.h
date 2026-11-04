@@ -1,3 +1,6 @@
+#ifdef ONECUBE_DRIVER_SDK_HEADER
+#include ONECUBE_DRIVER_SDK_HEADER
+#else
 /* Copyright
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -115,3 +118,4 @@ private:
     DriverSDK& operator=(DriverSDK const&) = delete;
 };
 }
+#endif

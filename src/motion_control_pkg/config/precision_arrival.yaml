@@ -1,0 +1,30 @@
+# Optional startup overlay; defaults already match the compiled policy.
+# Read-only parameters: changes require restarting the control node.
+/**:
+  ros__parameters:
+    leg_precision:
+      goal_tolerance_rad: 0.002
+      stopped_velocity_rad_s: 0.01
+      stable_time_sec: 0.2
+      stall_time_sec: 1.5
+      minimum_progress_rad: 0.0002
+      completion_timeout_sec: 5.0
+      approach_enabled: true
+      approach_distance_rad: 0.03
+      approach_speed_scale: 0.2
+      approach_velocity_rad_s: 0.03
+      approach_acceleration_rad_s2: 0.2
+      approach_jerk_rad_s3: 0.5
+    head_precision:
+      goal_tolerance_rad: 0.002
+      stopped_velocity_rad_s: 0.01
+      stable_time_sec: 0.2
+      stall_time_sec: 1.5
+      minimum_progress_rad: 0.0002
+      completion_timeout_sec: 5.0
+      approach_enabled: true
+      approach_distance_rad: 0.03
+      approach_speed_scale: 0.2
+      approach_velocity_rad_s: 0.03
+      approach_acceleration_rad_s2: 0.2
+      approach_jerk_rad_s3: 0.5

@@ -2,8 +2,9 @@
 
 #include <iostream>
 #include <mutex>
+#include <cstdio>
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(ONECUBE_USE_REAL_MARVIN_SDK)
 // 厂商头文件只允许出现在 Adapter 实现中，公共控制接口不暴露 DCSS。
 #include "MarvinSDK.h"
 #endif
@@ -11,7 +12,7 @@
 namespace motion_control_pkg::sdk
 {
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(ONECUBE_USE_REAL_MARVIN_SDK)
 
 bool MarvinDualArmSdkAdapter::checkCompatibility()
 {
@@ -49,10 +50,12 @@ bool MarvinDualArmSdkAdapter::readState(DualArmDeviceState & state)
     output.current_state = vendor_state.m_State[arm].m_CurState;
     output.error_code = vendor_state.m_State[arm].m_ERRCode;
     output.low_speed = vendor_state.m_Out[arm].m_LowSpdFlag == 1;
+    output.controller_joint_command.emplace();
     for (std::size_t joint = 0; joint < kArmDof; ++joint) {
       output.joint_position[joint] = vendor_state.m_Out[arm].m_FB_Joint_Pos[joint];
       output.joint_velocity[joint] = vendor_state.m_Out[arm].m_FB_Joint_Vel[joint];
       output.joint_effort[joint] = vendor_state.m_Out[arm].m_FB_Joint_SToq[joint];
+      (*output.controller_joint_command)[joint] = vendor_state.m_Out[arm].m_FB_Joint_Cmd[joint];
     }
     for (std::size_t index = 0; index < kToolKinematicsSize; ++index) {
       output.tool_kinematics[index] = vendor_state.m_In[arm].m_ToolKine[index];
@@ -69,6 +72,22 @@ bool MarvinDualArmSdkAdapter::beginCommandBatch()
   return OnClearSet();
 }
 
+bool MarvinDualArmSdkAdapter::emergencyStop(bool left, bool right)
+{
+  if (!left && !right) return false;
+  EStop(left && right ? "AB" : left ? "A" : "B");
+  return true;  // void vendor API: readback, not this return, proves the outcome.
+}
+
+bool MarvinDualArmSdkAdapter::readServoError(ArmChannel channel, std::size_t joint, long& error)
+{
+  if (joint>=kArmDof || (channel!=ArmChannel::kLeft && channel!=ArmChannel::kRight)) return false;
+  char name[30]{};
+  std::snprintf(name,sizeof(name),"SERVO%dERR%zu",channel==ArmChannel::kLeft ? 0 : 1,joint);
+  error=-1;
+  return OnGetIntPara(name,&error)==0;
+}
+
 bool MarvinDualArmSdkAdapter::clearServoError(ArmChannel channel)
 {
   if (channel == ArmChannel::kLeft) {
@@ -76,8 +95,13 @@ bool MarvinDualArmSdkAdapter::clearServoError(ArmChannel channel)
   } else {
     OnClearErr_B();
   }
-  // 当前 SDK 的清错接口无返回值；事务最终结果由 OnSetSend 提供。
+  // RESET uses OnSetIntPara directly. Only fresh readback can confirm clearing.
   return true;
+}
+
+bool MarvinDualArmSdkAdapter::setServoOff(ArmChannel channel)
+{
+  return channel == ArmChannel::kLeft ? OnSetTargetState_A(0) : OnSetTargetState_B(0);
 }
 
 bool MarvinDualArmSdkAdapter::setPositionMode(ArmChannel channel)
@@ -163,6 +187,17 @@ bool MarvinDualArmSdkAdapter::commitCommandBatch()
 }
 
 #else
+
+bool MarvinDualArmSdkAdapter::emergencyStop(bool, bool)
+{
+  // No physical command/acknowledgement on the pseudo-driver platform.
+  return false;
+}
+
+bool MarvinDualArmSdkAdapter::readServoError(ArmChannel, std::size_t, long&)
+{
+  return false;
+}
 
 namespace
 {
@@ -279,6 +314,16 @@ bool MarvinDualArmSdkAdapter::clearServoError(ArmChannel channel)
   auto & arm = fake.state.arms[channelIndex(channel)];
   arm.error_code = 0;
   // arm.low_speed = false;
+  return true;
+}
+
+bool MarvinDualArmSdkAdapter::setServoOff(ArmChannel channel)
+{
+  auto& fake=runtime();
+  std::lock_guard<std::mutex> lock(fake.mutex);
+  if (!fake.connected || !fake.batch_open) return false;
+  auto& arm=fake.state.arms[channelIndex(channel)];
+  arm.current_state=0; arm.low_speed=true; arm.joint_velocity.fill(0.0);
   return true;
 }
 

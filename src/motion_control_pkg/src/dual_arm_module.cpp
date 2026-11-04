@@ -1,5 +1,7 @@
+#include "motion_control_pkg/execution/latest_progress.hpp"
 #include "motion_control_pkg/motion/scoped_collision_scene.hpp"
 #include "motion_control_pkg/execution/stream_timing.hpp"
+#include "motion_control_pkg/execution/joint_completion.hpp"
 #include "dual_arm_module.hpp"
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
@@ -27,6 +29,22 @@
 
 namespace
 {
+
+motion_control_pkg::motion::ScaledMotionLimits scaledModelMotionLimits(
+    MiracleMAlgo& model, int chain, const std::vector<double>& velocity,
+    const std::vector<double>& acceleration, const std::vector<double>& jerk,
+    double speed, double acceleration_scale, double jerk_scale) {
+    auto result = motion_control_pkg::motion::scaleMotionLimits(
+        velocity, acceleration, jerk, speed, acceleration_scale, jerk_scale);
+    if (!result.valid) return result;
+    std::vector<double> model_limits;
+    if (!model.getChainVelocityLimits(chain, model_limits) || model_limits.size() != result.velocity.size()) {
+        result.valid = false; result.error_message = "invalid URDF arm velocity limits"; return result;
+    }
+    for (std::size_t j = 0; j < model_limits.size(); ++j)
+        result.velocity[j] = std::min(result.velocity[j], speed * model_limits[j]);
+    return result;
+}
 
 void sleepUntilTimespec(const timespec& timestamp)
 {
@@ -84,49 +102,54 @@ bool streamSingleArmTrajectory(
         return false;
     }
     const std::size_t planned_samples = command_points.size();
-    if ((planned_samples-1)*motion_control_pkg::execution::kDualArmControlPeriodSeconds > deadline.remainingSeconds()) {
-        abort_goal("Planned motion exceeds remaining action timeout; no trajectory samples sent");
+    if (!motion_control_pkg::execution::hasCompletionBudget(planned_samples, deadline.remainingSeconds())) {
+        abort_goal("Planned motion and settling exceed remaining action timeout; no trajectory samples sent");
         return false;
     }
+    const char* arm_name =
+        channel == motion_control_pkg::sdk::ArmChannel::kLeft ? "left" : "right";
+    const std::string feedback_step=std::string(arm_name)+" arm streaming commands at 4 ms";
+    motion_control_pkg::execution::LatestProgressPublisher progress(
+        [&](float value){publish_feedback(value,feedback_step);});
+    const auto abort_stream=[&](std::string message) {
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,message);
+        progress.stop();abort_goal(message);
+    };
+    const auto cancel_stream=[&](std::string message) {
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,message);
+        progress.stop();cancel_goal(message);
+    };
     StreamTimingReport timing;
     timespec next_cycle{};
     clock_gettime(CLOCK_MONOTONIC, &next_cycle);
-    auto next_feedback = std::chrono::steady_clock::now();
-    const char* arm_name =
-        channel == motion_control_pkg::sdk::ArmChannel::kLeft ? "left" : "right";
     for (std::size_t index = 0; index < command_points.size(); ++index) {
         if (goal_handle->is_canceling()) {
-            cancel_goal(
+            cancel_stream(
                 std::string(action_name) +
                 " goal canceled by client; future samples suppressed");
             return false;
         }
         if (deadline.expired()) {
-            abort_goal(std::string(action_name) + " command streaming timed out");
+            abort_stream(std::string(action_name) + " command streaming timed out");
             return false;
         }
+        if (progress.failed()) {abort_stream(progress.error());return false;}
         const auto sample_started = monotonicNanoseconds();
         timing.stats.observe(asNanoseconds(next_cycle), sample_started, 4000000LL);
         const auto send_result =
             sdk_command_gate.sendJointPosition(channel, command_points[index]);
         if (!send_result) {
-            abort_goal(send_result.error_message);
+            abort_stream(send_result.error_message);
             return false;
         }
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= next_feedback) {
-            const float command_progress =
-                static_cast<float>(index + 1U) /
-                static_cast<float>(command_points.size());
-            publish_feedback(
-                25.0F + 70.0F * command_progress,
-                std::string(arm_name) + " arm streaming commands at 4 ms");
-            next_feedback = now + std::chrono::milliseconds(50);
-        }
+        progress.update(25.0F + 70.0F * static_cast<float>(index+1U) /
+            static_cast<float>(command_points.size()));
         if (index + 1U < command_points.size()) {
             scheduleNextSample(next_cycle, sample_started);
         }
     }
+    progress.stop();
+    if (progress.failed()) {abort_stream(progress.error());return false;}
     return true;
 }
 
@@ -153,46 +176,51 @@ bool streamDualArmTrajectory(
         return false;
     }
     const std::size_t planned_samples = left_commands.size();
-    if ((planned_samples-1)*motion_control_pkg::execution::kDualArmControlPeriodSeconds > deadline.remainingSeconds()) {
-        abort_goal("Planned motion exceeds remaining action timeout; no trajectory samples sent");
+    if (!motion_control_pkg::execution::hasCompletionBudget(planned_samples, deadline.remainingSeconds())) {
+        abort_goal("Planned motion and settling exceed remaining action timeout; no trajectory samples sent");
         return false;
     }
+    motion_control_pkg::execution::LatestProgressPublisher progress(
+        [&](float value){publish_feedback(executing_status,value,value,feedback_step);});
+    const auto abort_stream=[&](std::string message) {
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,message);
+        progress.stop();abort_goal(message);
+    };
+    const auto cancel_stream=[&](std::string message) {
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,message);
+        progress.stop();cancel_goal(message);
+    };
     StreamTimingReport timing;
     timespec next_cycle{};
     clock_gettime(CLOCK_MONOTONIC, &next_cycle);
-    auto next_feedback = std::chrono::steady_clock::now();
     for (std::size_t index = 0; index < left_commands.size(); ++index) {
         if (goal_handle->is_canceling()) {
-            cancel_goal(
+            cancel_stream(
                 std::string(action_name) +
                 " canceled; future paired samples suppressed");
             return false;
         }
         if (deadline.expired()) {
-            abort_goal(std::string(action_name) + " command streaming timed out");
+            abort_stream(std::string(action_name) + " command streaming timed out");
             return false;
         }
+        if (progress.failed()) {abort_stream(progress.error());return false;}
         const auto sample_started = monotonicNanoseconds();
         timing.stats.observe(asNanoseconds(next_cycle), sample_started, 4000000LL);
         const auto send_result = sdk_command_gate.sendJointPositions(
             left_commands[index], right_commands[index]);
         if (!send_result) {
-            abort_goal(send_result.error_message);
+            abort_stream(send_result.error_message);
             return false;
         }
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= next_feedback) {
-            const float progress =
-                20.0F + 70.0F * static_cast<float>(index + 1U) /
-                static_cast<float>(left_commands.size());
-            publish_feedback(
-                executing_status, progress, progress, feedback_step);
-            next_feedback = now + std::chrono::milliseconds(50);
-        }
+        progress.update(20.0F + 70.0F * static_cast<float>(index+1U) /
+            static_cast<float>(left_commands.size()));
         if (index + 1U < left_commands.size()) {
             scheduleNextSample(next_cycle, sample_started);
         }
     }
+    progress.stop();
+    if (progress.failed()) {abort_stream(progress.error());return false;}
     return true;
 }
 
@@ -418,7 +446,7 @@ DualArmModule::DualArmModule(
     this->motor_status_pub_ = shared_node->create_publisher<MotorStatus>("/Control/MotorInfo",10);
     measured_feedback_channel_ = std::make_unique<motion_control_pkg::wbc::FeedbackChannel>(
         shared_node, [this](sensor_msgs::msg::JointState& output, std::string& error) {
-            return readMeasuredFeedback(output, error);
+            return readMeasuredFeedback(output, error, true);
         });
     joint_feedback_timer_ = shared_node->create_wall_timer(10ms,std::bind(&DualArmModule::motor_statu_cb, this));
     motor_status_msg_ = com_interfaces::msg::MotorStatus();
@@ -493,11 +521,6 @@ bool DualArmModule::initialize(std::string& error_message)
     sdk_command_gate_->disableLogging();
 
     if (!set_arm_control_mode(error_message)) {
-        const auto release_result = sdk_command_gate_->release();
-        sdk_connected_ = false;
-        if (!release_result) {
-            error_message += "; " + release_result.error_message;
-        }
         return false;
     }
 
@@ -566,6 +589,12 @@ DualArmModule::configureGoalControlMode(
 
 DualArmModule::~DualArmModule()
 {
+    // A finished std::thread remains joinable until joined. Stop the persistent
+    // cloud subscriber before destroying its node and callback-owned state.
+    cloud_spin_running_ = false;
+    if (cloud_spin_thread_.joinable()) {
+        cloud_spin_thread_.join();
+    }
     // 安全退出机制：等待正在执行的线程结束
     if (execution_thread_move_left_pose_.joinable()) {
         execution_thread_move_left_pose_.join();
@@ -877,6 +906,7 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
     const auto started_at = std::chrono::steady_clock::now();
     const auto goal = goal_handle->get_goal();
     auto result = std::make_shared<MoveJoints::Result>();
+    motion_control_pkg::execution::MotionSafetyScope safety_scope(3U);
     auto feedback = std::make_shared<MoveJoints::Feedback>();
     result->success = false;
     result->left_final_distance_error_rad =
@@ -1052,7 +1082,7 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
             arm == 0U ? l_q_lower_limits_ : r_q_lower_limits_,
             arm == 0U ? l_q_upper_limits_ : r_q_upper_limits_,
             model_lower, model_upper);
-        arm_data[arm].motion = motion_control_pkg::motion::scaleMotionLimits(
+        arm_data[arm].motion = scaledModelMotionLimits(*miracle_algo_, static_cast<int>(arm),
             arm == 0U ? l_v_limit_ : r_v_limit_,
             arm == 0U ? l_a_limit_ : r_a_limit_,
             arm == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed, goal->acceleration_scale, goal->jerk_scale);
@@ -1183,29 +1213,22 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
     // OMPL 路点经 TOPPRA 参数化后，再用同一个 Pinocchio/Coal 接口检查
     // 每个 4 ms 联合采样点；不引入第二套防碰撞算法。
     if (goal->enable_collision_check) {
-        bool collision_free = true;
-        for (std::size_t sample = 0;
-            sample < trajectories[0].size(); ++sample)
-        {
-            if (miracle_algo_->updateChainJointsAngle(
-                "left_arm", trajectories[0][sample]) != 0 ||
-                miracle_algo_->updateChainJointsAngle(
-                "right_arm", trajectories[1][sample]) != 0)
-            {
-                collision_free = false;
-                break;
-            }
-            std::vector<double> full_sample;
-            if (!miracle_algo_->getFullJointState(full_sample) ||
-                !miracle_algo_->isFullQValid(
-                miracle_algo_->toEigenConfig(full_sample)))
-            {
-                collision_free = false;
-                break;
-            }
+        std::vector<std::vector<double>> full_samples;
+        full_samples.reserve(trajectories[0].size());
+        bool collision_free = trajectories[0].size() == trajectories[1].size();
+        for (std::size_t sample = 0; collision_free && sample < trajectories[0].size(); ++sample) {
+            std::vector<double> left_full, full;
+            collision_free = !deadline.expired() && !goal_handle->is_canceling() &&
+                miracle_algo_->mergeSingleArmJoints(true, full_start_q, trajectories[0][sample], left_full) &&
+                miracle_algo_->mergeSingleArmJoints(false, left_full, trajectories[1][sample], full);
+            if (collision_free) full_samples.push_back(std::move(full));
         }
-        (void)miracle_algo_->updateChainJointsAngle("left_arm", left_current);
-        (void)miracle_algo_->updateChainJointsAngle("right_arm", right_current);
+        std::size_t first_invalid = 0;
+        if (collision_free) collision_free = miracle_algo_->validateFullConfigurations(
+            full_samples, first_invalid, [&] { return deadline.expired() || goal_handle->is_canceling(); });
+        if (goal_handle->is_canceling()) {
+            cancel_goal("Dual arm motion canceled during sampled collision checking"); return;
+        }
         if (!collision_free) {
             abort_goal(
                 "Pinocchio/Coal rejected a time-parameterized dual-arm sample");
@@ -1270,9 +1293,15 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
     publish_feedback(
         MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION,
         95.0F, 95.0F, "waiting for both arms to report low speed");
-    std::array<std::optional<std::chrono::steady_clock::time_point>, 2>
-        completed_at;
-    while (!completed_at[0] || !completed_at[1]) {
+    using Completion = motion_control_pkg::execution::ArmCompletionGuard;
+    const auto completion_started = Completion::Clock::now();
+    const auto completion_deadline = std::min(deadline.timePoint(), completion_started + std::chrono::seconds(3));
+    std::array<Completion, 2> completion_guards{{
+        Completion({left_target.begin(), left_target.end()}, completion_started, completion_deadline),
+        Completion({right_target.begin(), right_target.end()}, completion_started, completion_deadline)
+    }};
+    std::array<std::optional<std::chrono::steady_clock::time_point>, 2> completed_at;
+    while (true) {
         if (goal_handle->is_canceling()) {
             cancel_goal(
                 "MoveJoints canceled during completion wait; no "
@@ -1299,9 +1328,7 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
                     " arm entered an SDK error during completion wait");
                 return;
             }
-            if (!completed_at[arm] && completion.arms[arm].low_speed) {
-                completed_at[arm] = now;
-            }
+
         }
         result->left_final_distance_error_rad =
             motion_control_pkg::motion::maximumJointErrorRadians(
@@ -1309,6 +1336,16 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
         result->right_final_distance_error_rad =
             motion_control_pkg::motion::maximumJointErrorRadians(
             completion.arms[1].joint_position, right_target);
+        bool all_settled = true;
+        for (std::size_t arm = 0; arm < 2; ++arm) {
+            std::string error;
+            const auto status = completion_guards[arm].update(completion.arms[arm], now, error);
+            if (status == Completion::Status::Failed) { abort_goal(error); return; }
+            if (status == Completion::Status::Settled) {
+                if (!completed_at[arm]) completed_at[arm] = now;
+            } else { completed_at[arm].reset(); all_settled = false; }
+        }
+        if (all_settled) break;
         if (!completed_at[0] || !completed_at[1]) {
             std::this_thread::sleep_for(
                 motion_control_pkg::execution::kDualArmControlPeriod);
@@ -1384,6 +1421,7 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
     const auto started_at = request_started_at;
     const auto goal = goal_handle->get_goal();
     auto result = std::make_shared<MovePose::Result>();
+    motion_control_pkg::execution::MotionSafetyScope safety_scope(3U);
     auto feedback = std::make_shared<MovePose::Feedback>();
     result->success = false;
     result->left_final_distance_error_m =
@@ -1581,7 +1619,7 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
             arm_index == 0U ? l_q_upper_limits_ : r_q_upper_limits_,
             model_lower, model_upper);
         arm_data[arm_index].motion =
-            motion_control_pkg::motion::scaleMotionLimits(
+            scaledModelMotionLimits(*miracle_algo_, static_cast<int>(arm_index),
             arm_index == 0U ? l_v_limit_ : r_v_limit_,
             arm_index == 0U ? l_a_limit_ : r_a_limit_,
             arm_index == 0U ? l_jerk_limit_ : r_jerk_limit_, goal->speed, goal->acceleration_scale, goal->jerk_scale);
@@ -1617,14 +1655,11 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
             std::array<std::vector<std::vector<double>>, 2> coarse;
             std::array<Eigen::Isometry3d, 2> starts;
             const std::array<Eigen::Isometry3d, 2> targets{left_root_to_end, right_root_to_end};
-            bool ik_ok = true;
-            for (std::size_t arm = 0; arm < 2; ++arm) {
-                double ik_seconds = 0;
-                const bool ok = miracle_algo_->planSingleArmCartesianIkWaypoints(arm == 0, full_start_q,
-                    targets[arm], translation_step, rotation_step, coarse[arm], starts[arm], &ik_seconds);
-                result->ik_time += ik_seconds;
-                ik_ok = ik_ok && ok;
-            }
+            double ik_seconds = 0;
+            const bool ik_ok = miracle_algo_->planDualArmCartesianIkWaypoints(
+                full_start_q, targets, translation_step, rotation_step, coarse, starts,
+                ik_seconds, [&] { return deadline.expired() || goal_handle->is_canceling(); });
+            result->ik_time += ik_seconds;
             if (!ik_ok) {error = "dual MoveL continuous IK failed";}
             else {
                 // Match normalized Cartesian progress before one 14-DOF
@@ -1841,30 +1876,22 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
     
 
     if (goal->enable_collision_check) {
-        bool collision_free = true;
-        for (std::size_t sample = 0;
-            sample < trajectories[0].size(); ++sample)
-        {
-            if (deadline.expired() ||
-                miracle_algo_->updateChainJointsAngle(
-                "left_arm", trajectories[0][sample]) != 0 ||
-                miracle_algo_->updateChainJointsAngle(
-                "right_arm", trajectories[1][sample]) != 0)
-            {
-                collision_free = false;
-                break;
-            }
-            std::vector<double> full_sample;
-            if (!miracle_algo_->getFullJointState(full_sample) ||
-                !miracle_algo_->isFullQValid(
-                miracle_algo_->toEigenConfig(full_sample)))
-            {
-                collision_free = false;
-                break;
-            }
+        std::vector<std::vector<double>> full_samples;
+        full_samples.reserve(trajectories[0].size());
+        bool collision_free = trajectories[0].size() == trajectories[1].size();
+        for (std::size_t sample = 0; collision_free && sample < trajectories[0].size(); ++sample) {
+            std::vector<double> left_full, full;
+            collision_free = !deadline.expired() && !goal_handle->is_canceling() &&
+                miracle_algo_->mergeSingleArmJoints(true, full_start_q, trajectories[0][sample], left_full) &&
+                miracle_algo_->mergeSingleArmJoints(false, left_full, trajectories[1][sample], full);
+            if (collision_free) full_samples.push_back(std::move(full));
         }
-        (void)miracle_algo_->updateChainJointsAngle("left_arm", left_current);
-        (void)miracle_algo_->updateChainJointsAngle("right_arm", right_current);
+        std::size_t first_invalid = 0;
+        if (collision_free) collision_free = miracle_algo_->validateFullConfigurations(
+            full_samples, first_invalid, [&] { return deadline.expired() || goal_handle->is_canceling(); });
+        if (goal_handle->is_canceling()) {
+            cancel_goal("Dual arm motion canceled during sampled collision checking"); return;
+        }
         if (!collision_free) {
             abort_goal(deadline.expired() ?
                 "MovePose timed out during sampled collision checking" :
@@ -1938,9 +1965,15 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
     const Eigen::Isometry3d right_target_tcp =
         motion_control_pkg::kinematics::poseToIsometry(
         effective_right.pose);
-    std::array<std::optional<std::chrono::steady_clock::time_point>, 2>
-        completed_at;
-    while (!completed_at[0] || !completed_at[1]) {
+    using Completion = motion_control_pkg::execution::ArmCompletionGuard;
+    const auto completion_started = Completion::Clock::now();
+    const auto completion_deadline = std::min(deadline.timePoint(), completion_started + std::chrono::seconds(3));
+    std::array<Completion, 2> completion_guards{{
+        Completion({planned_positions.back().begin(), planned_positions.back().begin() + 7}, completion_started, completion_deadline),
+        Completion({planned_positions.back().begin() + 7, planned_positions.back().end()}, completion_started, completion_deadline)
+    }};
+    std::array<std::optional<std::chrono::steady_clock::time_point>, 2> completed_at;
+    while (true) {
         if (goal_handle->is_canceling()) {
             cancel_goal(
                 "MovePose canceled during completion wait; no "
@@ -2001,11 +2034,25 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
             return;
         }
         const auto now = std::chrono::steady_clock::now();
-        for (std::size_t arm = 0; arm < 2U; ++arm) {
-            if (!completed_at[arm] && completion.arms[arm].low_speed) {
-                completed_at[arm] = now;
-            }
+        const std::array<Eigen::Isometry3d, 2> actual_tcp{{
+            motion_control_pkg::kinematics::poseToIsometry(left_tcp_pose),
+            motion_control_pkg::kinematics::poseToIsometry(right_tcp_pose)}};
+        const std::array<Eigen::Isometry3d, 2> target_tcp{{left_target_tcp, right_target_tcp}};
+        bool all_settled = true;
+        for (std::size_t arm = 0; arm < 2; ++arm) {
+            std::string error;
+            const auto status = completion_guards[arm].update(completion.arms[arm], now, error,
+                (actual_tcp[arm].translation() - target_tcp[arm].translation()).norm() <=
+                    motion_control_pkg::execution::kGoalTranslationToleranceM &&
+                motion_control_pkg::motion::quaternionAngularDistance(
+                    Eigen::Quaterniond(actual_tcp[arm].rotation()), Eigen::Quaterniond(target_tcp[arm].rotation())) <=
+                    motion_control_pkg::execution::kGoalRotationToleranceRad);
+            if (status == Completion::Status::Failed) { abort_goal(error); return; }
+            if (status == Completion::Status::Settled) {
+                if (!completed_at[arm]) completed_at[arm] = now;
+            } else { completed_at[arm].reset(); all_settled = false; }
         }
+        if (all_settled) break;
         if (!completed_at[0] || !completed_at[1]) {
             std::this_thread::sleep_for(
                 motion_control_pkg::execution::kDualArmControlPeriod);
@@ -2033,6 +2080,7 @@ void DualArmModule::execution_loop_move_joint_impl(
     const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<MoveJoints::Feedback>();
     auto result = std::make_shared<MoveJoints::Result>();
+    motion_control_pkg::execution::MotionSafetyScope safety_scope(channel == motion_control_pkg::sdk::ArmChannel::kLeft ? 1U : 2U);
     result->success = ACTION_FAIL;
     result->timing_breakdown_valid = true;
     result->ik_time = 0.0;
@@ -2114,7 +2162,7 @@ void DualArmModule::execution_loop_move_joint_impl(
         channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
         l_jerk_limit_ : r_jerk_limit_;
     const auto scaled_limits =
-        motion_control_pkg::motion::scaleMotionLimits(
+        scaledModelMotionLimits(*miracle_algo_, static_cast<int>(channel),
         base_velocity, base_acceleration, base_jerk,
         static_cast<double>(goal->speed), goal->acceleration_scale, goal->jerk_scale);
     if (!scaled_limits.valid) {
@@ -2125,7 +2173,7 @@ void DualArmModule::execution_loop_move_joint_impl(
         cancel_goal("MoveJoints goal canceled before execution");
         return;
     }
-    if (!init_robot_link_) {
+    if (!init_robot_link_ || !sdk_connected_) {
         abort_goal("Robot link is not initialized");
         return;
     }
@@ -2328,7 +2376,11 @@ void DualArmModule::execution_loop_move_joint_impl(
     }
 
     // 所有离散点提交后，用新鲜 SDK 状态等待“低速到位”，并计算最大关节误差。
-    auto next_feedback = std::chrono::steady_clock::now();
+    using Completion = motion_control_pkg::execution::ArmCompletionGuard;
+    const auto completion_started = Completion::Clock::now();
+    Completion completion_guard(planned_positions.back(), completion_started,
+        std::min(deadline.timePoint(), completion_started + std::chrono::seconds(3)));
+    auto next_feedback = completion_started;
     while (true) {
         if (goal_handle->is_canceling()) {
             cancel_goal(
@@ -2373,7 +2425,13 @@ void DualArmModule::execution_loop_move_joint_impl(
                 " arm returned non-finite completion feedback");
             return;
         }
-        if (selected_completion_state.low_speed) {
+        std::string completion_error;
+        const auto completion_status = completion_guard.update(selected_completion_state,
+            Completion::Clock::now(), completion_error);
+        if (completion_status == Completion::Status::Failed) {
+            abort_goal(completion_error); return;
+        }
+        if (completion_status == Completion::Status::Settled) {
             result->success = ACTION_SUCCESS;
             result->error_message.clear();
             update_execution_time();
@@ -2390,7 +2448,7 @@ void DualArmModule::execution_loop_move_joint_impl(
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_feedback) {
             publish_feedback(99.0F, std::string(arm_name) +
-                " arm waiting for low-speed completion");
+                " arm waiting for fresh measured goal settling");
             next_feedback = now + std::chrono::milliseconds(50);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -2408,6 +2466,7 @@ void DualArmModule::execution_loop_move_pose_impl(
     const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<MovePose::Feedback>();
     auto result = std::make_shared<MovePose::Result>();
+    motion_control_pkg::execution::MotionSafetyScope safety_scope(channel == motion_control_pkg::sdk::ArmChannel::kLeft ? 1U : 2U);
     result->success = ACTION_FAIL;
     result->timing_breakdown_valid = true;
     result->ik_time = 0.0;
@@ -2522,7 +2581,7 @@ void DualArmModule::execution_loop_move_pose_impl(
         left_model_end_to_tool_tcp_ : right_model_end_to_tool_tcp_;
 
     const auto scaled_limits =
-        motion_control_pkg::motion::scaleMotionLimits(
+        scaledModelMotionLimits(*miracle_algo_, is_left ? 0 : 1,
         is_left ? l_v_limit_ : r_v_limit_,
         is_left ? l_a_limit_ : r_a_limit_,
         is_left ? l_jerk_limit_ : r_jerk_limit_,
@@ -2544,7 +2603,7 @@ void DualArmModule::execution_loop_move_pose_impl(
         abort_goal("Robot kinematics parameters are not initialized");
         return;
     }
-    if (!init_robot_link_) {
+    if (!init_robot_link_ || !sdk_connected_) {
         abort_goal("Robot link is not initialized");
         return;
     }
@@ -3011,7 +3070,11 @@ void DualArmModule::execution_loop_move_pose_impl(
 
     // Action 终态只由这条共享左右臂链产生：持续读取新鲜 SDK 状态，更新
     // Pinocchio FK，并以工具 TCP 平移误差（米）填充 final_distance_error。
-    auto next_feedback = std::chrono::steady_clock::now();
+    using Completion = motion_control_pkg::execution::ArmCompletionGuard;
+    const auto completion_started = Completion::Clock::now();
+    Completion completion_guard(planned_positions.back(), completion_started,
+        std::min(deadline.timePoint(), completion_started + std::chrono::seconds(3)));
+    auto next_feedback = completion_started;
     const Eigen::Isometry3d target_tcp =
         motion_control_pkg::kinematics::poseToIsometry(effective_target.pose);
     while (true) {
@@ -3076,7 +3139,17 @@ void DualArmModule::execution_loop_move_pose_impl(
             return;
         }
 
-        if (selected_completion_state.low_speed) {
+        std::string completion_error;
+        const auto completion_status = completion_guard.update(selected_completion_state,
+            Completion::Clock::now(), completion_error,
+            result->final_distance_error <= motion_control_pkg::execution::kGoalTranslationToleranceM &&
+            motion_control_pkg::motion::quaternionAngularDistance(
+                Eigen::Quaterniond(current_tcp.rotation()), Eigen::Quaterniond(target_tcp.rotation())) <=
+                motion_control_pkg::execution::kGoalRotationToleranceRad);
+        if (completion_status == Completion::Status::Failed) {
+            abort_goal(completion_error); return;
+        }
+        if (completion_status == Completion::Status::Settled) {
             result->success = ACTION_SUCCESS;
             result->error_message.clear();
             update_execution_time();
@@ -3093,7 +3166,7 @@ void DualArmModule::execution_loop_move_pose_impl(
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_feedback) {
             publish_feedback(99.0F, std::string(arm_name) +
-                " arm waiting for low-speed completion");
+                " arm waiting for fresh measured goal settling");
             next_feedback = now + std::chrono::milliseconds(50);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -3177,6 +3250,27 @@ bool DualArmModule::prepare_preplanned_dispatch(
         error_message = "preplanned dual-arm trajectories must have equal sample counts";
         return false;
     }
+    // WBC constraint projection changes intermediate arm configurations. Apply
+    // the same controller/URDF intersection and CCS envelope as ordinary arms,
+    // even when geometric collision checking is disabled.
+    for (std::size_t arm = 0; arm < 2; ++arm) {
+        const auto& path = arm == 0 ? left_positions : right_positions;
+        if (path.empty()) continue;
+        std::vector<double> lower(7), upper(7);
+        if (!miracle_algo_->getChainJointsLimt(static_cast<int>(arm), lower, upper)) {
+            error_message = "cannot obtain preplanned arm URDF limits"; return false;
+        }
+        const auto limits = motion_control_pkg::motion::intersectPositionLimits(
+            arm == 0 ? l_q_lower_limits_ : r_q_lower_limits_,
+            arm == 0 ? l_q_upper_limits_ : r_q_upper_limits_, lower, upper);
+        if (!limits.valid) {error_message=limits.error_message;return false;}
+        motion_control_pkg::motion::CcsJoint67Table table{};
+        for (std::size_t row=0;row<table.size();++row)
+            for (std::size_t col=0;col<table[row].size();++col) table[row][col]=bd_[arm][row][col];
+        const auto valid = motion_control_pkg::motion::validateTrajectoryPositions(
+            path,limits.lower,limits.upper,table);
+        if (!valid.valid) {error_message="preplanned arm: "+valid.error_message;return false;}
+    }
 
     if (need_left && !motion_control_pkg::motion::trajectoryToVendorDegrees(
         left_positions, prepared_dispatch_.left_commands, error_message)) {
@@ -3211,7 +3305,7 @@ bool DualArmModule::prepare_preplanned_dispatch(
 bool DualArmModule::read_preplanned_completion_feedback(
     motion_control_pkg::sdk::DualArmDeviceState& state, std::string& error)
 {
-    if (!sdk_command_gate_ || !init_robot_link_) {
+    if (!sdk_command_gate_ || !init_robot_link_ || !sdk_connected_) {
         error = "arm completion feedback source is unavailable";
         return false;
     }
@@ -3312,7 +3406,11 @@ bool DualArmModule::get_joint_motion_limits(
         jerk.clear();
         return false;
     }
+    std::vector<double> model_velocity;
+    if (!miracle_algo_ || !miracle_algo_->getChainVelocityLimits(is_left ? 0 : 1, model_velocity) ||
+        model_velocity.size() != source_velocity.size()) return false;
     velocity = source_velocity;
+    for (std::size_t i = 0; i < velocity.size(); ++i) velocity[i] = std::min(velocity[i], model_velocity[i]);
     acceleration = source_acceleration;
     jerk = source_jerk;
     return true;
@@ -4260,17 +4358,15 @@ bool DualArmModule::normalizePoseTargetToPlanningFrame(
 }
 
 bool DualArmModule::readMeasuredFeedback(
-    sensor_msgs::msg::JointState& output, std::string& error)
+    sensor_msgs::msg::JointState& output, std::string& error, bool require_advancement)
 {
     const auto node = lockNode(__func__);
-    if (!node || !init_robot_link_ || !feedback_bus_) {
+    if (!node || !init_robot_link_ || !sdk_connected_ || !feedback_bus_) {
         error = "hardware feedback sources not initialized";
         return false;
     }
     // Dedicated acquisition path: no model update, FK, collision scene or
     // MotorInfo fallback. A planner can hold the model mutex for seconds.
-    const auto arm_acquired_ros = node->now();
-    const auto arm_acquired_steady = std::chrono::steady_clock::now();
     motion_control_pkg::sdk::DualArmDeviceState arms;
     const auto result = sdk_command_gate_->readState(arms);
     if (!result) {
@@ -4284,10 +4380,22 @@ bool DualArmModule::readMeasuredFeedback(
         error = "no valid EtherCAT acquisition";
         return false;
     }
-    const auto bus_older_ns = std::max<int64_t>(0,
-        std::chrono::duration_cast<std::chrono::nanoseconds>(arm_acquired_steady-bus_acquired).count());
+    const auto observed = std::chrono::steady_clock::now();
+    const auto acquired = std::min({arms.arms[0].acquired, arms.arms[1].acquired, bus_acquired});
+    if (acquired == std::chrono::steady_clock::time_point{} ||
+        acquired > observed || observed-acquired >= std::chrono::milliseconds(100)) {
+        error = "measured feedback acquisition is stale or invalid";
+        return false;
+    }
+    const auto age_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(observed-acquired).count();
+    const auto now_ns = node->now().nanoseconds();
+    if (!require_advancement) {
+        return measured_feedback_.buildSnapshot(
+            arms, motors, bus_sequence, now_ns-age_ns, now_ns, output, error);
+    }
+    std::lock_guard<std::mutex> lock(measured_feedback_mutex_);
     return measured_feedback_.build(arms, motors, bus_sequence,
-        arm_acquired_ros.nanoseconds()-bus_older_ns, node->now().nanoseconds(), output, error);
+        now_ns-age_ns, now_ns, output, error);
 }
 
 void DualArmModule::motor_statu_cb()
@@ -4298,11 +4406,8 @@ void DualArmModule::motor_statu_cb()
     }
     motor_status_msg_.header.frame_id = planning_frame_;
     // 查验连接是否成功
-    if (!init_robot_link_) {
-      init_motor_status();
-      motor_status_msg_.header.frame_id = planning_frame_;
-      motor_status_msg_.header.stamp = node->get_clock()->now();
-      motor_status_pub_->publish(motor_status_msg_);
+    if (!init_robot_link_ || !sdk_connected_) {
+      return;
     } else {
       motion_control_pkg::sdk::DualArmDeviceState latest_state;
       const auto state_result = sdk_command_gate_->readState(latest_state);
@@ -4310,11 +4415,13 @@ void DualArmModule::motor_statu_cb()
         RCLCPP_ERROR(
             node->get_logger(), "Read dual arm state failed: %s",
             state_result.error_message.c_str());
-        init_motor_status();
-        motor_status_msg_.header.frame_id = planning_frame_;
-        motor_status_msg_.header.stamp = node->get_clock()->now();
-        motor_status_pub_->publish(motor_status_msg_);
         return;
+      }
+      const auto observed=std::chrono::steady_clock::now();
+      for (const auto& arm:latest_state.arms) {
+        if (arm.acquired==std::chrono::steady_clock::time_point{} || arm.acquired>observed ||
+            observed-arm.acquired>=std::chrono::milliseconds(100) || !motion_control_pkg::sdk::armFeedbackOperational(arm))
+          return;
       }
       {
         std::lock_guard<std::mutex> lock(arm_status_mtx_);
@@ -4329,8 +4436,6 @@ void DualArmModule::motor_statu_cb()
         RCLCPP_ERROR(
             node->get_logger(), "Dual-arm model update failed: %s",
             model_error.c_str());
-        motor_status_msg_.header.stamp = node->get_clock()->now();
-        motor_status_pub_->publish(motor_status_msg_);
         return;
       }
 
@@ -4346,8 +4451,6 @@ void DualArmModule::motor_statu_cb()
         RCLCPP_ERROR(
             node->get_logger(), "Dual-arm velocity conversion failed: %s",
             model_error.c_str());
-        motor_status_msg_.header.stamp = node->get_clock()->now();
-        motor_status_pub_->publish(motor_status_msg_);
         return;
       }
 
@@ -4383,7 +4486,11 @@ void DualArmModule::motor_statu_cb()
       if (right_fk_ok) {
         motor_status_msg_.end_effector_pose[1] = right_tcp_pose;
       }
-      motor_status_msg_.header.stamp = node->get_clock()->now();
+      if (!left_fk_ok || !right_fk_ok)return;
+      const auto acquired=std::min(latest_state.arms[0].acquired,latest_state.arms[1].acquired);
+      const auto age=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-acquired).count();
+      if (age<0 || age>=100000000LL)return;
+      motor_status_msg_.header.stamp=node->now()-rclcpp::Duration::from_nanoseconds(age);
       motor_status_pub_->publish(motor_status_msg_);
     }
 }
@@ -4398,21 +4505,26 @@ void DualArmModule::head_status_cb()
     if (!node) {
       return;
     }
-    // 查验连接是否成功
-    if (!init_robot_link_) {
-      init_motor_status();
-      head_status_msg_.header.frame_id = planning_frame_;
-      head_status_msg_.header.stamp = node->get_clock()->now();
-      head_status_pub_->publish(head_status_msg_);
-      return;
+    sensor_msgs::msg::JointState measured;
+    std::string error;
+    if (!readMeasuredFeedback(measured,error,false)) return;
+    std::vector<double> full_q;
+    if (!miracle_algo_->getFullJointState(full_q)) return;
+    const auto& model=miracle_algo_->getModel();
+    for (std::size_t i=0;i<measured.name.size();++i) {
+        if (!model.existJointName(measured.name[i])) return;
+        const auto& joint=model.joints[model.getJointId(measured.name[i])];
+        if (joint.nq()!=1 || joint.idx_q()<0 || static_cast<std::size_t>(joint.idx_q())>=full_q.size()) return;
+        full_q[joint.idx_q()]=measured.position[i];
     }
-    Eigen::Matrix4d T_source_target = Eigen::Matrix4d::Identity();
-    if (!miracle_algo_->getForwardKinematics(planning_frame_, model_end_frame, T_source_target))
+    Eigen::Isometry3d measured_pose=Eigen::Isometry3d::Identity();
+    if (!miracle_algo_->getFramePoseAtConfiguration(planning_frame_, model_end_frame, full_q, measured_pose))
     {
         RCLCPP_ERROR(node->get_logger(), "Failed to get forward kinematics");
         return;
     }
 
+    const Eigen::Matrix4d T_source_target=measured_pose.matrix();
     Eigen::Matrix3d rotation_matrix = T_source_target.block<3,3>(0,0);
     Eigen::Quaterniond quat(rotation_matrix);
     Eigen::Vector3d translation = T_source_target.block<3,1>(0,3);
@@ -4425,7 +4537,9 @@ void DualArmModule::head_status_cb()
     identity_pose.position.y = translation.y();
     identity_pose.position.z = translation.z();
     head_status_msg_.end_effector_pose.push_back(identity_pose);
-    head_status_msg_.header.stamp = node->get_clock()->now();
+    // FK may wait on the planner's model mutex. Withhold a pose that aged out.
+    if ((node->now()-rclcpp::Time(measured.header.stamp)).nanoseconds() >= 100000000LL) return;
+    head_status_msg_.header.stamp = measured.header.stamp;
     head_status_pub_->publish(head_status_msg_);
 
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "motion_control_pkg/sdk/dual_arm_device_interface.hpp"
+#include "motion_control_pkg/sdk/ethercat_feedback_validity.hpp"
 #include "motion_control_pkg/loong_driver_sdk.h"
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <array>
@@ -19,6 +20,16 @@ public:
     explicit MeasuredFeedbackBuilder(std::array<uint16_t, 6> motor_ids)
         : motor_ids_(motor_ids) {}
 
+    // Snapshot readers may reuse a still-fresh physical frame. They must not
+    // consume the publisher's advancement history or refresh acquisition time.
+    bool buildSnapshot(const sdk::DualArmDeviceState& arms,
+               const std::vector<DriverSDK::motorActualStruct>& motors,
+               uint64_t motor_sequence, int64_t acquired_ns, int64_t now_ns,
+               sensor_msgs::msg::JointState& output, std::string& error) const {
+        MeasuredFeedbackBuilder snapshot(motor_ids_);
+        return snapshot.build(arms, motors, motor_sequence, acquired_ns, now_ns, output, error);
+    }
+
     bool build(const sdk::DualArmDeviceState& arms,
                const std::vector<DriverSDK::motorActualStruct>& motors,
                uint64_t motor_sequence, int64_t acquired_ns, int64_t now_ns,
@@ -34,7 +45,7 @@ public:
             if (!sequenceAdvanced(arm.feedback_sequence, last_arm_sequence_[a]))
                 return fail("arm "+std::to_string(a)+" frame did not advance: "+
                     std::to_string(last_arm_sequence_[a])+" -> "+std::to_string(arm.feedback_sequence));
-            if (arm.error_code != 0 || arm.current_state >= 100)
+            if (!sdk::armFeedbackOperational(arm))
                 return fail("arm controller reports error or transition state");
             for (std::size_t j=0; j<7; ++j)
                 if (!std::isfinite(arm.joint_position[j]) || !std::isfinite(arm.joint_velocity[j]) ||
@@ -43,7 +54,7 @@ public:
         for (auto id:motor_ids_) {
             if (id>=motors.size()) return fail("missing body/head motor");
             const auto& m=motors[id];
-            if (m.statusWord==0 || m.statusWord==0xffff || (m.statusWord & 0x0008) || m.errorCode)
+            if (!sdk::ethercatFeedbackValid(m))
                 return fail("motor "+std::to_string(id)+" invalid status="+
                     std::to_string(m.statusWord)+" error="+std::to_string(m.errorCode));
             if (!std::isfinite(m.pos) || !std::isfinite(m.vel) || !std::isfinite(m.tor))

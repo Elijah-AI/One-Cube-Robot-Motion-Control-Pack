@@ -37,6 +37,8 @@
 #include <cmath>
 #include <array>
 #include <functional>
+#include "motion_control_pkg/execution/precision_policy.hpp"
+#include "motion_control_pkg/motion/precision_approach.hpp"
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -264,6 +266,8 @@ namespace miracle {
 
         std::vector<int32_t> m_joint_zero;    //关节零点
         std::vector<int8_t>  m_joint_dir;     //关节方向
+        motion_control_pkg::execution::PrecisionPolicy precision_policy_;
+        std::size_t precision_gate_{motion_control_pkg::motion::kNoApproachGate};
         std::vector<uint16_t> m_jointID;
 
         std::thread execution_thread_move_pose_;

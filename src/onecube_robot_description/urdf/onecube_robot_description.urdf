@@ -724,7 +724,7 @@
       lower="-3.11"
       upper="3.11"
       effort="133"
-      velocity="0.61" />
+      velocity="1.31" />
   </joint>
   <link
     name="body_camera_link">
@@ -888,7 +888,7 @@
       lower="-2.92"
       upper="2.92"
       effort="8.9"
-      velocity="0.08" />
+      velocity="0.61" />
   </joint>
   <link
     name="head_pitch_link">
@@ -946,7 +946,7 @@
       lower="-0.62"
       upper="0.41"
       effort="8.9"
-      velocity="0.05" />
+      velocity="0.61" />
   </joint>
   <link
     name="head_camera_link">

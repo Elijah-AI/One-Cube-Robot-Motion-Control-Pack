@@ -1,3 +1,5 @@
+#include "motion_control_pkg/execution/latest_progress.hpp"
+#include "motion_control_pkg/execution/joint_completion.hpp"
 #include "miracle_lower_body_module.hpp"
 #include "motion_control_pkg/execution/action_terminal_guard.hpp"
 #include "motion_control_pkg/execution/stream_timing.hpp"
@@ -69,6 +71,7 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
   motion_control_pkg::execution::ActionTerminalGuard<GoalHandleMoveJoints, MoveJoints::Result> terminal(goal_handle);
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<MoveJoints::Result>();
+  motion_control_pkg::execution::MotionSafetyScope safety_scope(4U);
   result->final_distance_error = std::numeric_limits<double>::infinity();
   const auto started = Clock::now();
   auto motion_started = Clock::time_point{};
@@ -129,49 +132,70 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
     read_and_check();
     if (maximumError(measured, start) > JOINT_THRESHOLD || !stationary(velocity))
       throw std::runtime_error("Leg moved during body-orientation planning; resend from its current state");
-    if (trajectory.duration == 0) {
-      result->success = true;
-      result->error_message = "Leg already at target; body orientation unchanged";
-      update_timing(); terminal.succeed(result); return;
-    }
-    if (remaining() <= trajectory.duration) throw std::runtime_error("Insufficient timeout remaining for leg trajectory");
-    if (!m_bus_manager->enableMotors(m_jointID, std::min(5.0, remaining())))
-      throw std::runtime_error("Leg motor enable safety check failed");
-    check_request();
-    read_and_check();
-    if (maximumError(measured, start) > JOINT_THRESHOLD || !stationary(velocity))
-      throw std::runtime_error("Leg moved during enable; body-orientation trajectory was not dispatched");
-    if (remaining() <= trajectory.duration) throw std::runtime_error("Insufficient timeout after motor enable");
-
-    RCLCPP_INFO(rclcpp::get_logger("leg_module"),
-        "Body-orientation MoveJ: compensate J%zu, target=[%.6f,%.6f,%.6f,%.6f], duration=%.3fs, FK error=%.9f rad",
-        trajectory.compensated_joint + 1, trajectory.target[0], trajectory.target[1], trajectory.target[2],
-        trajectory.target[3], trajectory.duration, trajectory.max_orientation_error);
-    m_traj_run = true;
-    motion_started = Clock::now();
-    auto tick = motion_started;
-    uint64_t final_command_sequence = sequence;
-    constexpr int64_t period_ns = TRAJ_CYCLE_US * 1000LL;
-    for (std::size_t i = 0; i < trajectory.positions.size(); ++i) {
-      std::this_thread::sleep_until(tick);
+    if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+      throw std::runtime_error("Insufficient timeout for leg trajectory and settling");
+    // No-op goals skip enabling/dispatch but still require measured settling below.
+    if (trajectory.duration > 0) {
+      if (!m_bus_manager->enableMotors(m_jointID, std::min(5.0, remaining())))
+        throw std::runtime_error("Leg motor enable safety check failed");
       check_request();
-      const auto dispatch_started = Clock::now();
       read_and_check();
-      if (!setMulJointPos(trajectory.positions[i], m_jointID)) throw std::runtime_error("Leg motor command rejected");
-      final_command_sequence = sequence;
-      if (i % 25 == 0)
-        publish(MoveJoints::Feedback::STATUS_EXECUTING, 95.0F * i / trajectory.positions.size(),
-            "Executing synchronized leg MoveJ with fixed body orientation");
-      const auto ns = [](Clock::time_point t) { return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count(); };
-      tick = Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds(
-          motion_control_pkg::execution::nextStreamTick(ns(tick), ns(dispatch_started), ns(Clock::now()), period_ns))));
+      if (maximumError(measured, start) > JOINT_THRESHOLD || !stationary(velocity))
+        throw std::runtime_error("Leg moved during enable; body-orientation trajectory was not dispatched");
+      if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+        throw std::runtime_error("Insufficient timeout for trajectory and settling after motor enable");
+
+      RCLCPP_INFO(rclcpp::get_logger("leg_module"),
+          "Body-orientation MoveJ: compensate J%zu, target=[%.6f,%.6f,%.6f,%.6f], duration=%.3fs, FK error=%.9f rad",
+          trajectory.compensated_joint + 1, trajectory.target[0], trajectory.target[1], trajectory.target[2],
+          trajectory.target[3], trajectory.duration, trajectory.max_orientation_error);
+      m_traj_run = true;
+      publish(MoveJoints::Feedback::STATUS_EXECUTING,0,"Executing synchronized leg MoveJ with fixed body orientation");
+      motion_control_pkg::execution::LatestProgressPublisher progress(
+          [&](float value){publish(MoveJoints::Feedback::STATUS_EXECUTING,value,"Executing synchronized leg MoveJ with fixed body orientation");});
+      motion_started = Clock::now();
+      auto tick = motion_started;
+      constexpr int64_t period_ns = TRAJ_CYCLE_US * 1000LL;
+      try {
+        for (std::size_t i = 0; i < trajectory.positions.size(); ++i) {
+          std::this_thread::sleep_until(tick);
+          check_request();
+          if (progress.failed()) throw std::runtime_error(progress.error());
+          const auto dispatch_started = Clock::now();
+          read_and_check();
+          if (!setMulJointPos(trajectory.positions[i], m_jointID)) throw std::runtime_error("Leg motor command rejected");
+          progress.update(95.0F * i / trajectory.positions.size());
+          const auto ns = [](Clock::time_point t) { return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count(); };
+          tick = Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds(
+              motion_control_pkg::execution::nextStreamTick(ns(tick), ns(dispatch_started), ns(Clock::now()), period_ns))));
+        }
+      } catch (const std::exception& e) {
+        std::string detail=e.what();
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,detail);
+        progress.stop();throw std::runtime_error(detail);
+      } catch (...) {
+        std::string detail="unknown body trajectory execution exception";
+        motion_control_pkg::execution::MotionSafetyScope::beforeTerminal(false,detail);
+        progress.stop();throw std::runtime_error(detail);
+      }
+      progress.stop();
+      if (progress.failed()) throw std::runtime_error(progress.error());
     }
     publish(MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION, 95, "Waiting for measured leg target and body orientation");
+    using Guard = motion_control_pkg::execution::JointCompletionGuard;
+    const auto settling = Clock::now();
+    Guard guard({trajectory.target.begin(), trajectory.target.end()}, settling,
+        std::min(started + std::chrono::milliseconds(goal->timeout_ms), settling +
+            std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(precision_policy_.completion_timeout))),
+        false, precision_policy_.completion);
     while (true) {
       std::this_thread::sleep_for(std::chrono::microseconds(TRAJ_CYCLE_US));
       check_request();
       read_and_check();
-      if (sequence > final_command_sequence && result->final_distance_error <= JOINT_REACH_THRESHOLD && stationary(velocity)) break;
+      const auto status = guard.update(sequence, {measured.begin(), measured.end()},
+          {velocity.begin(), velocity.end()}, Clock::now(), error);
+      if (status == Guard::Status::Failed) throw std::runtime_error(error);
+      if (status == Guard::Status::Settled) break;
     }
     result->success = true;
     result->error_message = "Leg target reached with body orientation preserved";

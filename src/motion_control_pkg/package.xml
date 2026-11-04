@@ -16,6 +16,8 @@
   <depend>rclcpp_action</depend>
   <depend>com_interfaces</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <exec_depend>rclpy</exec_depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2</depend>

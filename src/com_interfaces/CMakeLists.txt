@@ -15,6 +15,7 @@ find_package(sensor_msgs REQUIRED)
 # 生成srv接口代码
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetSystemStatus.srv"
+  "srv/DriveControl.srv"
   "msg/HeartBeat.msg"
   "msg/NodeStatus.msg"
   "msg/MotorStatus.msg"

@@ -257,6 +257,8 @@ ActionCallResult TaskActionClient::call_move_pose(
   goal.timeout_ms = param.timeout_ms;
   goal.enable_move_line = param.enable_move_line;
   goal.whole_body_waist_only = param.whole_body_waist_only;
+  goal.keep_tcp_level = param.keep_tcp_level;
+  goal.tcp_level_tolerance_rad = param.tcp_level_tolerance_rad;
 
   // ========== 参数打印（实际发送的 Goal） ==========
   {
@@ -572,6 +574,8 @@ ActionCallResult TaskActionClient::call_move_joints(
   goal.jerk_scale = param.jerk_scale;
   goal.timeout_ms = param.timeout_ms;
   goal.leg_motion_mode = param.leg_motion_mode;
+  goal.keep_tcp_level = param.keep_tcp_level;
+  goal.tcp_level_tolerance_rad = param.tcp_level_tolerance_rad;
   goal.body_tilt_deg = param.body_tilt_deg;
   goal.body_height_m = param.body_height_m;
   if (param.leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS) goal.header.frame_id = "base_link";
