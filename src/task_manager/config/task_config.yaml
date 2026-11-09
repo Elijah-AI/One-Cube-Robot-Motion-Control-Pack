@@ -4,10 +4,13 @@
 node_id: 1
 modbus_slave:
   slave_id: 1
-  # .136 isolation: task triggers are accepted only from the robot itself.
   listen_ip: 127.0.0.1
   listen_port: 12000
 tasks:
+  laptop_dual_slot1_accuracy_test:
+    trigger_reg: 40011
+    status_reg: 50011
+    config_file: tasks/laptop_dual_slot1_accuracy_test.yaml
   laptop_assembly_two_piece:
     trigger_reg: 40010
     status_reg: 50010

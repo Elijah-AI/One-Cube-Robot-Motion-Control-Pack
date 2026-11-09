@@ -1,8 +1,29 @@
 # 腿腰和头部精确到位
 
-2026-10-22，本地工作区 `/home/elijah/ylf_wbc`。
+2026-11-04，本地工作区 `/home/elijah/ylf_wbc`。
 
-## 启用范围
+## Action 开关与默认行为
+
+`MoveJoints` 和 `MovePose` 的 Goal 新增 `bool precision_arrival false`。每个动作独立选择，省略或设为 false 时不使用精定位；上一动作开启不会影响下一动作。
+
+| 选项 | 关节位置容差 | 速度、反馈与稳定要求 | 普通腰腿/头部 MoveJ 规划 |
+|---|---|---|---|
+| false（默认） | 0.02 rad | 速度 ≤0.01 rad/s，至少 5 帧递增反馈、连续 100 ms | 单段正常轨迹，无精定位接近点和慢速末段 |
+| true | `leg_precision` / `head_precision`，默认 0.002 rad | 默认速度 ≤0.01 rad/s，至少 5 帧递增反馈、连续 200 ms，启用配置的停滞诊断 | 按精定位配置规划接近点和一次慢速末段 |
+
+支持腰腿/头部 `MoveJoints`（`arm_id=4/3`）和腿腰/WBC `MovePose`（`arm_id=4/5/6/7`）。手臂独立动作或阻抗模式显式开启时拒绝请求。WBC 手臂容差、TCP 目标检查、身体倾角/高度几何约束、反馈有效性、碰撞和跟踪保护继续执行。
+
+任务 YAML 在对应动作的 `params` 中添加：
+
+```yaml
+precision_arrival: true  # 显式开启；省略或 false 使用普通到位判据
+```
+
+两个 Action 均可在 `ros2 action send_goal` 的 Goal 中填写同名字段。头部启动回零不由这个字段控制，保留其专用回零精度和一次性恢复条件。
+
+新增了 Action 字段，服务端和全部客户端须按 `com_interfaces → motion_control_pkg → task_manager` 顺序重新编译，不能与旧接口混用。
+
+## 开启精定位后的范围
 
 | 路径 | 最终关节误差 | 低速接近段 |
 |---|---|---|
@@ -14,7 +35,7 @@
 
 腿腰、头部要求速度绝对值 ≤ 0.01 rad/s、至少 5 帧有效递增反馈，并连续满足条件 200 ms。这是编码器反馈的关节误差，不代表末端绝对定位精度。
 
-## 普通 MoveJ 行为
+## 开启后的普通 MoveJ 行为
 
 先规划完整路径，再执行。最大单关节位移大于 0.03 rad 时，先移动至距目标最大单关节差 0.03 rad 的接近点，以零规划速度/加速度结束第一段；等待反馈进入接近点 0.01 rad 范围并稳定后，执行一次低速末段，到达原始目标。小于等于 0.03 rad 的动作整段低速。
 
@@ -28,7 +49,7 @@
 
 ## 参数
 
-启动参数前缀为 `leg_precision` 与 `head_precision`，相互独立；全身协调路径读取同一套腿腰完成判据。双臂不读取这些参数。
+启动参数前缀为 `leg_precision` 与 `head_precision`，相互独立；只有 `precision_arrival: true` 的动作使用其精定位判据，WBC 读取腿腰配置。到位等待上限仍受这些链的 `completion_timeout_sec` 限制；普通模式使用 0.02 rad / 100 ms，关闭精定位停滞诊断。双臂原有完成判据不变。
 
 | 后缀 | 默认值 | 含义 |
 |---|---|---|
@@ -45,7 +66,7 @@
 | approach_acceleration_rad_s2 | 0.2 | 末段加速度上限 |
 | approach_jerk_rad_s3 | 0.5 | 末段 jerk 上限 |
 
-全身协调动作保留原来的 3 s 完成等待上限；其中腿腰使用新的容差、稳定和停滞判据。`approach_enabled=false` 只关闭分段规划，不放宽最终精度。参数为启动时只读，修改后需重启节点。示例覆盖文件：[precision_arrival.yaml](../src/motion_control_pkg/config/precision_arrival.yaml)。代码默认值已启用上述策略；未自动修改机器人 `/opt/onecube` 的外部配置。
+全身协调动作保留原来的 3 s 完成等待上限；其中腿腰按本次 Goal 的开关选择普通或精定位判据。`approach_enabled=false` 只关闭分段规划，不放宽最终精度。参数为启动时只读，修改后需重启节点。示例覆盖文件：[precision_arrival.yaml](../src/motion_control_pkg/config/precision_arrival.yaml)。这些值不自动开启任何 Action 的精定位；仅提供 `precision_arrival: true` 时的配置。未修改机器人 `/opt/onecube` 的外部配置。
 
 ## 运动学库参考
 
@@ -67,4 +88,10 @@ ctest --test-dir /home/elijah/ylf_wbc/build/motion_control_pkg --output-on-failu
 
 本次只修改本地源码并进行离线编译测试；未安装到机器人、未重启控制节点、未发送真实运动指令。真机验收应记录实际位置/速度、反馈时间戳、末段耗时和最终误差，在可控低速条件下确认后再提高前段速度。
 
-本次验证结果：`motion_control_node` 编译成功；CTest 的 `precision_arrival`、`drive_control`、`tcp_level_constraint`、`tcp_level_planning` 全部通过（4/4）。精确到位测试内部包含 9 组场景。日志保存在 `/home/elijah/precision_arrival_20261022/build_final.log` 和 `/home/elijah/precision_arrival_20261022/ctest.log`。
+2026-10-22 历史验证结果：`motion_control_node` 编译成功；CTest 的 `precision_arrival`、`drive_control`、`tcp_level_constraint`、`tcp_level_planning` 全部通过（4/4）。精确到位测试内部包含 9 组场景。日志保存在 `/home/elijah/precision_arrival_20261022/build_final.log` 和 `/home/elijah/precision_arrival_20261022/ctest.log`。
+
+## 2026-11-04 Action 选项验证
+
+本地隔离构建 `com_interfaces`、真实 SDK 运控节点和 `task_manager` 通过，20/20 CTest 通过。精定位测试包含 14 组场景，新增默认关闭、按动作切换、配置不泄漏、WBC 普通/精定位差异、普通 MoveJ 不生成慢速末段及反馈约束保留检查。50 项真实 YAML 解析选项检查通过，覆盖缺省/false/true、身体模式、腰部简写、复合动作及非法部件/阻抗请求；现有 12 个任务的配置解析通过。两个新 Action 默认值与四次序列化往返检查通过。
+
+日志和备份位于 `/home/elijah/wbc_precision_action_20261104/`。本次完成本地源码修改与离线验证；尚未推送 GitHub，也未更新机器人运行版本。

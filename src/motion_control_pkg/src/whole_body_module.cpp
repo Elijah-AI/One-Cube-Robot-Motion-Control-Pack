@@ -3,6 +3,7 @@
 #include "motion_control_pkg/motion/scoped_collision_scene.hpp"
 #include "motion_control_pkg/motion/tcp_level_plan.hpp"
 #include "com_interfaces/tcp_level_goal.hpp"
+#include "com_interfaces/precision_arrival_goal.hpp"
 #include "whole_body_module.hpp"
 
 #include <algorithm>
@@ -510,6 +511,8 @@ bool WholeBodyModule::plan_trajectory(
     if (!goal || (goal->arm_id!=WHOLE_BODY_LEFT && goal->arm_id!=WHOLE_BODY_RIGHT && goal->arm_id!=WHOLE_BODY_BOTH)) {
         error_message = "unsupported whole-body planning goal"; return false;
     }
+    if (!com_interfaces::validatePrecisionArrivalGoal(goal->precision_arrival,
+            goal->arm_id, true, goal->control_mode, error_message)) return false;
     if (!com_interfaces::validateTcpLevelGoal(goal->keep_tcp_level, goal->tcp_level_tolerance_rad,
             goal->arm_id, true, goal->control_mode, error_message)) return false;
     if (goal->whole_body_waist_only && goal->enable_move_line) {
@@ -1044,6 +1047,8 @@ void WholeBodyModule::execution_loop(
         GoalHandleMovePose, MovePose::Result> terminal(goal_handle);
     const auto started_at = std::chrono::steady_clock::now();
     const auto goal = goal_handle->get_goal();
+    const auto action_precision = motion_control_pkg::execution::actionPrecisionPolicy(
+        leg_precision_policy_, goal->precision_arrival);
     const bool need_left = goal->arm_id == WHOLE_BODY_LEFT ||
         goal->arm_id == WHOLE_BODY_BOTH;
     const bool need_right = goal->arm_id == WHOLE_BODY_RIGHT ||
@@ -1292,7 +1297,7 @@ void WholeBodyModule::execution_loop(
             deadline = std::min(deadline, started_at + std::chrono::milliseconds(goal->timeout_ms));
         Guard guard(need_left ? left_path.back() : std::vector<double>{},
                     need_right ? right_path.back() : std::vector<double>{},
-                    leg_path.back(), settling_started, deadline, leg_precision_policy_.completion);
+                    leg_path.back(), settling_started, deadline, action_precision.completion);
         publish_feedback(95.0F, "waiting for measured arm and waist feedback to settle");
         while (!goal_handle->is_canceling()) {
             if (!rclcpp::ok()) {
@@ -1348,8 +1353,10 @@ void WholeBodyModule::execution_loop(
             if (status == Guard::Status::Failed) { child_failed = true; break; }
             if (status == Guard::Status::Settled) {
                 RCLCPP_INFO(rclcpp::get_logger("whole_body_module"),
-                    "WBC measured completion settled after %.3f s (configured arm/leg stable feedback)",
-                    std::chrono::duration<double>(Guard::Clock::now()-settling_started).count());
+                    "WBC precision_arrival=%s settled after %.3f s (leg_tolerance=%.6f rad, stable=%.3f s)",
+                    goal->precision_arrival ? "ON" : "OFF",
+                    std::chrono::duration<double>(Guard::Clock::now()-settling_started).count(),
+                    action_precision.completion.position_tolerance, action_precision.completion.stable_seconds);
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -1362,24 +1369,28 @@ void WholeBodyModule::execution_loop(
     if (!child_failed && !timed_out && !goal_handle->is_canceling() && balance_state_) {
         if (!read_balance_state(final_q,result->error_message)) child_failed=true;
         else {
-            std::vector<double> final_active,expected;
+            std::vector<double> final_active,expected,measured_leg;
+            if (!miracle_algo_->extractLegJoints(final_q, measured_leg) ||
+                measured_leg.size() != leg_path.back().size()) {
+                child_failed=true; result->error_message="cannot extract final measured WBC leg state";
+            }
             if (need_left) final_active.insert(final_active.end(),left_path.back().begin(),left_path.back().end());
             if (need_right) final_active.insert(final_active.end(),right_path.back().begin(),right_path.back().end());
-            final_active.insert(final_active.end(),leg_path.back().begin(),leg_path.back().end());
-            if (!miracle_algo_->mergeWholeBodyJoints(start_q,need_left,need_right,final_active,expected)) {
+            // Exclude legs from the fixed arm/held-joint tolerance below. Their
+            // original commanded target is checked separately with this Goal's
+            // selected tolerance; no command or goal is changed here.
+            final_active.insert(final_active.end(),measured_leg.begin(),measured_leg.end());
+            if (!child_failed && !miracle_algo_->mergeWholeBodyJoints(start_q,need_left,need_right,final_active,expected)) {
                 child_failed=true; result->error_message="cannot reconstruct final WBC command";
-            } else for (std::size_t i=0;i<final_q.size();++i) if (std::abs(final_q[i]-expected[i])>.01) {
-                child_failed=true; result->error_message="final measured WBC position differs from reference"; break;
+            } else if (!child_failed) for (std::size_t i=0;i<final_q.size();++i) if (
+                    !std::isfinite(final_q[i]) || std::abs(final_q[i]-expected[i])>.01) {
+                child_failed=true; result->error_message="final measured WBC arm/held position differs from reference"; break;
             }
             if (!child_failed) {
-                std::vector<double> measured_leg;
-                if (!miracle_algo_->extractLegJoints(final_q, measured_leg) ||
-                    measured_leg.size() != leg_path.back().size()) {
-                    child_failed=true; result->error_message="cannot extract final measured WBC leg state";
-                } else for (std::size_t i=0;i<measured_leg.size();++i) {
+                for (std::size_t i=0;i<measured_leg.size();++i) {
                     if (!std::isfinite(measured_leg[i]) ||
-                        std::abs(measured_leg[i]-leg_path.back()[i]) > leg_precision_policy_.completion.position_tolerance) {
-                        child_failed=true; result->error_message="final measured WBC leg position exceeds precision tolerance"; break;
+                        std::abs(measured_leg[i]-leg_path.back()[i]) > action_precision.completion.position_tolerance) {
+                        child_failed=true; result->error_message="final measured WBC leg position exceeds selected completion tolerance"; break;
                     }
                 }
             }

@@ -15,7 +15,7 @@ ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
 
 
 - [WBC 双臂 TCP 全程保持水平](#45-wbc-双臂-tcp-全程保持水平)：MovePose `arm_id=7`、`keep_tcp_level=true`，腿腰运动时双臂同步补偿；默认关闭，倾角容差默认 0.02 rad。包含直接 Action 和任务 YAML 示例。
-- [腰腿和头部 0.002 rad 精定位](#35-腰腿和头部精定位)：普通 MoveJ 默认低速接近原始目标，以新鲜实测反馈确认到位；WBC 腰腿使用同一精定位判据，保留全身同步轨迹。双臂关节到位容差仍为 0.01 rad。
+- [腰腿和头部 0.002 rad 精定位](#35-腰腿和头部精定位)：`precision_arrival` 默认 false，按 Action 显式开启后，普通 MoveJ 低速接近原始目标；WBC 腰腿使用同一精定位判据并保留同步轨迹。双臂关节到位容差仍为 0.01 rad。
 - 头部启动回零：默认低速回到 `[0,0]`，启动恢复专用 pitch 下界为 -0.7 rad；正常运动仍使用 URDF 限位，见第 2.2、8.6 节。
 
 ## 目录
@@ -95,7 +95,7 @@ ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
 | 腿部定身体朝向 | LEG 两关节目标 | 第三腿关节补偿，保持身体起始朝向与腰角；身体位置可变 |
 | 身体倾角/升降 | `leg_motion_mode=1/2/3` | 分别为绝对倾角、相对高度、绝对高度；独立腿部动作不支持 keep_tcp_level |
 | 腰部相对旋转 | YAML `relative_position=false` | 设 true 仅用于 LEG 的单个 body_joint 简写，由任务层扩为四关节目标 |
-| 腰腿/头部精定位 | `leg_precision.*`、`head_precision.*` | 启动参数，默认最终误差 ≤0.002 rad、连续稳定 200 ms；普通 MoveJ 有低速接近段，见第 3.5、8.5 节 |
+| 腰腿/头部精定位 | Action `precision_arrival=false` | 默认普通到位 0.02 rad / 100 ms；显式开启后使用 `leg_precision.*`、`head_precision.*`，默认 0.002 rad / 200 ms，见第 3.5、8.5 节 |
 | 头部启动回零 | `head_startup_home.enabled=true` | 一次启动回零；pitch 恢复下界 -0.7 rad，普通限位不变；期间阻止其他运动/工具任务 |
 | COM/ZMP 支撑约束 | `wbc_static_com_enabled`、`wbc_dynamic_zmp_enabled` | 节点参数，均默认 false；动态依赖静态以及完整有效状态，独立于几何碰撞开关 |
 | 视觉位姿目标及偏移 | YAML `use_config_pose`、`vision_*` | 视觉缓存、基准系/视觉局部平移、旋转、目标向下、保持当前 TCP 高度 |
@@ -120,7 +120,7 @@ source install/setup.bash
 
 ARM64 驱动及 NPU 视觉依赖应在相应平台准备。x86 可显式设置 `ONECUBE_USE_REAL_DRIVER_SDK=ON` 并指定配套 DriverSDK；未匹配真实驱动时可能使用 pseudo EtherCAT 后端。双臂 SDK 仍有实际连接逻辑，不能据此随意启动运控。只读 observer 使用下述独立入口。
 
-`MoveJoints.action` 含身体运动字段，`MoveJoints.action` / `MovePose.action` 均含 `keep_tcp_level` 和 `tcp_level_tolerance_rad`，须按 `com_interfaces → motion_control_pkg → task_manager` 重建并安装消费者。不同接口版本不可混用。0.002 rad 精定位使用节点启动参数，无需向 Action 添加精度字段。本地逐包 CMake 安装可使用仓库根 [setup_local.bash](../setup_local.bash)，标准 colcon 安装使用 `install/setup.bash`。检查安装前缀：
+`MoveJoints.action` 含身体运动字段，`MoveJoints.action` / `MovePose.action` 均含 `keep_tcp_level` 和 `tcp_level_tolerance_rad`，须按 `com_interfaces → motion_control_pkg → task_manager` 重建并安装消费者。不同接口版本不可混用。两个 Action 新增 `precision_arrival=false`，每次动作显式设 true 才使用节点启动参数定义的精定位；接口服务端与客户端必须一起重编译。本地逐包 CMake 安装可使用仓库根 [setup_local.bash](../setup_local.bash)，标准 colcon 安装使用 `install/setup.bash`。检查安装前缀：
 
 ```bash
 ros2 pkg prefix com_interfaces
@@ -277,6 +277,8 @@ ros2 param get /motion_control_ns/motion_control planning_worker_count
 
 手臂名称为 `Joint1_L`…`Joint7_L` / `Joint1_R`…`Joint7_R`，服务端可按合法名称重排，拒绝缺失/重复。头部固定位置顺序 `[head_yaw_joint, head_pitch_joint]`；普通腿四关节固定顺序 `[leg_joint1, leg_joint2, leg_joint3, body_joint]`，不要依赖名称对这两种旧路由重排。
 
+字段 `precision_arrival` 为 bool，默认 false；仅 HEAD/LEG 位置模式可开启，详见第 3.5 节。
+
 ### 3.2 手臂、头、腿调用示例
 
 本文所有运动数值仅用于解释格式，需替换为现场核实的可达目标。写入 Action 会运动，本次文档整理未执行这些指令。
@@ -362,11 +364,20 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
   speed: 0.1, enable_collision_check: 1, timeout_ms: 30000}' --feedback
 ```
 
-身体专用运动预约上半身资源，要求完整、新鲜、无故障的反馈。当前默认到位要求腿腰各关节误差 ≤0.002 rad、身体朝向误差 ≤0.01 rad；升降还要求身体位置误差 ≤0.001 m。关节速度须 ≤0.01 rad/s，至少 5 帧递增反馈且连续稳定 200 ms；腿腰判据来自 `leg_precision.*`。FK 到位误差不是外部计量精度。运动定义见 [身体运动说明](LEG_BODY_MOTION.md)，最新到位策略见下一节。
+身体专用运动预约上半身资源，要求完整、新鲜、无故障的反馈。腿腰关节默认容差为 0.02 rad；`precision_arrival=true` 时按精定位配置，默认每轴误差 ≤0.002 rad、身体朝向误差 ≤0.01 rad；升降还要求身体位置误差 ≤0.001 m。关节速度须 ≤0.01 rad/s，至少 5 帧递增反馈，默认连续稳定 100 ms；开启精定位后默认 200 ms，判据来自 `leg_precision.*`。FK 到位误差不是外部计量精度。运动定义见 [身体运动说明](LEG_BODY_MOTION.md)，最新到位策略见下一节。
 
 ### 3.5 腰腿和头部精定位
 
-**0.002 rad（约 0.115°）是每个关节相对原始目标的实测到位容差**。当前代码默认启用，无需更改第 3.2 节的 Action 格式；任务 YAML 的腰部 J4/body_joint 简写展开后也使用腿腰策略。它不能直接换算成 TCP 毫米定位精度，也不改变 IK 求解阈值。
+未填写或设为 false 时，腰腿/头部使用 0.02 rad、速度 ≤0.01 rad/s、至少 5 帧递增反馈且连续稳定 100 ms 的普通判据；普通 MoveJ 不插入精定位接近点或慢速末段。每个 Goal 独立选择，前一次开启不会影响后一次。WBC 的手臂/TCP 检查、身体几何约束及安全保护继续执行。
+
+```yaml
+# 放在 move_joints / move_pose 动作的 params 中
+precision_arrival: true
+```
+
+支持 HEAD/LEG MoveJoints（3/4）及 LEG/WBC MovePose（4/5/6/7）的位置模式；独立手臂或阻抗请求设 true 会被拒绝。头部启动回零继续采用专用精度，不由此 Action 字段控制。下表和以下低速接近流程仅在显式开启后适用。
+
+**0.002 rad（约 0.115°）是每个关节相对原始目标的实测到位容差**。两个 Action 均新增 **`precision_arrival: false`**，默认关闭。显式设为 true 才启用以下精定位策略；任务 YAML 的腰部 J4/body_joint 简写展开后也使用腿腰策略。它不能直接换算成 TCP 毫米定位精度，也不改变 IK 求解阈值。
 
 | 运动路径 | 默认最终关节误差 | 低速接近行为 |
 |---|---|---|
@@ -422,6 +433,8 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 `bound_size` 会在目标转入规划坐标系后直接叠加 XYZ，连续 MoveP 的经过点也会叠加此偏移。任务层使用视觉偏移时要求 bound 为零，避免双重补偿。接口文件的“工具/负载包络”注释与当前执行语义不同，以此处及源码为准。
 
 `via_poses` 只允许 arm_id=0/1、MoveP；不可与双臂、全身、MoveL 混用。它是连续经过路径，不保证在每个中间点停稳。
+
+字段 `precision_arrival` 为 bool，默认 false；仅 LEG/WBC 位置模式可开启，详见第 3.5 节。
 
 ### 4.2 单臂 MoveP / MoveL
 
@@ -509,7 +522,7 @@ ros2 action send_goal /Control/move_pose com_interfaces/action/MovePose \
 
 参考系为固定 `base_link`，底盘须固定且水平；当前没有 IMU 重力补偿。该约束也没有加入双臂刚性抓持的固定相对位姿或受力约束。`force_vertical_down` 只生成视觉目标姿态，不能代替全程水平约束。
 
-**水平倾角容差 0.02 rad 与关节精定位容差 0.002 rad 分别配置。** 即使收紧 `leg_precision.goal_tolerance_rad`，也不会自动改变 `tcp_level_tolerance_rad` 或手臂关节容差。两项功能可在同一个 WBC 动作中共同生效：路径保持 TCP 水平，结束时腿腰按精定位判据到位。详细定义及源码入口见 [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)。
+**水平倾角容差 0.02 rad 与关节精定位容差 0.002 rad 分别配置。** 即使收紧 `leg_precision.goal_tolerance_rad`，也不会自动改变 `tcp_level_tolerance_rad` 或手臂关节容差。同时设置 `keep_tcp_level=true` 和 `precision_arrival=true` 时，两项功能在同一个 WBC 动作中共同生效：路径保持 TCP 水平，结束时腿腰按精定位判据到位。详细定义及源码入口见 [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)。
 
 ## 5. ControlGripper 与 ControlSuck
 
@@ -586,11 +599,11 @@ Feedback：`header`、`task_status`、`progress_rate`、`current_step_info`、`d
 | 部位 | 关节位置误差 | 实测及差分速度 | 有效反馈及稳定要求 |
 |---|---|---|---|
 | 所选手臂 | 每轴 ≤0.01 rad | ≤0.01 rad/s | `low_speed=true`，至少 5 帧新反馈、连续 100 ms |
-| 腿腰 | 每轴 ≤0.002 rad | ≤0.01 rad/s | 至少 5 帧新反馈、连续 200 ms，读取 `leg_precision.*` |
+| 腿腰 | 默认每轴 ≤0.02 rad；precision_arrival=true 时默认 ≤0.002 rad | ≤0.01 rad/s | 至少 5 帧新反馈；默认 100 ms，开启精定位后按 leg_precision（默认 200 ms） |
 
-WBC 同时检查由实测关节 FK 得到的所选 TCP 目标误差：位置 ≤0.003 m、姿态 ≤0.02 rad。开启 `keep_tcp_level` 后，到位等待期间水平监控也保持有效。这些 TCP 判据与腰腿 0.002 rad 关节判据必须分别满足。
+WBC 同时检查由实测关节 FK 得到的所选 TCP 目标误差：位置 ≤0.003 m、姿态 ≤0.02 rad。开启 `keep_tcp_level` 后，到位等待期间水平监控也保持有效。这些 TCP 判据与本次 Goal 选择的腿腰关节判据必须分别满足。
 
-WBC 完成等待最多 3 s，同时受 Action 总超时限制；腿腰精定位参数中的 `completion_timeout_sec` 不改变这个 3 s 上限。反馈序号 100 ms 不前进、驱动错误、非有限值、腿腰静差停滞等都会失败。手臂完成判据及 WBC 3 s 上限保持代码常量；腰腿/头部使用第 8.5 节的启动只读参数。
+WBC 完成等待最多 3 s，同时受 Action 总超时限制；腿腰精定位参数中的 `completion_timeout_sec` 不改变这个 3 s 上限。反馈序号 100 ms 不前进、驱动错误、非有限值、开启精定位后的腿腰静差停滞等都会失败。手臂完成判据及 WBC 3 s 上限保持代码常量；腰腿/头部使用第 8.5 节的启动只读参数。
 
 单臂路径 `timeout_ms<=0` 内部有 5000 ms 回退，双臂/WBC 要求正超时。当前头部和普通腿路径也已将动作开始时间计入轨迹下发及到位等待的截止时间，正超时不足时拒绝下发或结束执行。规划/SDK 调用不承诺硬实时可抢占，统一建议显式给正数并处理 Action 终态。
 
@@ -669,7 +682,7 @@ body_error off
 
 停止期间状态为 `ERROR_TRACKING_STOPPING`、`ERROR_TRACKING_STANDSTILL_CONFIRMED` 或 `ERROR_TRACKING_STOP_UNCONFIRMED`。未确认停止时继续阻止新任务。恢复后回到 `MONITORING`，`last_error_stop` 保留带 `arm_error` 或 `body_error` 标记的原因；状态还分别报告两组的 ON/OFF、`*_limit_rad` 与 `*_hard_limit_rad`。
 
-开关仅控制相对已发送指令的位置误差门槛及普通运动中的保持偏移检查。URDF 位置/速度限制、反馈有效性和年龄、驱动错误、最终到位要求（腿/腰/头仍为 `0.002 rad`）、TCP/碰撞约束、显式停止及启动回零的专用约束继续执行。这些实际故障仍锁存；若跟踪停止期间出现这类故障，停止升级为普通故障，不能自动解除。软件停止不代表驱动 Quick Stop、STO 或抱闸确认。
+开关仅控制相对已发送指令的位置误差门槛及普通运动中的保持偏移检查。URDF 位置/速度限制、反馈有效性和年龄、驱动错误、最终到位要求（腿/腰/头默认 `0.02 rad`，开启精定位时默认 `0.002 rad`）、TCP/碰撞约束、显式停止及启动回零的专用约束继续执行。这些实际故障仍锁存；若跟踪停止期间出现这类故障，停止升级为普通故障，不能自动解除。软件停止不代表驱动 Quick Stop、STO 或抱闸确认。
 
 ## 7. 碰撞与环境点云
 
@@ -763,6 +776,8 @@ right_tool_dynamics: [0.35746, -0.36386, -128.866, -0.79,
 仅显式启用约束的 WBC 动作注册水平监控，使用该动作的 `tcp_level_tolerance_rad`；所需手臂及腿腰反馈的跨通道时间差上限为 20 ms。URDF 关节限位、控制器限位、轨迹导数检查、实测反馈与到位检查不依赖 `enable_collision_check`。
 
 ### 8.5 精定位启动参数
+
+下列精定位判据由 Action 的 `precision_arrival: true` 选择；修改启动参数或加载模板不会自动开启。普通模式的关节容差/稳定时长为 0.02 rad / 100 ms，启动回零继续使用其专用判据。
 
 腰腿前缀为 `leg_precision`，头部前缀为 `head_precision`，各自独立。例如完整参数名为 `leg_precision.goal_tolerance_rad`。WBC 读取同一套腿腰完成判据，双臂不读取这两组参数。以下均为**节点启动时只读参数**，不能放入任务动作 `params` 或通过 `ros2 param set` 热更新。
 
@@ -990,7 +1005,7 @@ IK 恢复使用动作级 `ik_failure_recovery` 与 `if_recovery_applied`，详�
     timeout_ms: 60000
 ```
 
-使用 MoveL 时改 `enable_move_line: true`；仅腰参与的 MoveP 改 `whole_body_waist_only: true`。本动作的腰腿默认按 0.002 rad 判定到位，手臂仍为 0.01 rad；无需在任务动作里填写 `leg_precision` 或额外的精定位开关。
+使用 MoveL 时改 `enable_move_line: true`；仅腰参与的 MoveP 改 `whole_body_waist_only: true`。本动作腰腿默认按 0.02 rad、手臂按 0.01 rad 关节容差判定；在 `params` 中设置 `precision_arrival: true` 后，腰腿才使用 `leg_precision`（默认 0.002 rad），手臂保持 0.01 rad。
 
 下面为原有的单臂加腰 MoveP 与独立身体升降片段，未启用 TCP 水平约束。独立升降动作不会自动补偿手臂 TCP 姿态。
 
@@ -1208,6 +1223,10 @@ float64 body_tilt_deg
 # RELATIVE: delta Z; ABSOLUTE: body_link origin Z in base_link; metres.
 # Both height modes hold body_link orientation, X/Y and all upper-body joints.
 float64 body_height_m
+# Optional precision arrival for HEAD/LEG only; defaults off.
+# true selects head_precision/leg_precision, including the ordinary MoveJ slow suffix.
+# Body orientation/height modes retain their constrained paths and only change settling.
+bool precision_arrival false
 ---
 bool success
 string error_message
@@ -1305,6 +1324,10 @@ int64 timeout_ms                         # 操作超时时间，毫秒
 # true: 仅所选手臂和腰部 J4/body_joint 参与，leg_joint1/2/3 保持起始角度。
 # false（默认）: 保留四个腿/躯干关节参与的原全身模式。
 bool whole_body_waist_only false
+# Optional measured leg/waist precision settling for LEG and WBC MovePose.
+# false: ordinary 0.02 rad / 100 ms settling; true: configured leg_precision.
+# Does not change arm/TCP tolerances, trajectory geometry or tracking protection.
+bool precision_arrival false
 ---
 bool success
 string error_message

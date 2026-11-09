@@ -18,6 +18,8 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>tf2_ros_py</exec_depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2</depend>
@@ -41,6 +43,8 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>onecube_robot_description</exec_depend>
+  <test_depend>python3-numpy</test_depend>
+  <test_depend>tf2_msgs</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

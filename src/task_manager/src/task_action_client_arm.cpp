@@ -257,8 +257,7 @@ ActionCallResult TaskActionClient::call_move_pose(
   goal.timeout_ms = param.timeout_ms;
   goal.enable_move_line = param.enable_move_line;
   goal.whole_body_waist_only = param.whole_body_waist_only;
-  goal.keep_tcp_level = param.keep_tcp_level;
-  goal.tcp_level_tolerance_rad = param.tcp_level_tolerance_rad;
+  goal.precision_arrival = param.precision_arrival;
 
   // ========== 参数打印（实际发送的 Goal） ==========
   {
@@ -269,6 +268,7 @@ ActionCallResult TaskActionClient::call_move_pose(
         << "\n force_control=" << (goal.use_force_control ? "true" : "false")
         << "\n enable_move_line=" << (goal.enable_move_line ? "true" : "false")
         << "\n whole_body_waist_only=" << (goal.whole_body_waist_only ? "true" : "false")
+        << "\n precision_arrival=" << (goal.precision_arrival ? "true" : "false")
         << "\n speed=" << goal.speed
         << "\n timeout_ms=" << goal.timeout_ms
         << "\n cloud_frame=" << goal.point_cloud_frame_id
@@ -517,7 +517,8 @@ ActionCallResult TaskActionClient::call_move_joints(
   else
   {
     const bool leg_orientation_goal = param.arm_id == MoveJoints::Goal::LEG &&
-      (param.joint_name.size() == 2 || param.position.size() == 2);
+      (param.joint_name.size() == 2 || param.position.size() == 2 ||
+       param.joint_name.size() == 3 || param.position.size() == 3);
     if (leg_orientation_goal) {
       com_interfaces::LegJointSelection selection;
       std::string error;
@@ -527,7 +528,7 @@ ActionCallResult TaskActionClient::call_move_joints(
         return ActionCallResult::FAIL_PARAM_INVALID;
       }
     }
-    const size_t expected_joint_count = leg_orientation_goal ? 2U :
+    const size_t expected_joint_count = leg_orientation_goal ? param.joint_name.size() :
       (param.arm_id == MoveJoints::Goal::HEAD) ? 2U :
       (param.arm_id == MoveJoints::Goal::LEG) ? 4U : 7U;
     if (param.joint_name.size() != expected_joint_count ||
@@ -574,10 +575,9 @@ ActionCallResult TaskActionClient::call_move_joints(
   goal.jerk_scale = param.jerk_scale;
   goal.timeout_ms = param.timeout_ms;
   goal.leg_motion_mode = param.leg_motion_mode;
-  goal.keep_tcp_level = param.keep_tcp_level;
-  goal.tcp_level_tolerance_rad = param.tcp_level_tolerance_rad;
   goal.body_tilt_deg = param.body_tilt_deg;
   goal.body_height_m = param.body_height_m;
+  goal.precision_arrival = param.precision_arrival;
   if (param.leg_motion_mode != MoveJoints::Goal::LEG_JOINT_TARGETS) goal.header.frame_id = "base_link";
 
   // ========== 参数打印（实际发送的 Goal） ==========
@@ -588,6 +588,7 @@ ActionCallResult TaskActionClient::call_move_joints(
         << ", collision_check=" << static_cast<unsigned>(goal.enable_collision_check)
         << ", speed=" << goal.speed
         << ", timeout_ms=" << goal.timeout_ms
+        << ", precision_arrival=" << (goal.precision_arrival ? "true" : "false")
         << ", leg_motion_mode=" << static_cast<int>(goal.leg_motion_mode)
         << ", body_tilt_deg=" << goal.body_tilt_deg
         << ", body_height_m=" << goal.body_height_m;
@@ -663,6 +664,12 @@ ActionCallResult TaskActionClient::call_move_joints(
                            goal.joint_name, goal.position, error)) {
       LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
         "Waist-only MoveJ requires fresh, stopped /wbc/joint_states: " << error);
+        LOG_ERROR(node_->get_logger(), task_log::Tag::ARM,
+          "[GX12_DIAG] has_state=" << (waist_state_ ? 1 : 0)
+          << ", stamp_age_ms=" << age * 1000.0
+          << ", received_age_ms=" << received_age * 1000.0
+          << ", error=" << error);
+
       return ActionCallResult::FAIL_PARAM_INVALID;
     }
     LOG_INFO(node_->get_logger(), task_log::Tag::ARM,

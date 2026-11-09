@@ -161,6 +161,18 @@ Testing/
 !/src/motion_control_pkg/test/shutdown_gate_test.cpp
 !/src/motion_control_pkg/test/shutdown_launch_test.py
 !/src/motion_control_pkg/test/shutdown_signal_test.cpp
+!/src/motion_control_pkg/test/robot_tf_test.py
+!/src/motion_control_pkg/test/waist_leg_trajectory_test.cpp
+
+# Regression sources referenced by the deployed interface/task CMake files.
+!/src/com_interfaces/test/
+!/src/com_interfaces/test/*.cpp
+!/src/task_manager/test/
+!/src/task_manager/test/*.cpp
+!/src/task_manager/test/*.py
+
+# Registered task; required by task_config.yaml.
+!/src/task_manager/config/tasks/laptop_dual_slot1_accuracy_test.yaml
 !/src/motion_control_pkg/test/tcp_level_constraint_test.cpp
 !/src/motion_control_pkg/test/tcp_level_planning_test.cpp
 !/src/motion_control_pkg/test/tracking_diagnostics_test.cpp

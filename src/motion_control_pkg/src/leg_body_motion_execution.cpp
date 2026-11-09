@@ -44,6 +44,8 @@ void MiracleLowerBodyModule::execution_loop_body_motion(std::shared_ptr<GoalHand
   } release{*this};
   motion_control_pkg::execution::ActionTerminalGuard<GoalHandleMoveJoints, MoveJoints::Result> terminal(handle);
   const auto goal = handle->get_goal();
+  const auto action_precision = motion_control_pkg::execution::actionPrecisionPolicy(
+      precision_policy_, goal->precision_arrival);
   auto result = std::make_shared<MoveJoints::Result>();
   motion_control_pkg::execution::MotionSafetyScope safety_scope(4U);
   result->final_distance_error = std::numeric_limits<double>::infinity();
@@ -201,7 +203,7 @@ void MiracleLowerBodyModule::execution_loop_body_motion(std::shared_ptr<GoalHand
     readAndCheck();
     if (jointError(measured, start) > JOINT_THRESHOLD)
       throw std::runtime_error("Leg moved during body planning; resend from measured state");
-    if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.joints.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+    if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.joints.positions.size(), remaining(), action_precision.completion.stable_seconds))
       throw std::runtime_error("Insufficient body-motion timeout for trajectory and settling");
     if (trajectory.joints.duration != 0) {
       if (!m_bus_manager->enableMotors(m_jointID, std::min(5.0, remaining())))
@@ -210,7 +212,7 @@ void MiracleLowerBodyModule::execution_loop_body_motion(std::shared_ptr<GoalHand
       if (jointError(measured, start) > JOINT_THRESHOLD ||
           std::any_of(velocity.begin(), velocity.end(), [](double v) { return std::abs(v) > kStationary; }))
         throw std::runtime_error("Leg moved during enable; body path was not dispatched");
-      if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.joints.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+      if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.joints.positions.size(), remaining(), action_precision.completion.stable_seconds))
         throw std::runtime_error("Insufficient timeout for trajectory and settling after enable");
       publish(MoveJoints::Feedback::STATUS_EXECUTING,0,"Executing body tilt/vertical trajectory");
       motion_control_pkg::execution::LatestProgressPublisher progress(
@@ -252,8 +254,8 @@ void MiracleLowerBodyModule::execution_loop_body_motion(std::shared_ptr<GoalHand
     const auto settling = Clock::now();
     Guard guard({trajectory.joints.target.begin(), trajectory.joints.target.end()}, settling,
         std::min(started + std::chrono::milliseconds(goal->timeout_ms), settling +
-            std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(precision_policy_.completion_timeout))),
-        false, precision_policy_.completion);
+            std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(action_precision.completion_timeout))),
+        false, action_precision.completion);
     publish(MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION, 95, "Checking measured body pose and held joints");
     while (true) {
       std::this_thread::sleep_for(std::chrono::microseconds(TRAJ_CYCLE_US));

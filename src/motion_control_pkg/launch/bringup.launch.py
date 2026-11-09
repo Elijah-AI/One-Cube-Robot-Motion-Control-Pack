@@ -1,6 +1,8 @@
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -27,6 +29,10 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                'publish_robot_tf', default_value='true', choices=['true', 'false'],
+                description='Publish the measured robot TF tree and joint-name frames',
+            ),
             DeclareLaunchArgument(
                 'planning_worker_count',
                 default_value='2',
@@ -77,7 +83,13 @@ def generate_launch_description():
                         'collision_pointcloud_topic': LaunchConfiguration('collision_pointcloud_topic'),
                     }
                 ],
-            )
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(os.path.join(
+                    motion_control_pkg, 'launch', 'robot_tf.launch.py')),
+                condition=IfCondition(LaunchConfiguration('publish_robot_tf')),
+                launch_arguments={'urdf_path': urdf_file}.items(),
+            ),
             # Node(
             #     package='miracle_driver',
             #     executable='joint_state_merger',

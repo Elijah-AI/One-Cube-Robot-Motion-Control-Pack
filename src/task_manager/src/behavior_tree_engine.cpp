@@ -468,18 +468,20 @@ BTNode::Ptr build_action_node(
     if (!atomic_act->if_recovery_applied.empty()) {
         const auto key = atomic_act->if_recovery_applied;
         const auto descent = atomic_act->move_joints_param.body_height_m;
+        const bool restore = atomic_act->move_joints_param.leg_motion_mode == 2;
         return std::make_shared<ConditionalLegRestoreNode>(node_name + "_RestoreIfLifted", leaf,
-            [&act_client, sequence, key, descent, logger] {
+            [&act_client, sequence, key, descent, restore, logger] {
                 const double pending = act_client.recovery_offset(sequence, key);
                 if (pending == 0) {
-                    LOG_INFO(logger, task_log::Tag::BT, "No body recovery lift; skip descent [" << key << "]");
+                    LOG_INFO(logger, task_log::Tag::BT, "No body recovery lift; skip recovery-only action [" << key << "]");
                     return false;
                 }
-                if (std::abs(pending + descent) > 1e-9)
+                if (restore && std::abs(pending + descent) > 1e-9)
                     throw std::runtime_error("Recovery descent does not match the confirmed lift");
                 return true;
             },
-            [&act_client, sequence, key, logger] {
+            [&act_client, sequence, key, restore, logger] {
+                if (!restore) return;  // The following descent still owns the confirmed lift.
                 act_client.clear_recovery_offset(sequence, key);
                 LOG_INFO(logger, task_log::Tag::BT, "Confirmed recovery descent [" << key << "]");
             });

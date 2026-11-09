@@ -18,52 +18,43 @@
 # 本次在现值上继续沿视觉局部-Y调整：第3槽0.008 m、第5槽0.015 m；侧移与上提同步调整。
 # 最终translation.y = 槽位Y - 0.010 + 各槽追加补偿 + 2026-09-30新增偏移；勿重复补偿。
 # 各轮放置Y（左/右）：第1轮0.034/0.013，第2轮0.072/0.0793，第3轮0.140/0.123；同槽接近、下降复用放置锚点。
-# 放置松爪到200后，固定腰部单臂MoveP沿视觉-Y偏移0.030 m（第3槽0.050 m）；随后保持偏移后的Y，MoveL上提到视觉Z+0.20 m。
-# 松爪后MoveP与上提复用clear_y锚点；第3槽clear_y=place_y-0.050，其余槽clear_y=place_y-0.030。
+# 放置松爪到200后，固定腰部单臂MoveP沿视觉-Y偏移0.030 m（第3槽0.040 m）；随后保持偏移后的Y，MoveL上提到视觉Z+0.20 m。
+# 松爪后MoveP与上提复用clear_y锚点；第3槽clear_y=place_y-0.040，其余槽clear_y=place_y-0.030。
 # 详细参数与限制见 doc/LAPTOP_ASSEMBLY_TASK.md。
 action_sequencenum: 1
 action_sequence1:
-  # init. 任务开始先恢复四个腰腿关节的默认绝对位置；仅执行一次。
-  - action_type: move_joints
-    params:
-      arm_id: 4
-      control_mode: 0
-      joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint]
-      position: [-1.0, 2.2, -1.2258046865463257, 0.0]
-      relative_position: false
-      enable_collision_check: 1
-      speed: 0.10
-      timeout_ms: 60000
-
-  # 0. 并行回零：腰部回绝对零位，双臂 MoveJ 到各关节零位；两项完成后进入动作1。
+  # init / 0. 腰腿恢复原默认姿态与双臂到起始姿态并行；全部完成后检测 tray。
   - parallel_actions:
-      # 腰部回零，三个腿部关节保持当前反馈位置。
+      # 原有腰腿初始化合入此处，腰部回零仅执行一次。
       - action_type: move_joints
         params:
           arm_id: 4
-          joint_name: [body_joint]
-          position: [0.0]
+          control_mode: 0
+          joint_name: [leg_joint1, leg_joint2, leg_joint3, body_joint]
+          position: [-1.0, 2.2, -1.2258046865463257, 0.0]
           relative_position: false
           enable_collision_check: 1
-          speed: 0.15
+          speed: 0.9
           timeout_ms: 60000
 
-      # 双臂各7个关节回绝对零位。
+      # 用户给定左臂角度转为弧度；右臂按 [-,+,-,+,-,+,-] 镜像。
+      # 左臂 degree: [-52.781, -29.050, 76.789, -74.404, 142.166, -1.357, 3.654]
+      # 右臂 degree: [52.781, -29.050, -76.789, -74.404, -142.166, -1.357, -3.654]
       - action_type: move_joints
         params:
           arm_id: 2
           left_joint_name: [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L]
           right_joint_name: [Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R]
-          left_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-          right_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+          left_position: [-0.921202232495127, -0.5070181477043527, 1.3402208793139256, -1.2985947766538608, 2.4812647843902584, -0.02368411794956305, 0.0637743308678728]
+          right_position: [0.921202232495127, -0.5070181477043527, -1.3402208793139256, -1.2985947766538608, -2.4812647843902584, -0.02368411794956305, -0.0637743308678728]
           synchronization_mode: 0
           enable_collision_check: 1
-          speed: 0.15
+          speed: 0.8
           timeout_ms: 60000
 
   # 1. 初始面向放置处，检测并保存 tray 右下角；后续 rack 检测不会覆盖它。
   - action_type: vision_detect
-    delay_ms: 1000  # 视觉识别前等待1秒
+    delay_ms: 50  # 视觉识别前等待0.8秒
     params:
       target_obj_name: tray
       result_key: tray
@@ -73,21 +64,34 @@ action_sequence1:
       require_single_target: true
       require_expected_frame: true
 
-  # 2. J4 相对当前反馈转动 -pi/2；当前 URDF 腰轴朝下，对应俯视逆时针。
-  # task_manager 读取新鲜、静止的腰腿反馈，补全三个腿部保持目标。
-  - action_type: move_joints
-    params:
-      arm_id: 4
-      joint_name: [body_joint]
-      position: [-1.5707963267948966]
-      relative_position: true
-      enable_collision_check: 1
-      speed: 0.15
-      timeout_ms: 60000
+  # 2、5. 转向抓取侧与双爪预置并行；全部完成后检测 rack。
+  - parallel_actions:
+      # 2. J4 相对当前反馈转动 -pi/2；当前 URDF 腰轴朝下，对应俯视逆时针。
+      # task_manager 读取新鲜、静止的腰腿反馈，补全三个腿部保持目标。
+      - action_type: move_joints
+        params:
+          arm_id: 4
+          joint_name: [body_joint]
+          position: [-1.5707963267948966]
+          relative_position: true
+          enable_collision_check: 1
+          speed: 0.9
+          timeout_ms: 60000
+
+      # 5. 双爪张开至 140，数组顺序 [左,右]。
+      - action_type: gripper_ctrl
+        params:
+          gripper_id: 2
+          comport: [2, 2]
+          position: [140, 140]
+          speed: [255, 255]
+          max_torque: [60, 60]
+          block: true
+          timeout_ms: 10000
 
   # 3. 面向抓取处，检测并保存 rack 上表面中心。
   - action_type: vision_detect
-    delay_ms: 1000  # 视觉识别前等待1秒
+    delay_ms: 50  # 视觉识别前等待2.5秒
     params:
       target_obj_name: rack
       result_key: rack
@@ -100,32 +104,19 @@ action_sequence1:
       require_single_target: true
       require_expected_frame: true
 
-  # 4、5 并行：双臂到准备姿态，同时双爪张开；两项均完成后进入动作 6。
-  - parallel_actions:
-      # 4. 双臂同步进入预抓准备关节姿态：右臂采用用户给定角度，左臂按URDF镜像。
-      # 镜像符号（Joint1..7）：[-1, +1, -1, +1, -1, +1, -1]。
-      - action_type: move_joints
-        params:
-          arm_id: 2
-          left_joint_name: &left_joints [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L]
-          right_joint_name: &right_joints [Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R]
-          left_position: &left_ready [-0.8782693150902637, -0.8160107340747184, 1.0150617189548297, -1.2830104788690264, 1.9445632626203564, -0.10502339709582084, 1.1592665656604402]
-          right_position: &right_ready [0.8782693150902637, -0.8160107340747184, -1.0150617189548297, -1.2830104788690264, -1.9445632626203564, -0.10502339709582084, -1.1592665656604402]
-          synchronization_mode: 0
-          enable_collision_check: 1
-          speed: 0.2
-          timeout_ms: 45000
-
-      # 5. 双爪张开至 140，数组顺序 [左,右]。
-      - action_type: gripper_ctrl
-        params:
-          gripper_id: 2
-          comport: [2, 2]
-          position: [140, 140]
-          speed: [255, 255]
-          max_torque: [60, 60]
-          block: true
-          timeout_ms: 10000
+  # 4. 双臂同步进入预抓准备关节姿态：右臂采用用户给定角度，左臂按URDF镜像。
+  # 镜像符号（Joint1..7）：[-1, +1, -1, +1, -1, +1, -1]。
+  - action_type: move_joints
+    params:
+      arm_id: 2
+      left_joint_name: &left_joints [Joint1_L, Joint2_L, Joint3_L, Joint4_L, Joint5_L, Joint6_L, Joint7_L]
+      right_joint_name: &right_joints [Joint1_R, Joint2_R, Joint3_R, Joint4_R, Joint5_R, Joint6_R, Joint7_R]
+      left_position: &left_ready [-0.8782693150902637, -0.8160107340747184, 1.0150617189548297, -1.2830104788690264, 1.9445632626203564, -0.10502339709582084, 1.1592665656604402]
+      right_position: &right_ready [0.8782693150902637, -0.8160107340747184, -1.0150617189548297, -1.2830104788690264, -1.9445632626203564, -0.10502339709582084, -1.1592665656604402]
+      synchronization_mode: 0
+      enable_collision_check: 1
+      speed: 0.8
+      timeout_ms: 45000
 
   # 6. 双臂 + 腰部 J4 WBC MoveP 到各自抓取点上表面上方 2 cm，三个腿部保持起始角度。
   - action_type: move_pose
@@ -155,10 +146,10 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.2
+      speed: 0.8
       timeout_ms: 60000
 
-  # 7. 腰部固定，双臂同步直线下降至上表面以下 17 cm（视觉局部 z=-0.17）。
+  # 7. 双臂同步抓取下降：左臂Z=-0.17 m，右臂Z=-0.18 m。
   - action_type: move_pose
     params:
       arm_id: 2
@@ -171,17 +162,17 @@ action_sequence1:
       right_bound_size: *zero_offset
       left_vision_pose_offset:
         translation_frame: vision
-        translation: [0, *left_pick_y, -0.17]
+        translation: [0, *left_pick_y, -0.1585]
         rotation: *left_pick_rotation
       right_vision_pose_offset:
         translation_frame: vision
-        translation: [0, *right_pick_y, -0.17]
+        translation: [0, *right_pick_y, -0.18]
         rotation: *right_pick_rotation
       synchronization_mode: 0
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.4
       timeout_ms: 60000
 
   # 8. 双爪夹紧并等待完成。
@@ -191,7 +182,7 @@ action_sequence1:
       comport: [2, 2]
       position: [255, 255]
       speed: [255, 255]
-      max_torque: [120, 120]
+      max_torque: [110, 120]
       block: true
       timeout_ms: 10000
 
@@ -225,18 +216,19 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.6
       timeout_ms: 60000
 
-  # 9a. 右臂放置前，腰部先到绝对-0.3 rad；三个腿关节保持当前反馈，双臂随腰转动。
+  # 9a. 仅 IK 恢复分支先转至绝对-0.3 rad，正常分支与后续腿部前伸合并；三个腿关节保持当前反馈，双臂随腰转动。
   - action_type: move_joints
+    if_recovery_applied: post_grasp_round_1
     params:
       arm_id: 4
       joint_name: [body_joint]
       position: [-0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.15
+      speed: 0.9
       timeout_ms: 60000
 
   # IK 恢复升腿后，转身完成才回降 5 cm；正常分支跳过。
@@ -247,24 +239,24 @@ action_sequence1:
       leg_motion_mode: vertical_relative
       body_height_m: -0.05
       enable_collision_check: 1
-      speed: 0.10
+      speed: 0.8
       timeout_ms: 30000
 
-  # 9b. 放置前调整leg1/leg2；leg3补偿保持body_link姿态，J4保持当前-0.3 rad。
+  # 9b. 腰转至-0.3 rad与腿部前伸共用同一轨迹；leg3补偿保持腿部俯仰姿态。
   - action_type: move_joints
     params:
       arm_id: 4
       control_mode: 0
-      joint_name: [leg_joint1, leg_joint2]
-      position: [-0.65, 2.0]
+      joint_name: [leg_joint1, leg_joint2, body_joint]
+      position: [-0.65, 2.0, -0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.10
-      timeout_ms: 30000
+      speed: 0.9
+      timeout_ms: 60000
 
   # 10. 腰部固定，仅右臂 MoveP 到 tray 第1槽上方，目标保持该臂当前TCP基座高度，腿部和腰部不参与规划。
   - action_type: move_pose
-    delay_ms: 200  # 右臂MoveP规划前等待0.2秒
+    delay_ms: 50  # 右臂MoveP规划前等待0.2秒
     params:
       arm_id: 1
       vision_result_key: tray
@@ -275,18 +267,18 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &right_place_y 0.013, current_tcp_height]
+        translation: [0.205, &right_place_y 0.01, current_tcp_height]
         minimum_z: 0.10  # 当前高度须高于放置终点，随后沿视觉Z下降
-        rotation: &right_place_rotation [0.7071067811865476, -0.7071067811865476, 0, 0]  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
+        rotation: &right_place_rotation_slot1 [0.7027741455, -0.7114130308, 0, 0]  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.15
+      speed: 0.8
       timeout_ms: 60000
 
   # 11. 腰部固定，右臂 MoveL 直线下降到 tray 第1槽上方 10 cm，腿部和腰部保持当前角度。
   - action_type: move_pose
-    delay_ms: 200  # 直线下降规划前等待0.2秒
+    delay_ms: 50  # 直线下降规划前等待0.2秒
     params:
       arm_id: 1
       vision_result_key: tray
@@ -297,20 +289,20 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, *right_place_y, 0.10]
-        rotation: *right_place_rotation
+        translation: [0.205, *right_place_y, 0.058]
+        rotation: *right_place_rotation_slot1
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.15
+      speed: 0.4
       timeout_ms: 60000
 
-  # 12. 右爪松开至 200。
+  # 12. 右爪松开至 150。
   - action_type: gripper_ctrl
     params:
       gripper_id: 1
       comport: [2, 2]
-      position: [0, 200]
+      position: [0, 150]
       speed: [255, 255]
       max_torque: [0, 60]
       block: true
@@ -328,12 +320,12 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &right_place_clear_y -0.017, 0.10]  # right_place_y - 0.030 m
-        rotation: *right_place_rotation
+        translation: [0.205, &right_place_clear_y -0.022, 0.08]  # right_place_y - 0.030 m
+        rotation: *right_place_rotation_slot1
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 13. 腰部固定，右臂保持松爪后偏移的Y，MoveL沿视觉+Z退出到上方20 cm。
@@ -349,11 +341,11 @@ action_sequence1:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
         translation: [0.205, *right_place_clear_y, 0.20]
-        rotation: *right_place_rotation
+        rotation: *right_place_rotation_slot1
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
 
@@ -365,12 +357,12 @@ action_sequence1:
       position: [0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.15
+      speed: 0.9
       timeout_ms: 60000
 
   # 14. 腰部固定，仅左臂 MoveP 到 tray 第2槽上方，目标保持该臂当前TCP基座高度，腿部和腰部不参与规划。
   - action_type: move_pose
-    delay_ms: 200  # 左臂MoveP规划前等待0.2秒
+    delay_ms: 50  # 左臂MoveP规划前等待0.2秒
     params:
       arm_id: 0
       vision_result_key: tray
@@ -381,18 +373,18 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &left_place_y 0.034, current_tcp_height]
+        translation: [0.205, &left_place_y 0.029, current_tcp_height]
         minimum_z: 0.10  # 当前高度须高于放置终点，随后沿视觉Z下降
         rotation: &left_place_rotation [0.7071067811865476, 0.7071067811865476, 0, 0]  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.15
+      speed: 0.8
       timeout_ms: 60000
 
   # 15. 腰部固定，左臂 MoveL 直线下降到 tray 第2槽上方 10 cm，腿部和腰部保持当前角度。
   - action_type: move_pose
-    delay_ms: 200  # 直线下降规划前等待0.2秒
+    delay_ms: 50  # 直线下降规划前等待0.2秒
     params:
       arm_id: 0
       vision_result_key: tray
@@ -403,20 +395,20 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, *left_place_y, 0.10]
+        translation: [0.205, *left_place_y, 0.06]
         rotation: *left_place_rotation
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.15
+      speed: 0.4
       timeout_ms: 60000
 
-  # 16. 左爪松开至 200。
+  # 16. 左爪松开至 150。
   - action_type: gripper_ctrl
     params:
       gripper_id: 0
       comport: [2, 2]
-      position: [200, 0]
+      position: [140, 0]
       speed: [255, 255]
       max_torque: [60, 0]
       block: true
@@ -434,12 +426,12 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &left_place_clear_y 0.004, 0.10]  # left_place_y - 0.030 m
+        translation: [0.205, &left_place_clear_y -0.008, 0.08]  # left_place_y - 0.037 m
         rotation: *left_place_rotation
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 17. 腰部固定，左臂保持松爪后偏移的Y，MoveL沿视觉+Z退出到上方20 cm。
@@ -459,33 +451,13 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
-  # 17a. 本轮双臂放置并退出后恢复默认腿姿态；leg3补偿回约-1.2258046865463257，J4保持当前角度。
-  - action_type: move_joints
-    params:
-      arm_id: 4
-      control_mode: 0
-      joint_name: [leg_joint1, leg_joint2]
-      position: [-1.0, 2.2]
-      relative_position: false
-      enable_collision_check: 1
-      speed: 0.10
-      timeout_ms: 30000
-
   # 第2轮：左抓6→tray第4槽；右抓11→tray第3槽，仍先放右臂；复用首轮rack/tray缓存。
-  # 18. 双臂回预抓取关节位，同时J4回绝对-90度；三个腿部保持当前反馈。
+  # 18、17a、夹爪预置：双臂、腰腿、夹爪三项并行；全部完成后再接近抓取点。
   - parallel_actions:
-      - action_type: move_joints
-        params:
-          arm_id: 4
-          joint_name: [body_joint]
-          position: [-1.5707963267948966]
-          relative_position: false
-          enable_collision_check: 1
-          speed: 0.15
-          timeout_ms: 60000
+      # 18. 双臂回原预抓取关节位，与腰腿协调后退转身、双爪预置并行。
       - action_type: move_joints
         params:
           arm_id: 2
@@ -495,19 +467,31 @@ action_sequence1:
           right_position: *right_ready
           synchronization_mode: 0
           enable_collision_check: 1
-          speed: 0.2
+          speed: 0.9
           timeout_ms: 45000
 
-  # 19. 双爪张开至140，为下一对槽位抓取做准备。
-  - action_type: gripper_ctrl
-    params:
-      gripper_id: 2
-      comport: [2, 2]
-      position: [140, 140]
-      speed: [255, 255]
-      max_torque: [60, 60]
-      block: true
-      timeout_ms: 10000
+      # 17a. 本轮双臂放置并退出后恢复默认腿姿态；leg3补偿回约-1.2258046865463257，J4同步转至绝对-90度；共用同一轨迹。
+      - action_type: move_joints
+        params:
+          arm_id: 4
+          control_mode: 0
+          joint_name: [leg_joint1, leg_joint2, body_joint]
+          position: [-1.0, 2.2, -1.5707963267948966]
+          relative_position: false
+          enable_collision_check: 1
+          speed: 0.9
+          timeout_ms: 60000
+
+      # 19. 双爪张开至140，为下一对槽位抓取做准备。
+      - action_type: gripper_ctrl
+        params:
+          gripper_id: 2
+          comport: [2, 2]
+          position: [140, 140]
+          speed: [255, 255]
+          max_torque: [60, 60]
+          block: true
+          timeout_ms: 10000
 
   # 20. 双臂 + 腰部 J4 WBC MoveP 到各自抓取点上表面上方 2 cm，三个腿部保持起始角度。
   - action_type: move_pose
@@ -537,7 +521,7 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.2
+      speed: 0.9
       timeout_ms: 60000
 
   # 21. 腰部固定，双臂同步直线下降至上表面以下 17 cm（视觉局部 z=-0.17）。
@@ -557,13 +541,13 @@ action_sequence1:
         rotation: *left_pick_rotation
       right_vision_pose_offset:
         translation_frame: vision
-        translation: [0, *right_pick_y_round2, -0.17]
+        translation: [0, *right_pick_y_round2, -0.175]
         rotation: *right_pick_rotation
       synchronization_mode: 0
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.4
       timeout_ms: 60000
 
   # 22. 双爪夹紧并等待完成。
@@ -607,18 +591,19 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.6
       timeout_ms: 60000
 
-  # 24. 右臂放置前，腰部先到绝对-0.3 rad；三个腿关节保持当前反馈，双臂随腰转动。
+  # 24. 仅 IK 恢复分支先转至绝对-0.3 rad，正常分支与后续腿部前伸合并；三个腿关节保持当前反馈，双臂随腰转动。
   - action_type: move_joints
+    if_recovery_applied: post_grasp_round_2
     params:
       arm_id: 4
       joint_name: [body_joint]
       position: [-0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.15
+      speed: 0.9
       timeout_ms: 60000
 
   # IK 恢复升腿后，转身完成才回降 5 cm；正常分支跳过。
@@ -629,24 +614,24 @@ action_sequence1:
       leg_motion_mode: vertical_relative
       body_height_m: -0.05
       enable_collision_check: 1
-      speed: 0.10
+      speed: 0.8
       timeout_ms: 30000
 
-  # 24a. 放置前调整leg1/leg2；leg3补偿保持body_link姿态，J4保持当前-0.3 rad。
+  # 24a. 腰转至-0.3 rad与腿部前伸共用同一轨迹；leg3补偿保持腿部俯仰姿态。
   - action_type: move_joints
     params:
       arm_id: 4
       control_mode: 0
-      joint_name: [leg_joint1, leg_joint2]
-      position: [-0.65, 2.0]
+      joint_name: [leg_joint1, leg_joint2, body_joint]
+      position: [-0.65, 2.0, -0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.10
-      timeout_ms: 30000
+      speed: 0.9
+      timeout_ms: 60000
 
   # 25. 腰部固定，仅右臂 MoveP 到 tray 第3槽上方，目标保持该臂当前TCP基座高度，腿部和腰部不参与规划。
   - action_type: move_pose
-    delay_ms: 200  # 右臂MoveP规划前等待0.2秒
+    delay_ms: 50  # 右臂MoveP规划前等待0.2秒
     params:
       arm_id: 1
       vision_result_key: tray
@@ -657,18 +642,18 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &right_place_y_round2 0.0793, current_tcp_height]
+        translation: [0.205, &right_place_y_round2 0.0658, current_tcp_height]
         minimum_z: 0.10  # 当前高度须高于放置终点，随后沿视觉Z下降
-        rotation: *right_place_rotation  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
+        rotation: &right_place_rotation_slot3 [0.6990395791, -0.7150829790, 0, 0]  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.15
+      speed: 0.8
       timeout_ms: 60000
 
   # 26. 腰部固定，右臂 MoveL 直线下降到 tray 第3槽上方 10 cm，腿部和腰部保持当前角度。
   - action_type: move_pose
-    delay_ms: 200  # 直线下降规划前等待0.2秒
+    delay_ms: 50  # 直线下降规划前等待0.2秒
     params:
       arm_id: 1
       vision_result_key: tray
@@ -679,26 +664,26 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, *right_place_y_round2, 0.10]
-        rotation: *right_place_rotation
+        translation: [0.205, *right_place_y_round2, 0.06]
+        rotation: *right_place_rotation_slot3
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.15
+      speed: 0.4
       timeout_ms: 60000
 
-  # 27. 右爪松开至 200。
+  # 27. 右爪松开至 150。
   - action_type: gripper_ctrl
     params:
       gripper_id: 1
       comport: [2, 2]
-      position: [0, 200]
+      position: [0, 160]
       speed: [255, 255]
       max_torque: [0, 60]
       block: true
       timeout_ms: 10000
 
-  # 27a. 第3槽松爪完成后，腰部固定，右臂 MoveP 沿 tray 视觉局部-Y移动5 cm（在原3 cm上追加2 cm），局部X/Z及姿态保持不变。
+  # 27a. 第3槽松爪完成后，腰部固定，右臂 MoveP 沿 tray 视觉局部-Y移动4 cm（在原3 cm上追加1 cm），局部X/Z及姿态保持不变。
   - action_type: move_pose
     params:
       arm_id: 1
@@ -710,12 +695,12 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &right_place_clear_y_round2 0.0293, 0.10]  # right_place_y_round2 - 0.050 m（额外-Y 0.020 m）
-        rotation: *right_place_rotation
+        translation: [0.205, &right_place_clear_y_round2 0.0288, 0.08]  # right_place_y_round2 - 0.040 m
+        rotation: *right_place_rotation_slot3
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 28. 腰部固定，右臂保持松爪后偏移的Y，MoveL沿视觉+Z退出到上方20 cm。
@@ -731,11 +716,11 @@ action_sequence1:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
         translation: [0.205, *right_place_clear_y_round2, 0.20]
-        rotation: *right_place_rotation
+        rotation: *right_place_rotation_slot3
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
 
@@ -747,12 +732,12 @@ action_sequence1:
       position: [0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.15
+      speed: 0.9
       timeout_ms: 60000
 
   # 29. 腰部固定，仅左臂 MoveP 到 tray 第4槽上方，目标保持该臂当前TCP基座高度，腿部和腰部不参与规划。
   - action_type: move_pose
-    delay_ms: 200  # 左臂MoveP规划前等待0.2秒
+    delay_ms: 50  # 左臂MoveP规划前等待0.2秒
     params:
       arm_id: 0
       vision_result_key: tray
@@ -763,18 +748,18 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &left_place_y_round2 0.072, current_tcp_height]
+        translation: [0.205, &left_place_y_round2 0.081, current_tcp_height]
         minimum_z: 0.10  # 当前高度须高于放置终点，随后沿视觉Z下降
         rotation: *left_place_rotation  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.15
+      speed: 0.8
       timeout_ms: 60000
 
-  # 30. 腰部固定，左臂 MoveL 直线下降到 tray 第4槽上方 10 cm，腿部和腰部保持当前角度。
+  # 30. 腰部固定，左臂 MoveL 直线下降到 tray 第4槽视觉局部Z=0.097 m，腿部和腰部保持当前角度。
   - action_type: move_pose
-    delay_ms: 200  # 直线下降规划前等待0.2秒
+    delay_ms: 50  # 直线下降规划前等待0.2秒
     params:
       arm_id: 0
       vision_result_key: tray
@@ -785,20 +770,20 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, *left_place_y_round2, 0.10]
+        translation: [0.205, *left_place_y_round2, 0.057]
         rotation: *left_place_rotation
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.15
+      speed: 0.4
       timeout_ms: 60000
 
-  # 31. 左爪松开至 200。
+  # 31. 左爪松开至 150。
   - action_type: gripper_ctrl
     params:
       gripper_id: 0
       comport: [2, 2]
-      position: [200, 0]
+      position: [150, 0]
       speed: [255, 255]
       max_torque: [60, 0]
       block: true
@@ -816,12 +801,12 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &left_place_clear_y_round2 0.042, 0.10]  # left_place_y_round2 - 0.030 m
+        translation: [0.205, &left_place_clear_y_round2 0.051, 0.08]  # left_place_y_round2 - 0.030 m
         rotation: *left_place_rotation
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 32. 腰部固定，左臂保持松爪后偏移的Y，MoveL沿视觉+Z退出到上方20 cm。
@@ -841,33 +826,13 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
-  # 32a. 本轮双臂放置并退出后恢复默认腿姿态；leg3补偿回约-1.2258046865463257，J4保持当前角度。
-  - action_type: move_joints
-    params:
-      arm_id: 4
-      control_mode: 0
-      joint_name: [leg_joint1, leg_joint2]
-      position: [-1.0, 2.2]
-      relative_position: false
-      enable_collision_check: 1
-      speed: 0.10
-      timeout_ms: 30000
-
   # 第3轮：左抓4→tray第6槽；右抓9→tray第5槽，先放右臂、后放左臂；复用首轮rack/tray缓存。
-  # 33. 双臂回预抓取关节位，同时J4回绝对-90度；三个腿部保持当前反馈。
+  # 33、32a、夹爪预置：双臂、腰腿、夹爪三项并行；全部完成后再接近抓取点。
   - parallel_actions:
-      - action_type: move_joints
-        params:
-          arm_id: 4
-          joint_name: [body_joint]
-          position: [-1.5707963267948966]
-          relative_position: false
-          enable_collision_check: 1
-          speed: 0.15
-          timeout_ms: 60000
+      # 33. 双臂回原预抓取关节位，与腰腿协调后退转身、双爪预置并行。
       - action_type: move_joints
         params:
           arm_id: 2
@@ -877,19 +842,31 @@ action_sequence1:
           right_position: *right_ready
           synchronization_mode: 0
           enable_collision_check: 1
-          speed: 0.2
+          speed: 0.9
           timeout_ms: 45000
 
-  # 34. 双爪张开至140，为下一对槽位抓取做准备。
-  - action_type: gripper_ctrl
-    params:
-      gripper_id: 2
-      comport: [2, 2]
-      position: [140, 140]
-      speed: [255, 255]
-      max_torque: [60, 60]
-      block: true
-      timeout_ms: 10000
+      # 32a. 本轮双臂放置并退出后恢复默认腿姿态；leg3补偿回约-1.2258046865463257，J4同步转至绝对-90度；共用同一轨迹。
+      - action_type: move_joints
+        params:
+          arm_id: 4
+          control_mode: 0
+          joint_name: [leg_joint1, leg_joint2, body_joint]
+          position: [-1.0, 2.2, -1.5707963267948966]
+          relative_position: false
+          enable_collision_check: 1
+          speed: 0.9
+          timeout_ms: 60000
+
+      # 34. 双爪张开至140，为下一对槽位抓取做准备。
+      - action_type: gripper_ctrl
+        params:
+          gripper_id: 2
+          comport: [2, 2]
+          position: [140, 140]
+          speed: [255, 255]
+          max_torque: [60, 60]
+          block: true
+          timeout_ms: 10000
 
   # 35. 双臂 + 腰部 J4 WBC MoveP 到各自抓取点上表面上方 2 cm，三个腿部保持起始角度。
   - action_type: move_pose
@@ -919,7 +896,7 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.2
+      speed: 0.8
       timeout_ms: 60000
 
   # 36. 腰部固定，双臂同步直线下降至上表面以下 17 cm（视觉局部 z=-0.17）。
@@ -935,17 +912,17 @@ action_sequence1:
       right_bound_size: *zero_offset
       left_vision_pose_offset:
         translation_frame: vision
-        translation: [0, *left_pick_y_round3, -0.17]
+        translation: [0, *left_pick_y_round3, -0.18]
         rotation: *left_pick_rotation
       right_vision_pose_offset:
         translation_frame: vision
-        translation: [0, *right_pick_y_round3, -0.17]
+        translation: [0, *right_pick_y_round3, -0.18]
         rotation: *right_pick_rotation
       synchronization_mode: 0
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.4
       timeout_ms: 60000
 
   # 37. 双爪夹紧并等待完成。
@@ -989,18 +966,19 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.6
       timeout_ms: 60000
 
-  # 39. 右臂放置前，腰部先到绝对-0.3 rad；三个腿关节保持当前反馈，双臂随腰转动。
+  # 39. 仅 IK 恢复分支先转至绝对-0.3 rad，正常分支与后续腿部前伸合并；三个腿关节保持当前反馈，双臂随腰转动。
   - action_type: move_joints
+    if_recovery_applied: post_grasp_round_3
     params:
       arm_id: 4
       joint_name: [body_joint]
       position: [-0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.15
+      speed: 0.9
       timeout_ms: 60000
 
   # IK 恢复升腿后，转身完成才回降 5 cm；正常分支跳过。
@@ -1011,24 +989,24 @@ action_sequence1:
       leg_motion_mode: vertical_relative
       body_height_m: -0.05
       enable_collision_check: 1
-      speed: 0.10
+      speed: 0.8
       timeout_ms: 30000
 
-  # 39a. 放置前调整leg1/leg2；leg3补偿保持body_link姿态，J4保持当前-0.3 rad。
+  # 39a. 腰转至-0.3 rad与腿部前伸共用同一轨迹；leg3补偿保持腿部俯仰姿态。
   - action_type: move_joints
     params:
       arm_id: 4
       control_mode: 0
-      joint_name: [leg_joint1, leg_joint2]
-      position: [-0.65, 2.0]
+      joint_name: [leg_joint1, leg_joint2, body_joint]
+      position: [-0.65, 2.0, -0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.10
-      timeout_ms: 30000
+      speed: 0.9
+      timeout_ms: 60000
 
   # 40. 腰部固定，仅右臂 MoveP 到 tray 第5槽上方，目标保持该臂当前TCP基座高度，腿部和腰部不参与规划。
   - action_type: move_pose
-    delay_ms: 200  # 右臂MoveP规划前等待0.2秒
+    delay_ms: 50  # 右臂MoveP规划前等待0.2秒
     params:
       arm_id: 1
       vision_result_key: tray
@@ -1039,18 +1017,18 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &right_place_y_round3 0.123, current_tcp_height]
+        translation: [0.205, &right_place_y_round3 0.121, current_tcp_height]
         minimum_z: 0.10  # 当前高度须高于放置终点，随后沿视觉Z下降
-        rotation: *right_place_rotation  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
+        rotation: &right_place_rotation [0.6984152854, -0.7156927337, 0, 0]  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.15
+      speed: 0.8
       timeout_ms: 60000
 
   # 41. 腰部固定，右臂 MoveL 直线下降到 tray 第5槽上方 10 cm，腿部和腰部保持当前角度。
   - action_type: move_pose
-    delay_ms: 200  # 直线下降规划前等待0.2秒
+    delay_ms: 50  # 直线下降规划前等待0.2秒
     params:
       arm_id: 1
       vision_result_key: tray
@@ -1061,20 +1039,20 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, *right_place_y_round3, 0.10]
+        translation: [0.205, *right_place_y_round3, 0.06]
         rotation: *right_place_rotation
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.15
+      speed: 0.4
       timeout_ms: 60000
 
-  # 42. 右爪松开至 200。
+  # 42. 右爪松开至 150。
   - action_type: gripper_ctrl
     params:
       gripper_id: 1
       comport: [2, 2]
-      position: [0, 200]
+      position: [0, 140]
       speed: [255, 255]
       max_torque: [0, 60]
       block: true
@@ -1092,12 +1070,12 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &right_place_clear_y_round3 0.093, 0.10]  # right_place_y_round3 - 0.030 m
+        translation: [0.205, &right_place_clear_y_round3 0.086, 0.08]  # right_place_y_round3 - 0.030 m
         rotation: *right_place_rotation
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 43. 腰部固定，右臂保持松爪后偏移的Y，MoveL沿视觉+Z退出到上方20 cm。
@@ -1117,7 +1095,7 @@ action_sequence1:
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 43a. 左臂放置前，腰部先到绝对0.3 rad；三个腿关节保持当前反馈，双臂随腰转动。
@@ -1128,12 +1106,12 @@ action_sequence1:
       position: [0.3]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.15
+      speed: 0.9
       timeout_ms: 60000
 
   # 44. 腰部固定，仅左臂 MoveP 到 tray 第6槽上方，目标保持该臂当前TCP基座高度，腿部和腰部不参与规划。
   - action_type: move_pose
-    delay_ms: 200  # 左臂MoveP规划前等待0.2秒
+    delay_ms: 50  # 左臂MoveP规划前等待0.2秒
     params:
       arm_id: 0
       vision_result_key: tray
@@ -1144,18 +1122,18 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &left_place_y_round3 0.140, current_tcp_height]
+        translation: [0.205, &left_place_y_round3 0.139, current_tcp_height]
         minimum_z: 0.10  # 当前高度须高于放置终点，随后沿视觉Z下降
-        rotation: *left_place_rotation  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
+        rotation: &left_place_rotation_slot6 [0.708955557081, 0.705253158862, 0, 0]  # 绕视觉局部 Z 轴旋转180度，仅改变TCP姿态
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.15
+      speed: 0.8
       timeout_ms: 60000
 
   # 45. 腰部固定，左臂 MoveL 直线下降到 tray 第6槽上方 10 cm，腿部和腰部保持当前角度。
   - action_type: move_pose
-    delay_ms: 200  # 直线下降规划前等待0.2秒
+    delay_ms: 50  # 直线下降规划前等待0.2秒
     params:
       arm_id: 0
       vision_result_key: tray
@@ -1166,20 +1144,20 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, *left_place_y_round3, 0.10]
-        rotation: *left_place_rotation
+        translation: [0.205, *left_place_y_round3, 0.06]
+        rotation: *left_place_rotation_slot6
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.15
+      speed: 0.4
       timeout_ms: 60000
 
-  # 46. 左爪松开至 200。
+  # 46. 左爪松开至 150。
   - action_type: gripper_ctrl
     params:
       gripper_id: 0
       comport: [2, 2]
-      position: [200, 0]
+      position: [150, 0]
       speed: [255, 255]
       max_torque: [60, 0]
       block: true
@@ -1197,12 +1175,12 @@ action_sequence1:
       vision_pose_offset:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
-        translation: [0.205, &left_place_clear_y_round3 0.110, 0.10]  # left_place_y_round3 - 0.030 m
-        rotation: *left_place_rotation
+        translation: [0.205, &left_place_clear_y_round3 0.104, 0.08]  # left_place_y_round3 - 0.035 m
+        rotation: *left_place_rotation_slot6
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: false
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 47. 腰部固定，左臂保持松爪后偏移的Y，MoveL沿视觉+Z退出到上方20 cm。
@@ -1218,11 +1196,11 @@ action_sequence1:
         translation_frame: vision
         force_vertical_down: true  # TCP Z强制对齐base_link -Z，保留水平开合朝向
         translation: [0.205, *left_place_clear_y_round3, 0.20]
-        rotation: *left_place_rotation
+        rotation: *left_place_rotation_slot6
       enable_collision_check: 1
       use_force_control: false
       enable_move_line: true
-      speed: 0.1
+      speed: 0.8
       timeout_ms: 45000
 
   # 47a. 本轮双臂放置并退出后恢复默认腿姿态；leg3补偿回约-1.2258046865463257，J4保持当前角度。
@@ -1234,5 +1212,5 @@ action_sequence1:
       position: [-1.0, 2.2]
       relative_position: false
       enable_collision_check: 1
-      speed: 0.10
+      speed: 0.8
       timeout_ms: 30000

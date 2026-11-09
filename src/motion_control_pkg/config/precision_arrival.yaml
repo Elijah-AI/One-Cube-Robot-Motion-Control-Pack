@@ -1,4 +1,5 @@
-# Optional startup overlay; defaults already match the compiled policy.
+# Optional startup overlay for Goals with precision_arrival: true (default false).
+# This file configures precision values; it does not enable precision for Actions.
 # Read-only parameters: changes require restarting the control node.
 /**:
   ros__parameters:

@@ -127,10 +127,12 @@ LegOrientationTrajectory LegBodyOrientationPlanner::plan(const LegJoints& start,
   double pitch_change = 0;
   for (std::size_t i = 0; i < selection.commanded.size(); ++i) {
     const auto joint = selection.commanded[i];
-    output.target[joint] = targets[i];
-    pitch_change += signs[joint] * (targets[i] - start[joint]);
+    const double target = targets[selection.target_indices[i]];
+    output.target[joint] = target;
+    pitch_change += signs[joint] * (target - start[joint]);
   }
   output.target[selection.compensated] -= pitch_change / signs[selection.compensated];
+  if (selection.waist_commanded) output.target[3] = selection.waist_target;
   validatePosition(output.target);  // Never clamp a compensation that violates limits.
 
   LegJoints delta{};
@@ -179,7 +181,12 @@ LegOrientationTrajectory LegBodyOrientationPlanner::plan(const LegJoints& start,
       velocity[j] = delta[j] * v[0];
       acceleration[j] = delta[j] * a[0];
     }
-    const double deviation = orientationError(sample, output.reference_orientation);
+    // Remove only the explicitly commanded waist turn from this check. The
+    // actual four-axis sample (including waist) is still limit/collision checked.
+    validatePosition(sample);
+    auto compensated_sample = sample;
+    if (selection.waist_commanded) compensated_sample[3] = start[3];
+    const double deviation = orientationError(compensated_sample, output.reference_orientation);
     require(std::isfinite(deviation) && deviation <= kOrientationTolerance,
         "URDF FK rejected body orientation along the compensated trajectory");
     output.max_orientation_error = std::max(output.max_orientation_error, deviation);

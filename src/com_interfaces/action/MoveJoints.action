@@ -61,6 +61,10 @@ float64 body_tilt_deg
 # RELATIVE: delta Z; ABSOLUTE: body_link origin Z in base_link; metres.
 # Both height modes hold body_link orientation, X/Y and all upper-body joints.
 float64 body_height_m
+# Optional precision arrival for HEAD/LEG only; defaults off.
+# true selects head_precision/leg_precision, including the ordinary MoveJ slow suffix.
+# Body orientation/height modes retain their constrained paths and only change settling.
+bool precision_arrival false
 ---
 bool success
 string error_message

@@ -41,4 +41,17 @@ struct PrecisionPolicy {
       throw std::invalid_argument("invalid EtherCAT precision approach policy");
   }
 };
+
+// Select per Goal; never change the configured chain/startup policy in place.
+// Ordinary completion still requires fresh measured frames and stopped joints.
+inline PrecisionPolicy actionPrecisionPolicy(const PrecisionPolicy& configured,
+    bool precision_arrival) {
+  if (precision_arrival) return configured;
+  PrecisionPolicy selected;
+  selected.completion = JointCompletionOptions{};
+  selected.completion.position_tolerance = 0.02;
+  selected.completion_timeout = configured.completion_timeout;
+  selected.approach_enabled = false;
+  return selected;
+}
 }  // namespace motion_control_pkg::execution

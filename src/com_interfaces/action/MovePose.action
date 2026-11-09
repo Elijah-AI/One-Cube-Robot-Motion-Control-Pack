@@ -62,6 +62,10 @@ int64 timeout_ms                         # 操作超时时间，毫秒
 # true: 仅所选手臂和腰部 J4/body_joint 参与，leg_joint1/2/3 保持起始角度。
 # false（默认）: 保留四个腿/躯干关节参与的原全身模式。
 bool whole_body_waist_only false
+# Optional measured leg/waist precision settling for LEG and WBC MovePose.
+# false: ordinary 0.02 rad / 100 ms settling; true: configured leg_precision.
+# Does not change arm/TCP tolerances, trajectory geometry or tracking protection.
+bool precision_arrival false
 ---
 bool success
 string error_message

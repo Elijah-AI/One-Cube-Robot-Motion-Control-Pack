@@ -75,8 +75,7 @@ struct MovePoseParam
   std::vector<std::vector<double>> via_poses; ///< 连续 MoveP 中间 TCP 位姿 [x,y,z,qx,qy,qz,qw]
   bool enable_move_line;                  ///< 是否启用笛卡尔直线运动
   bool whole_body_waist_only{false};       ///< 全身 MoveP 仅使用腰部 J4 和所选手臂
-  bool keep_tcp_level{false};             ///< 仅 WBC arm_id=5/6/7 可开启腿腰运动中的 TCP 水平补偿
-  double tcp_level_tolerance_rad{0.02};    ///< 水平倾角容差，rad
+  bool precision_arrival{false};          ///< 腿腰/WBC 精定位，按动作显式开启
   float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
   float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1
@@ -157,6 +156,7 @@ struct ControlResetParam
 /// @brief 关节空间移动动作参数
 struct MoveJointsParam
 {
+  bool precision_arrival{false};          ///< 头部/腿腰精定位，默认关闭
   uint8_t leg_motion_mode{0}; ///< 0=关节目标；1=绝对身体倾角；2=相对升降；3=绝对身体高度
   double body_tilt_deg{0};    ///< 身体 +Z 向 base_link +X 的有符号倾角（度）
   double body_height_m{0};    ///< 相对 Z 距离或 body_link 原点的绝对 Z（米）
@@ -176,8 +176,6 @@ struct MoveJointsParam
   /// @}
   uint8_t enable_collision_check{0};            ///< 是否启用碰撞检测
   float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
-  bool keep_tcp_level{false};             ///< MoveJoints 不支持该约束，必须保持 false
-  double tcp_level_tolerance_rad{0.02};
   float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1
   int64_t timeout_ms;                     ///< 操作超时时间 (毫秒)，默认 5000ms

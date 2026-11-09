@@ -35,10 +35,25 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/MoveJoints.action"
   "action/MovePose.action"
   "action/PickAndPlace.action"
+  "action/RecognizePallet.action"
   "action/VisionCheckSelf.action"
   "action/VisionDetection.action"
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_merged_arm_action_contract
+    test/test_dual_arm_action_contract.cpp
+  )
+  rosidl_get_typesupport_target(cpp_typesupport_target
+    ${PROJECT_NAME} rosidl_typesupport_cpp
+  )
+  target_link_libraries(test_merged_arm_action_contract
+    "${cpp_typesupport_target}"
+  )
+endif()
 
 # 导出依赖供其他包调用
 ament_export_dependencies(

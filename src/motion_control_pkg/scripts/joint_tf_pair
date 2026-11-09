@@ -1,0 +1,73 @@
+#!/usr/bin/python3
+"""Read the ROS TF tree and publish one requested transform as a topic."""
+import math
+
+import rclpy
+from geometry_msgs.msg import TransformStamped
+from rcl_interfaces.msg import ParameterDescriptor
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformException, TransformListener
+
+
+class JointTFPair(Node):
+    def __init__(self):
+        super().__init__('joint_tf_pair')
+        fixed = ParameterDescriptor(read_only=True)
+        self.target = self.declare_parameter('target_frame', '', fixed).value
+        self.source = self.declare_parameter('source_frame', '', fixed).value
+        frequency = self.declare_parameter('publish_frequency', 20.0, fixed).value
+        self.max_age = self.declare_parameter('max_age_sec', 0.15, fixed).value
+        for name, value in [('target_frame', self.target), ('source_frame', self.source)]:
+            if not value or value.startswith('/') or any(c.isspace() for c in value):
+                raise ValueError(f'{name} must be a nonempty TF frame ID without a leading slash or spaces')
+        if not math.isfinite(frequency) or not 0 < frequency <= 200:
+            raise ValueError('publish_frequency must be finite and in (0, 200] Hz')
+        if not math.isfinite(self.max_age) or self.max_age <= 0:
+            raise ValueError('max_age_sec must be finite and positive')
+        self.buffer = Buffer(node=self)
+        self.listener = TransformListener(self.buffer, self)
+        self.publisher = self.create_publisher(TransformStamped, '/Control/joint_transform', 10)
+        self.timer = self.create_timer(1.0 / frequency, self.publish_transform)
+        self.get_logger().info(
+            f'Publishing {self.target} <- {self.source} on '
+            f'{self.publisher.topic_name}; dynamic TF max age {self.max_age:.3f} s')
+
+    def publish_transform(self):
+        try:
+            # Zero time asks TF2 for the latest common time along the entire path.
+            transform = self.buffer.lookup_transform(self.target, self.source, Time())
+        except TransformException as error:
+            self.get_logger().warning(f'Waiting for TF: {error}', throttle_duration_sec=5.0)
+            return
+        stamp = Time.from_msg(transform.header.stamp)
+        # An all-static path has stamp=0 and remains valid without JointState.
+        # Never replace an old acquisition timestamp with the current time.
+        if stamp.nanoseconds:
+            age = (self.get_clock().now() - stamp).nanoseconds / 1e9
+            if age < 0 or age > self.max_age:
+                self.get_logger().warning(
+                    f'TF output withheld: age={age:.6f} s, limit={self.max_age:.3f} s',
+                    throttle_duration_sec=5.0)
+                return
+        self.publisher.publish(transform)
+
+
+def main():
+    rclpy.init()
+    node = None
+    try:
+        node = JointTFPair()
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

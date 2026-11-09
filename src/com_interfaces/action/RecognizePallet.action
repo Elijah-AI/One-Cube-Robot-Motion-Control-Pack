@@ -1,0 +1,32 @@
+# --- Goal ---
+std_msgs/Header header                     # 时间戳
+string task_id                             # 唯一任务标识符，用于后续查询或取消
+string expected_frame_id                   # 期望输出坐标系ID: "camera_link"(相机坐标系) / "base_link"(基坐标系)。暂时预留
+int32 priority                             # 任务优先级 (1-25, 25最高)，用于任务队列排序
+
+# 相机ID：0=头部相机，1=腰部相机，2+预留
+uint8 camera_id
+float64 pallet_width #托盘宽度
+float64 pallet_height #托盘高度
+float64 pallet_footprint_width #托盘中间腿宽度
+float64 pallet_footprint_interval #托盘每两腿间距
+
+---
+# --- Result (扩展：支持多目标) ---
+bool success                               # 任务是否成功（true=成功获取数据）
+std_msgs/Header header                     # 视觉图像的时间戳
+uint8 status_code                          # 详细状态码:
+                                           # 0: OK
+                                           # 1: FAILED (硬件故障)
+                                           # 2: TIMEOUT (超时未响应)
+                                           # 3: BUSY (正在执行其他高优先级任务)
+string error_message                       # 详细错误描述 (e.g., "Goal blocked by dynamic obstacle")
+float64 execution_time                     # 总耗时 (秒)
+geometry_msgs/PoseStamped pallet_pose      #托盘中间腿位姿
+
+---
+# --- Feedback ---
+string task_status                         # 任务状态：DETECTING/ESTIMATING_POSE/GENERATING_CLOUD/FINISHED
+float32 progress_rate                      # 任务完成进度（0~100%）
+string current_step_info                   # 当前执行步骤描述（如：正在检测目标物/正在估计6D位姿）
+std_msgs/Header header                     # 时间戳

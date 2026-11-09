@@ -1,6 +1,9 @@
 #include "motion_control_pkg/execution/ethercat_trajectory.hpp"
 #include "motion_control_pkg/execution/whole_body_completion.hpp"
 #include "motion_control_pkg/motion/trajectory_derivative_limits.hpp"
+#include "com_interfaces/action/move_joints.hpp"
+#include "com_interfaces/action/move_pose.hpp"
+#include "com_interfaces/precision_arrival_goal.hpp"
 #include <ruckig/ruckig.hpp>
 #include <iostream>
 #include <stdexcept>
@@ -38,6 +41,92 @@ int main()try{
  PrecisionPolicy policy;policy.validate();
  std::string error;
  auto t=Time{}+std::chrono::seconds(1);
+ require(!com_interfaces::action::MoveJoints::Goal{}.precision_arrival &&
+         !com_interfaces::action::MovePose::Goal{}.precision_arrival,
+         "precision arrival must default OFF in both generated Actions");
+ for (std::uint8_t part=0;part<=8;++part) for (bool pose : {false,true}) {
+   require(com_interfaces::validatePrecisionArrivalGoal(false,part,pose,0,error),
+           "disabled option changed ordinary admission");
+   require(com_interfaces::validatePrecisionArrivalGoal(true,part,pose,0,error)==
+           (pose ? part>=4 && part<=7 : part==3 || part==4),
+           "unsupported precision chain accepted or valid chain rejected");
+   require(!com_interfaces::validatePrecisionArrivalGoal(true,part,pose,1,error),
+           "precision impedance request accepted");
+ }
+ pass("Action defaults OFF; only supported position-mode chains may opt in");
+ const auto ordinary_policy=actionPrecisionPolicy(policy,false);
+ require(!ordinary_policy.approach_enabled && ordinary_policy.completion.position_tolerance==.02 &&
+         ordinary_policy.completion.stable_seconds==.1 && ordinary_policy.completion.stall_seconds==0,
+         "ordinary action retained precision approach or settling criteria");
+ auto custom=policy;custom.completion.position_tolerance=.001;custom.completion.stable_seconds=.3;
+ custom.approach_distance=.005;custom.validate();
+ const auto selected=actionPrecisionPolicy(custom,true);
+ require(selected.completion.position_tolerance==.001 && selected.completion.stable_seconds==.3 &&
+         selected.approach_enabled==custom.approach_enabled,"opt-in lost configured precision");
+ actionPrecisionPolicy(custom,false).validate();
+ require(custom.completion.position_tolerance==.001 && custom.approach_enabled,
+         "per-Goal selection mutated the configured chain policy");
+ pass("per-Goal policy honors custom opt-in and prevents precision leaking to the next ordinary Goal");
+ for (bool enabled : {false,true}) {
+   const auto active=actionPrecisionPolicy(policy,enabled);
+   WholeBodyCompletionGuard whole(std::vector<double>(7,0),{},{0,0,0,0},t,
+       t+std::chrono::seconds(3),active.completion);
+   WholeBodyCompletionFeedback measured;
+   measured.arms.arms[0].current_state=1;measured.arms.arms[0].low_speed=true;
+   measured.leg_positions[3]=.015;
+   Status state{};
+   for(int i=0;i<=30;++i) {
+     measured.arms.arms[0].feedback_sequence=i+1;measured.leg_sequence=i+1;
+     state=whole.update(measured,t+std::chrono::milliseconds(i*10),error);
+   }
+   require(state==(enabled?Status::Waiting:Status::Settled),
+           "WBC per-Action position tolerance was not applied");
+   WholeBodyCompletionGuard task_gate(std::vector<double>(7,0),{},{0,0,0,0},t,
+       t+std::chrono::seconds(3),active.completion);
+   measured.leg_positions[3]=0;
+   for(int i=0;i<=30;++i) {
+     measured.arms.arms[0].feedback_sequence=i+1;measured.leg_sequence=i+1;
+     state=task_gate.update(measured,t+std::chrono::milliseconds(i*10),error,false);
+   }
+   require(state==Status::Waiting,"precision OFF bypassed TCP/task completion checks");
+   WholeBodyCompletionGuard frozen(std::vector<double>(7,0),{},{0,0,0,0},t,
+       t+std::chrono::seconds(3),active.completion);
+   measured.arms.arms[0].feedback_sequence=1;measured.leg_sequence=1;
+   for(int i=0;i<=10;++i) state=frozen.update(measured,t+std::chrono::milliseconds(i*10),error);
+   require(state==Status::Failed,"precision option bypassed advancing-frame checks");
+ }
+ pass("WBC 15 mrad residual passes only ordinary mode; TCP and stale-feedback fences remain active");
+ for (double residual : {.019999,.02,.020001}) {
+   JointCompletionGuard ordinary({0},t,t+std::chrono::seconds(2),false,ordinary_policy.completion);
+   Status state{};
+   for(int i=0;i<=15;++i)
+     state=ordinary.update(i+1,{residual},{0},t+std::chrono::milliseconds(i*10),error);
+   require(state==(residual<=.02?Status::Settled:Status::Waiting),
+           "ordinary 0.02 rad boundary is inconsistent");
+ }
+ pass("ordinary arrival accepts the inclusive 0.02 rad boundary and rejects larger residuals");
+ for (bool enabled : {false,true}) {
+   unsigned planned=0,slow_segments=0;
+   motion::PrecisionApproach path;
+   auto plan=[&](const auto& from,const auto& to,bool slow,auto& q,auto& v,auto& acc,std::string&) {
+     ++planned;slow_segments+=slow;
+     q={from,to};v.assign(2,std::vector<double>(from.size(),0));acc=v;return true;
+   };
+   require(motion::planPrecisionApproach({0},{.2},actionPrecisionPolicy(policy,enabled),
+       plan,path,error),error);
+   require(planned==(enabled?2U:1U) && slow_segments==(enabled?1U:0U) &&
+           (path.gate!=motion::kNoApproachGate)==enabled,
+           "MoveJ OFF still inserted a slow suffix or ON lost it");
+   require(path.positions.front()==std::vector<double>{0} && path.positions.back()==std::vector<double>{.2},
+           "Action option changed the original endpoint");
+   if (enabled) {
+     require(motion::planPrecisionApproach({0},{.2},actionPrecisionPolicy(policy,false),
+         plan,path,error),error);
+     require(path.gate==motion::kNoApproachGate && path.positions.size()==2 && slow_segments==1,
+             "an earlier precision Goal leaked its approach gate into the next ordinary Goal");
+   }
+ }
+ pass("ordinary MoveJ uses a single normal segment; opt-in retains one precision suffix");
  // Legacy arms keep .01 rad / 100 ms. New precision is opt-in to the guard.
  JointCompletionGuard legacy({0},t,t+std::chrono::seconds(2));
  JointCompletionGuard strict({0},t,t+std::chrono::seconds(2),false,policy.completion);
@@ -117,5 +206,14 @@ int main()try{
  auto read=[&](JointCompletionFeedback& f,std::string&){f={residual.actual,residual.velocity,residual.seq,residual.time};return true;};
  require(!waitForJointCompletion(std::vector<double>{0},residual.time+std::chrono::seconds(5),policy,read,[](std::string&){return true;},e,error,Timing{&residual}),"static bias falsely succeeded");
  require(error.find("stalled")!=std::string::npos&&residual.command[0]==0&&sends==0,"static error caused target offset");pass("static residual fails without automatic offset or movement");
+ for (bool enabled : {false,true}) {
+   Sim sample;sample.actual={.005};sample.command={.005};sample.velocity={0};
+   auto read_sample=[&](JointCompletionFeedback& f,std::string&){f={sample.actual,sample.velocity,sample.seq,sample.time};return true;};
+   const bool ok=waitForJointCompletion(std::vector<double>{0},sample.time+std::chrono::seconds(5),
+       actionPrecisionPolicy(policy,enabled),read_sample,[](std::string&){return true;},e,error,Timing{&sample});
+   require(ok==!enabled,"HEAD/LEG per-Goal measured settling selection failed");
+   require(sample.sent==0 && sample.command==std::vector<double>{.005},"settling changed commands");
+ }
+ pass("same HEAD/LEG residual settles with OFF and fails bounded precision ON without offset or replay");
  std::cout<<"PASS precision_arrival scenarios="<<passed<<'\n';return 0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}

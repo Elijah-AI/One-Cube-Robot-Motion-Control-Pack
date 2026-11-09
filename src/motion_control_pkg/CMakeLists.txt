@@ -427,6 +427,7 @@ foreach(error_command arm_error body_error)
     install(PROGRAMS scripts/error_option DESTINATION lib/${PROJECT_NAME} RENAME ${error_command})
 endforeach()
 ament_environment_hooks("${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/error_options_path.dsv")
+install(PROGRAMS scripts/joint_tf_pair DESTINATION lib/${PROJECT_NAME})
 
 # 安装配置文件
 install(DIRECTORY config
@@ -434,6 +435,7 @@ install(DIRECTORY config
 )
 
 install(FILES doc/ORDERLY_SHUTDOWN.txt DESTINATION share/${PROJECT_NAME}/doc)
+install(FILES doc/ROBOT_TF.md DESTINATION share/${PROJECT_NAME}/doc)
 
 install(DIRECTORY launch   
   DESTINATION share/${PROJECT_NAME}
@@ -451,6 +453,14 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    add_test(NAME robot_tf COMMAND /usr/bin/python3
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/robot_tf_test.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(robot_tf PROPERTIES TIMEOUT 60)
+    add_executable(test_waist_leg_trajectory test/waist_leg_trajectory_test.cpp)
+    target_link_libraries(test_waist_leg_trajectory motion_planning_core)
+    add_test(NAME waist_leg_trajectory COMMAND test_waist_leg_trajectory "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+    set_tests_properties(waist_leg_trajectory PROPERTIES TIMEOUT 45)
     add_executable(test_latest_progress test/latest_progress_test.cpp)
     target_include_directories(test_latest_progress PRIVATE include)
     target_link_libraries(test_latest_progress PRIVATE Threads::Threads Eigen3::Eigen)
@@ -526,6 +536,7 @@ if(BUILD_TESTING)
     target_include_directories(test_precision_arrival PRIVATE
         $<TARGET_PROPERTY:motion_control_node,INCLUDE_DIRECTORIES>)
     target_link_libraries(test_precision_arrival dual_arm_sdk_core ruckig::ruckig)
+    ament_target_dependencies(test_precision_arrival com_interfaces)
     add_test(NAME precision_arrival COMMAND test_precision_arrival)
     set_tests_properties(precision_arrival PROPERTIES TIMEOUT 45)
     add_executable(test_drive_control test/drive_control_test.cpp)

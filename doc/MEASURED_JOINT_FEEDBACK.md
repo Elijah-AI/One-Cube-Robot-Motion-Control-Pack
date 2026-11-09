@@ -41,3 +41,9 @@ ros2 launch motion_control_pkg bringup.launch.py
 真实关节采集和 WBC 状态订阅使用独立的互斥回调组；主节点使用两线程 executor。采集路径只访问 SDK/总线，不做 Pinocchio 状态更新或 TCP FK。因此碰撞/IK 规划持有模型锁时，`/wbc/joint_states` 仍可持续发布和接收。原 MotorInfo/FK 等默认回调仍按原互斥组串行执行。
 
 如果出现 `WBC feedback incomplete, stale or time-skewed`，新版结果会同时列出缺失/过期关节、`oldest_age_sec` 和 `skew_sec`。不要通过增大 150 ms 时效限制掩盖采集阻塞。此修复有离线调度回归测试，模拟默认回调被模型锁阻塞 1.5 s，并确认采集失败后过期检查仍然生效。
+
+## 从实测反馈发布 TF
+
+`bringup.launch.py` 默认同时发布标准 `/tf`、`/tf_static`，支持用 joint 名或 link 名查询两坐标系关系。
+单独启动入口为 `ros2 launch motion_control_pkg robot_tf.launch.py`；可选 `joint_tf_pair` 节点将任意一对关系输出为 `TransformStamped`。
+数据范围、时间戳和使用命令见 [实测关节 TF 文档](../src/motion_control_pkg/doc/ROBOT_TF.md)。

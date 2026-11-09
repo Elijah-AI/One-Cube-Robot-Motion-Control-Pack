@@ -11,7 +11,6 @@
 // 以及开机自检/复位任务序列。
 
 #include "task_manager/task_config_parser.hpp"
-#include "com_interfaces/tcp_level_goal.hpp"
 #include "task_manager/log_helper.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
 #include <rclcpp/rclcpp.hpp>
@@ -21,6 +20,22 @@ namespace task_cfg
 
 // 配置解析器统一日志器名称
 static const char* kConfigLogger = "task_config_parser";
+
+// Match the installed motion controller's per-Goal precision contract.
+static bool parse_precision_arrival(const YAML::Node& p, uint8_t arm_id, bool pose_goal)
+{
+  const bool enabled = p["precision_arrival"] ? p["precision_arrival"].as<bool>() : false;
+  if (!enabled) return false;
+  const bool supported = pose_goal ? arm_id >= 4 && arm_id <= 7 : arm_id == 3 || arm_id == 4;
+  if (!supported) {
+    throw std::invalid_argument(
+      "precision_arrival supports HEAD/LEG MoveJoints and LEG/WBC MovePose only");
+  }
+  if (p["control_mode"] && p["control_mode"].as<uint8_t>() != 0) {
+    throw std::invalid_argument("precision_arrival requires position control");
+  }
+  return true;
+}
 
 // Numeric modes are authoritative. Legacy booleans remain readable.
 static uint8_t parse_collision_mode(const YAML::Node& p)
@@ -546,10 +561,15 @@ bool TaskConfigParser::parse_action(YAML::Node action_node, AtomicAction& act, i
   if (action_node["if_recovery_applied"]) {
     act.if_recovery_applied = action_node["if_recovery_applied"].as<std::string>();
     const auto& move = act.move_joints_param;
+    const bool restore = move.leg_motion_mode == 2 &&
+        std::isfinite(move.body_height_m) && move.body_height_m < 0;
+    const bool recovery_turn = move.leg_motion_mode == 0 && !move.relative_position &&
+        move.joint_name == std::vector<std::string>{"body_joint"} && move.position.size() == 1 &&
+        std::isfinite(move.position[0]);
     if (act.if_recovery_applied.empty() || act.action_type != "move_joints" ||
-        move.arm_id != 4 || move.leg_motion_mode != 2 || !std::isfinite(move.body_height_m) ||
-        move.body_height_m >= 0 || act.ik_failure_recovery.enabled || act.feedback_check.enable)
-      throw std::invalid_argument("Conditional leg restore requires a key and a negative LEG vertical-relative MoveJoints");
+        move.arm_id != 4 || (!restore && !recovery_turn) ||
+        act.ik_failure_recovery.enabled || act.feedback_check.enable)
+      throw std::invalid_argument("Conditional recovery action requires a key and a negative LEG vertical-relative restore or absolute waist turn");
   }
   return true;
 }
@@ -610,13 +630,7 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
 
   // 机械臂位姿移动参数（对应 MovePose.action）
   act.arm_param.arm_id = p["arm_id"].as<uint8_t>();
-  act.arm_param.keep_tcp_level = p["keep_tcp_level"] ? p["keep_tcp_level"].as<bool>() : false;
-  act.arm_param.tcp_level_tolerance_rad = p["tcp_level_tolerance_rad"] ?
-    p["tcp_level_tolerance_rad"].as<double>() : 0.02;
-  std::string level_error;
-  if (!com_interfaces::validateTcpLevelGoal(act.arm_param.keep_tcp_level,
-      act.arm_param.tcp_level_tolerance_rad, act.arm_param.arm_id, true, 0, level_error))
-    throw std::invalid_argument(level_error);
+  act.arm_param.precision_arrival = parse_precision_arrival(p, act.arm_param.arm_id, true);
   act.arm_param.enable_collision_check = parse_collision_mode(p);
   act.arm_param.use_config_pose = p["use_config_pose"].as<bool>();
   act.arm_param.use_force_control = p["use_force_control"].as<bool>();
@@ -806,14 +820,7 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
 
   // 关节空间移动参数
   act.move_joints_param.arm_id = p["arm_id"].as<uint8_t>();
-  act.move_joints_param.keep_tcp_level = p["keep_tcp_level"] ? p["keep_tcp_level"].as<bool>() : false;
-  act.move_joints_param.tcp_level_tolerance_rad = p["tcp_level_tolerance_rad"] ?
-    p["tcp_level_tolerance_rad"].as<double>() : 0.02;
-  std::string level_error;
-  if (!com_interfaces::validateTcpLevelGoal(act.move_joints_param.keep_tcp_level,
-      act.move_joints_param.tcp_level_tolerance_rad, act.move_joints_param.arm_id, false,
-      p["control_mode"] ? p["control_mode"].as<uint8_t>() : 0, level_error))
-    throw std::invalid_argument(level_error);
+  act.move_joints_param.precision_arrival = parse_precision_arrival(p, act.move_joints_param.arm_id, false);
   act.move_joints_param.enable_collision_check = parse_collision_mode(p);
   act.move_joints_param.acceleration_scale = scale("acceleration_scale");
   act.move_joints_param.jerk_scale = scale("jerk_scale");

@@ -87,5 +87,53 @@ install(DIRECTORY include/
 )
 
 
+if(BUILD_TESTING)
+  enable_testing()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME precision_arrival_contract COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/run_precision_arrival_contract.py
+    ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(precision_arrival_contract PROPERTIES TIMEOUT 120)
+  add_executable(test_modbus_trigger_gate test/test_modbus_trigger_gate.cpp)
+  target_link_libraries(test_modbus_trigger_gate pthread)
+  add_test(NAME modbus_trigger_gate COMMAND test_modbus_trigger_gate)
+  add_executable(modbus_test_server test/modbus_test_server.cpp src/modbus_slave.cpp)
+  target_link_libraries(modbus_test_server ${MODBUS_LIB} pthread)
+  ament_target_dependencies(modbus_test_server rclcpp)
+  add_test(NAME modbus_tcp_multi_client COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_modbus_tcp.py $<TARGET_FILE:modbus_test_server>)
+  set_tests_properties(modbus_tcp_multi_client PROPERTIES TIMEOUT 20)
+  add_test(NAME leg_body_motion_contract COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/run_leg_body_motion_contract.py
+    ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(leg_body_motion_contract PROPERTIES TIMEOUT 120)
+  add_test(NAME ik_leg_recovery COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/run_ik_leg_recovery.py
+    ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(ik_leg_recovery PROPERTIES TIMEOUT 180)
+  add_test(NAME waist_leg_parallel_task COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/run_waist_leg_task.py
+    ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(waist_leg_parallel_task PROPERTIES TIMEOUT 120)
+
+  add_executable(test_vision_half_turn
+    test/test_vision_half_turn.cpp src/task_config_parser.cpp)
+  target_compile_features(test_vision_half_turn PRIVATE cxx_std_17)
+  target_link_libraries(test_vision_half_turn yaml-cpp)
+  ament_target_dependencies(test_vision_half_turn
+    rclcpp rclcpp_action std_msgs geometry_msgs sensor_msgs com_interfaces)
+  add_test(NAME vision_half_turn COMMAND test_vision_half_turn
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/tasks/laptop_assembly_two_piece.yaml"
+    "${CMAKE_CURRENT_BINARY_DIR}/half_turn_parser_case.yaml")
+  add_executable(test_placement_vertical_down
+    test/test_placement_vertical_down.cpp src/task_config_parser.cpp)
+  target_compile_features(test_placement_vertical_down PRIVATE cxx_std_17)
+  target_link_libraries(test_placement_vertical_down yaml-cpp)
+  ament_target_dependencies(test_placement_vertical_down
+    rclcpp rclcpp_action std_msgs geometry_msgs sensor_msgs com_interfaces)
+  add_test(NAME placement_vertical_down COMMAND test_placement_vertical_down
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/tasks/laptop_assembly_two_piece.yaml"
+    "${CMAKE_CURRENT_BINARY_DIR}/vertical_down_parser_case.yaml")
+endif()
 
 ament_package()

@@ -18,6 +18,7 @@
 #include "com_interfaces/leg_joint_goal.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
 #include "com_interfaces/tcp_level_goal.hpp"
+#include "com_interfaces/precision_arrival_goal.hpp"
 #include "dual_arm_module.hpp"
 #include "ethercat_bus_manager.hpp"
 #include "com_interfaces/srv/drive_control.hpp"
@@ -591,6 +592,11 @@ private:
             return rclcpp_action::GoalResponse::REJECT;
         }
         std::string constraint_error;
+        if (!com_interfaces::validatePrecisionArrivalGoal(goal->precision_arrival,
+                goal->arm_id, true, goal->control_mode, constraint_error)) {
+            RCLCPP_WARN(get_logger(), "%s", constraint_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (!com_interfaces::validateTcpLevelGoal(goal->keep_tcp_level, goal->tcp_level_tolerance_rad,
                 goal->arm_id, true, goal->control_mode, constraint_error)) {
             RCLCPP_WARN(get_logger(), "%s", constraint_error.c_str());
@@ -903,6 +909,11 @@ private:
         }
 
         std::string body_error;
+        if (!com_interfaces::validatePrecisionArrivalGoal(goal->precision_arrival,
+                goal->arm_id, false, goal->control_mode, body_error)) {
+            RCLCPP_WARN(get_logger(), "%s", body_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (!com_interfaces::validateTcpLevelGoal(goal->keep_tcp_level, goal->tcp_level_tolerance_rad,
                 goal->arm_id, false, goal->control_mode, body_error)) {
             RCLCPP_WARN(get_logger(), "%s", body_error.c_str());
@@ -1048,7 +1059,8 @@ private:
             }
         }
         else if (goal->arm_id == LEG) { 
-            if (goal->joint_name.size() == 2 || goal->position.size() == 2) {
+            if (goal->joint_name.size() == 2 || goal->position.size() == 2 ||
+                goal->joint_name.size() == 3 || goal->position.size() == 3) {
                 com_interfaces::LegJointSelection selection;
                 std::string error;
                 if (!com_interfaces::validateLegOrientationGoal(goal->joint_name, goal->position, selection, error) ||

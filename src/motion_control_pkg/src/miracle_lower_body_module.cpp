@@ -401,6 +401,8 @@ namespace miracle {
         MotionSafetyScope safety_scope(4U);
         auto feedback = std::make_shared<typename ActionT::Feedback>();
         const auto goal = goal_handle->get_goal();
+        const auto action_precision = motion_control_pkg::execution::actionPrecisionPolicy(
+            precision_policy_, goal->precision_arrival);
         const auto started = JointCompletionGuard::Clock::now();
         const auto deadline = action_started_at + std::chrono::milliseconds(goal->timeout_ms);
         const auto check = [&](std::string& error) {
@@ -430,7 +432,7 @@ namespace miracle {
             try {
                 result->success = executeEthercatTrajectory(m_traj_pos, m_bus_manager, m_jointID,
                     [&](const std::vector<double>& q) { return setMulJointPos(q, m_jointID); },
-                    progress_check, [&](float value){progress.update(value);}, deadline, result->final_distance_error, result->error_message, precision_policy_,
+                    progress_check, [&](float value){progress.update(value);}, deadline, result->final_distance_error, result->error_message, action_precision,
                     std::is_same_v<ActionT, MoveJoints> ? precision_gate_ : motion_control_pkg::motion::kNoApproachGate);
             } catch (const std::exception& e) {
                 result->error_message=e.what();
@@ -703,12 +705,16 @@ namespace miracle {
             return;
         }
         if (goal_handle->get_goal()->joint_name.size() == 2 ||
-            goal_handle->get_goal()->position.size() == 2) {
+            goal_handle->get_goal()->position.size() == 2 ||
+            goal_handle->get_goal()->joint_name.size() == 3 ||
+            goal_handle->get_goal()->position.size() == 3) {
             execution_loop_body_orientation(goal_handle);
             return;
         }
         const auto action_started_at = std::chrono::steady_clock::now();
         const auto goal = goal_handle->get_goal();
+        const auto action_precision = motion_control_pkg::execution::actionPrecisionPolicy(
+            precision_policy_, goal->precision_arrival);
         auto feedback = std::make_shared<MoveJoints::Feedback>();
         auto result = std::make_shared<MoveJoints::Result>();
 
@@ -804,13 +810,13 @@ namespace miracle {
             motion_control_pkg::motion::PrecisionApproach approach;
             std::string precision_error;
             const bool precision_ok = motion_control_pkg::motion::planPrecisionApproach(
-                joint_cur_pos, angles, precision_policy_,
+                joint_cur_pos, angles, action_precision,
                 [&](const auto& from, const auto& to, bool slow, auto& p, auto& v, auto& a, std::string& error) {
-                    const double scale = slow ? precision_policy_.speed_scale : 1.0;
+                    const double scale = slow ? action_precision.speed_scale : 1.0;
                     const int code = m_galgo->computeMoveJTrajectory<LEG_JOINTNUM>(ID_LEG, plan_dt,
-                        slow ? std::min(max_velocity*scale,precision_policy_.velocity_cap) : max_velocity,
-                        slow ? std::min(max_acc*scale,precision_policy_.acceleration_cap) : max_acc,
-                        slow ? std::min(max_jerk*scale,precision_policy_.jerk_cap) : max_jerk,
+                        slow ? std::min(max_velocity*scale,action_precision.velocity_cap) : max_velocity,
+                        slow ? std::min(max_acc*scale,action_precision.acceleration_cap) : max_acc,
+                        slow ? std::min(max_jerk*scale,action_precision.jerk_cap) : max_jerk,
                         from, std::vector<double>(from.size(),0.0), std::vector<double>(from.size(),0.0),
                         to, p, v, a, motion_rate*scale);
                     if (code != 0) error = "precision Ruckig planning failed: " + std::to_string(code);
@@ -829,8 +835,8 @@ namespace miracle {
                     std::vector<double>(LEG_JOINTNUM,max_acc),std::vector<double>(LEG_JOINTNUM,max_jerk),precision_error))
                 throw std::runtime_error(precision_error);
             RCLCPP_INFO(rclcpp::get_logger("leg_precision"),
-                "MoveJ precision: goal_tolerance=%.6f rad, slow_suffix=%d, samples=%zu, planned_motion=%.3f s",
-                precision_policy_.completion.position_tolerance,
+                "MoveJ precision_arrival=%s: goal_tolerance=%.6f rad, slow_suffix=%d, samples=%zu, planned_motion=%.3f s",
+                goal->precision_arrival ? "ON" : "OFF", action_precision.completion.position_tolerance,
                 precision_gate_ != motion_control_pkg::motion::kNoApproachGate, traj_pos_new.size(),
                 (traj_pos_new.size()-1)*plan_dt);
 

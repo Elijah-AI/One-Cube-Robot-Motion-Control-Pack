@@ -70,6 +70,12 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
   } release{is_executing_leg_, m_traj_run};
   motion_control_pkg::execution::ActionTerminalGuard<GoalHandleMoveJoints, MoveJoints::Result> terminal(goal_handle);
   const auto goal = goal_handle->get_goal();
+  const bool coordinated_waist = goal->joint_name.size() == 3;
+  const std::string motion_description = coordinated_waist
+      ? "coordinated waist/leg MoveJ with leg pitch compensation"
+      : "leg MoveJ with fixed body orientation";
+  const auto action_precision = motion_control_pkg::execution::actionPrecisionPolicy(
+      precision_policy_, goal->precision_arrival);
   auto result = std::make_shared<MoveJoints::Result>();
   motion_control_pkg::execution::MotionSafetyScope safety_scope(4U);
   result->final_distance_error = std::numeric_limits<double>::infinity();
@@ -110,7 +116,7 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
     if (!read_body_orientation_feedback(start, velocity, sequence, error)) throw std::runtime_error(error);
     if (!stationary(velocity)) throw std::runtime_error("Leg must be stationary before body-orientation MoveJ");
     motion_control_pkg::motion::LegBodyOrientationPlanner planner(m_galgo->getModel());
-    publish(MoveJoints::Feedback::STATUS_PLANNING, 0, "Planning leg MoveJ with fixed body orientation");
+    publish(MoveJoints::Feedback::STATUS_PLANNING, 0, "Planning " + motion_description);
     const auto planning_started = Clock::now();
     const auto trajectory = planner.plan(start, goal->joint_name, goal->position,
         goal->speed, 1.0 / TRAJ_FREQ, remaining());
@@ -125,14 +131,17 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
       if (!read_body_orientation_feedback(measured, velocity, sequence, error)) throw std::runtime_error(error);
       if (sequence < previous_sequence) throw std::runtime_error("Leg feedback sequence moved backwards");
       previous_sequence = sequence;
-      if (planner.orientationError(measured, trajectory.reference_orientation) > body_orientation_tracking_tolerance_rad_)
+      planner.validatePosition(measured);
+      auto compensated_measured = measured;
+      if (coordinated_waist) compensated_measured[3] = start[3];
+      if (planner.orientationError(compensated_measured, trajectory.reference_orientation) > body_orientation_tracking_tolerance_rad_)
         throw std::runtime_error("Measured body orientation exceeded leg_body_orientation_tracking_tolerance_rad");
       result->final_distance_error = maximumError(measured, trajectory.target);
     };
     read_and_check();
     if (maximumError(measured, start) > JOINT_THRESHOLD || !stationary(velocity))
       throw std::runtime_error("Leg moved during body-orientation planning; resend from its current state");
-    if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+    if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.positions.size(), remaining(), action_precision.completion.stable_seconds))
       throw std::runtime_error("Insufficient timeout for leg trajectory and settling");
     // No-op goals skip enabling/dispatch but still require measured settling below.
     if (trajectory.duration > 0) {
@@ -142,7 +151,7 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
       read_and_check();
       if (maximumError(measured, start) > JOINT_THRESHOLD || !stationary(velocity))
         throw std::runtime_error("Leg moved during enable; body-orientation trajectory was not dispatched");
-      if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.positions.size(), remaining(), precision_policy_.completion.stable_seconds))
+      if (!motion_control_pkg::execution::hasCompletionBudget(trajectory.positions.size(), remaining(), action_precision.completion.stable_seconds))
         throw std::runtime_error("Insufficient timeout for trajectory and settling after motor enable");
 
       RCLCPP_INFO(rclcpp::get_logger("leg_module"),
@@ -150,9 +159,9 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
           trajectory.compensated_joint + 1, trajectory.target[0], trajectory.target[1], trajectory.target[2],
           trajectory.target[3], trajectory.duration, trajectory.max_orientation_error);
       m_traj_run = true;
-      publish(MoveJoints::Feedback::STATUS_EXECUTING,0,"Executing synchronized leg MoveJ with fixed body orientation");
+      publish(MoveJoints::Feedback::STATUS_EXECUTING,0,"Executing " + motion_description);
       motion_control_pkg::execution::LatestProgressPublisher progress(
-          [&](float value){publish(MoveJoints::Feedback::STATUS_EXECUTING,value,"Executing synchronized leg MoveJ with fixed body orientation");});
+          [&](float value){publish(MoveJoints::Feedback::STATUS_EXECUTING,value,"Executing " + motion_description);});
       motion_started = Clock::now();
       auto tick = motion_started;
       constexpr int64_t period_ns = TRAJ_CYCLE_US * 1000LL;
@@ -186,8 +195,8 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
     const auto settling = Clock::now();
     Guard guard({trajectory.target.begin(), trajectory.target.end()}, settling,
         std::min(started + std::chrono::milliseconds(goal->timeout_ms), settling +
-            std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(precision_policy_.completion_timeout))),
-        false, precision_policy_.completion);
+            std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(action_precision.completion_timeout))),
+        false, action_precision.completion);
     while (true) {
       std::this_thread::sleep_for(std::chrono::microseconds(TRAJ_CYCLE_US));
       check_request();
@@ -198,7 +207,9 @@ void MiracleLowerBodyModule::execution_loop_body_orientation(
       if (status == Guard::Status::Settled) break;
     }
     result->success = true;
-    result->error_message = "Leg target reached with body orientation preserved";
+    result->error_message = coordinated_waist
+        ? "Waist and leg targets reached with leg pitch compensation"
+        : "Leg target reached with body orientation preserved";
     update_timing(); terminal.succeed(result);
   } catch (const std::exception& error) {
     result->success = false;
