@@ -6,6 +6,11 @@
 #include "com_interfaces/rigid_grasp_goal.hpp"
 #include "com_interfaces/precision_arrival_goal.hpp"
 #include "whole_body_module.hpp"
+#include "motion_control_pkg/motion/leg_body_motion.hpp"
+#include "com_interfaces/leg_body_motion_goal.hpp"
+#include "com_interfaces/leg_joint_goal.hpp"
+#include <map>
+#include <type_traits>
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +25,7 @@
 
 namespace
 {
-motion_control_pkg::motion::RigidGraspOptions graspOptions(const MovePose::Goal& goal) {
+template<class Goal> motion_control_pkg::motion::RigidGraspOptions graspOptions(const Goal& goal) {
     return {goal.keep_grasp_rigid,goal.grasp_position_tolerance_m,goal.grasp_orientation_tolerance_rad};
 }
 Eigen::Isometry3d graspFrame(const Eigen::Isometry3d& left,const Eigen::Isometry3d& right) {
@@ -28,15 +33,71 @@ Eigen::Isometry3d graspFrame(const Eigen::Isometry3d& left,const Eigen::Isometry
     frame.translation()=.5*(left.translation()+right.translation());return frame;
 }
 
+class LegRigidStateGuard {
+public:
+    LegRigidStateGuard(const pinocchio::Model& model,const std::vector<double>& start,
+                    const MoveJoints::Goal& goal,std::string& error) {
+        safety_=motion_control_pkg::execution::motionSafety();
+        if(!safety_) {error="rigid LEG compensation requires measured MotionSafety";return;}
+        auto owned=std::make_shared<pinocchio::Model>(model);
+        auto body=std::make_shared<motion_control_pkg::motion::LegBodyMotionPlanner>(*owned);
+        const std::array<std::string,4> names{{"leg_joint1","leg_joint2","leg_joint3","body_joint"}};
+        motion_control_pkg::motion::LegJoints initial{};
+        for(std::size_t j=0;j<4;++j) initial[j]=start.at(model.joints[model.getJointId(names[j])].idx_q());
+        const auto pose=body->pose(initial);
+        id_=safety_->addStateConstraint(15U,[owned,body,start,goal,names,initial,pose](const auto& n,const auto& q,std::string& e) {
+            std::map<std::string,double> measured;
+            for(std::size_t i=0;i<n.size();++i) measured.emplace(n[i],q.at(i));
+            for(const auto* head:{"head_yaw_joint","head_pitch_joint"})
+                if(!measured.count(head) || std::abs(measured.at(head)-start.at(
+                    owned->joints[owned->getJointId(head)].idx_q()))>.01) {e="head moved during rigid LEG compensation";return false;}
+            motion_control_pkg::motion::LegJoints legs{};
+            const bool paired=goal.leg_motion_mode==0 && (goal.joint_name.size()==2 || goal.joint_name.size()==3);
+            for(std::size_t j=0;j<4;++j) {
+                if(!measured.count(names[j])) {e="missing rigid LEG measured joint";return false;}
+                legs[j]=measured.at(names[j]);
+                const bool held=(goal.leg_motion_mode==1 && j!=2) ||
+                    ((goal.leg_motion_mode>=2 || (paired && goal.joint_name.size()==2)) && j==3) ||
+                    (goal.leg_motion_mode==0 && goal.joint_name.size()==1 && j<3);
+                if(held && std::abs(legs[j]-initial[j])>.01) {e="held leg/waist joint moved during TCP compensation";return false;}
+            }
+            auto orientation_legs=legs;
+            if(paired) orientation_legs[3]=initial[3];
+            const auto actual=body->pose(orientation_legs);
+            if((paired || goal.leg_motion_mode>=2) &&
+               Eigen::AngleAxisd(pose.rotation().transpose()*actual.rotation()).angle()>.02) {
+                e="body orientation tracking failed during rigid LEG compensation";return false;
+            }
+            if(goal.leg_motion_mode>=2 && (pose.translation()-actual.translation()).head<2>().norm()>.01) {
+                e="body X/Y tracking failed during compensated height motion";return false;
+            }
+            return true;
+        },error);
+    }
+    ~LegRigidStateGuard() {if(safety_ && id_) safety_->removeStateConstraint(id_);}
+    bool valid() const {return id_!=0;}
+private:
+    std::shared_ptr<motion_control_pkg::execution::MotionSafety> safety_;
+    std::uint64_t id_{};
+};
 class HardwareWholeBodyBackend final : public motion_control_pkg::execution::WholeBodyExecutionBackend {
 public:
     HardwareWholeBodyBackend(std::shared_ptr<DualArmModule> arms,
-                             std::shared_ptr<miracle::MiracleLowerBodyModule> legs)
-      : arms_(std::move(arms)),legs_(std::move(legs)) {}
+                             std::shared_ptr<miracle::MiracleLowerBodyModule> legs,
+                             std::shared_ptr<miracle::MiracleHeadModule> head)
+      : arms_(std::move(arms)),legs_(std::move(legs)),head_(std::move(head)) {}
     bool reserve_arms(bool l,bool r,std::string& e) override {return arms_->reserve_preplanned_trajectory_resources(l,r,e);}
     bool reserve_legs(std::string& e) override {return legs_->reserve_preplanned_trajectory_resource(e);}
     void release_arms(bool l,bool r) noexcept override {arms_->release_preplanned_trajectory_resources(l,r);}
     void release_legs() noexcept override {legs_->release_preplanned_trajectory_resource();}
+    bool reserve_head(std::string& error) override {
+        if(!head_) {error="rigid LEG MoveJ has no head resource";return false;}
+        return head_->reserve_body_motion_resource(error);
+    }
+    void release_head() noexcept override {if(head_) head_->release_body_motion_resource();}
+    bool read_body_state(sensor_msgs::msg::JointState& state,std::string& error) override {
+        return arms_->read_body_motion_feedback(state,error);
+    }
     bool arm_limits(bool l,std::vector<double>& v,std::vector<double>& a,std::vector<double>& j) const override {
         return arms_->get_joint_motion_limits(l,v,a,j);
     }
@@ -58,6 +119,7 @@ public:
 private:
     std::shared_ptr<DualArmModule> arms_;
     std::shared_ptr<miracle::MiracleLowerBodyModule> legs_;
+    std::shared_ptr<miracle::MiracleHeadModule> head_;
 };
 
 Eigen::Isometry3d interpolatePose(
@@ -232,7 +294,8 @@ WholeBodyModule::WholeBodyModule(
     std::string planning_frame,
     Eigen::Isometry3d left_model_end_to_tool_tcp,
     Eigen::Isometry3d right_model_end_to_tool_tcp,
-    std::shared_ptr<motion_control_pkg::execution::WholeBodyExecutionBackend> backend)
+    std::shared_ptr<motion_control_pkg::execution::WholeBodyExecutionBackend> backend,
+    std::shared_ptr<miracle::MiracleHeadModule> head)
 : node_(node),
   miracle_algo_(miracle_algo),
   dual_arm_module_(dual_arm_module),
@@ -245,7 +308,7 @@ WholeBodyModule::WholeBodyModule(
     if (backend_ && (dual_arm_module_ || lower_body_module_))
         throw std::invalid_argument("injected WBC backend cannot be mixed with hardware modules");
     if (!backend_ && dual_arm_module_ && lower_body_module_)
-        backend_=std::make_shared<HardwareWholeBodyBackend>(dual_arm_module_,lower_body_module_);
+        backend_=std::make_shared<HardwareWholeBodyBackend>(dual_arm_module_,lower_body_module_,std::move(head));
     leg_precision_policy_ = motion_control_pkg::execution::precisionParameters(*node, "leg_precision");
     rcl_interfaces::msg::ParameterDescriptor fixed; fixed.read_only = true;
     const bool enabled = node->declare_parameter<bool>("wbc_static_com_enabled", false, fixed);
@@ -363,23 +426,224 @@ WholeBodyModule::~WholeBodyModule()
     }
 }
 
-void WholeBodyModule::start_execution_move_pose(
-    std::shared_ptr<GoalHandleMovePose> goal_handle)
+bool WholeBodyModule::read_leg_compensation_state(std::vector<double>& q,std::string& error,
+    const std::vector<double>* expected_start) const {
+    auto node=node_.lock(); sensor_msgs::msg::JointState state;
+    if(!node || !backend_ || !backend_->read_body_state(state,error) || !read_balance_state(q,error)) return false;
+    const double stamp=rclcpp::Time(state.header.stamp).seconds(),now=node->now().seconds();
+    if(stamp<=0 || stamp>now || now-stamp>.1 || state.name.size()!=20 ||
+       state.position.size()!=20 || state.velocity.size()!=20) {
+        error="rigid LEG MoveJ needs fresh complete measured arm/leg/head state";return false;
+    }
+    std::map<std::string,std::size_t> indices;
+    for(std::size_t i=0;i<20;++i)
+        if(!indices.emplace(state.name[i],i).second || !std::isfinite(state.position[i]) ||
+           !std::isfinite(state.velocity[i]) || std::abs(state.velocity[i])>.02) {
+            error="rigid LEG MoveJ must start with finite stationary joints";return false;
+        }
+    std::vector<std::string> names{"leg_joint1","leg_joint2","leg_joint3","body_joint","head_yaw_joint","head_pitch_joint"};
+    for(const auto* side:{"_L","_R"}) for(int j=1;j<=7;++j) names.push_back("Joint"+std::to_string(j)+side);
+    const auto& model=miracle_algo_->getModel();
+    for(const auto& name:names) {
+        if(!indices.count(name) || !model.existJointName(name)) {error="missing measured joint "+name;return false;}
+        const auto index=model.joints[model.getJointId(name)].idx_q();
+        q.at(index)=state.position.at(indices.at(name));
+        if(expected_start && std::abs(q[index]-expected_start->at(index))>.01) {
+            error="rigid LEG MoveJ start changed during planning: "+name;return false;
+        }
+    }
+    return true;
+}
+
+bool WholeBodyModule::plan_leg_trajectory(const std::shared_ptr<const MoveJoints::Goal>& goal,
+    const std::vector<double>& start_q,std::vector<std::vector<double>>& left_path,
+    std::vector<std::vector<double>>& right_path,std::vector<std::vector<double>>& leg_path,
+    std::string& error) const {
+    namespace motion=motion_control_pkg::motion;
+    using Path=std::vector<std::vector<double>>;
+    constexpr double dt=motion_control_pkg::execution::kDualArmControlPeriodSeconds;
+    const std::array<std::string,4> names{{"leg_joint1","leg_joint2","leg_joint3","body_joint"}};
+    left_path.clear();right_path.clear();leg_path.clear();error.clear();
+    try {
+        if(!goal || goal->arm_id!=LEG || !goal->keep_grasp_rigid ||
+           !com_interfaces::validateRigidLegGraspGoal(*goal,error) ||
+           !com_interfaces::validateLegBodyMotionGoal(goal->arm_id,goal->leg_motion_mode,
+               goal->body_tilt_deg,goal->body_height_m,goal->joint_name,goal->position,goal->speed,
+               goal->timeout_ms,goal->control_mode,goal->acceleration_scale,goal->jerk_scale,false,error) ||
+           !com_interfaces::validateRigidLegTargets(goal->joint_name,goal->position,goal->leg_motion_mode,error)) {
+            if(error.empty()) error="expected LEG MoveJoints with keep_grasp_rigid=true";
+            return false;
+        }
+        if(!std::isfinite(goal->speed) || goal->speed<=0 || goal->speed>1 || goal->timeout_ms<=0 ||
+           goal->synchronization_mode!=0 || goal->enable_collision_check>2 ||
+           goal->acceleration_scale!=0 || goal->jerk_scale!=0 ||
+           (!goal->header.frame_id.empty() && goal->header.frame_id!="base_link")) {
+            error="invalid rigid LEG MoveJ speed, timeout, mode, scales or frame";return false;
+        }
+        if(dynamic_zmp_enabled_ || (backend_ && backend_->needs_reference())) {
+            error="rigid LEG MoveJ supports static COM; dynamic ZMP is not supported on this route";return false;
+        }
+        const auto& model=miracle_algo_->getModel();
+        motion::RigidGraspConstraint level(model,start_q,left_model_end_to_tool_tcp_,
+                                          right_model_end_to_tool_tcp_,graspOptions(*goal));
+        if(!level.initialize(error)) return false;
+        std::vector<double> initial;
+        if(!miracle_algo_->extractLegJoints(start_q,initial) || initial.size()!=4) {
+            error="cannot extract LEG start";return false;
+        }
+        motion::LegJoints start{},target{}; std::copy(initial.begin(),initial.end(),start.begin());target=start;
+        motion::LegBodyMotionPlanner body(model);
+        motion::LegBodyOrientationPlanner orientation(model);
+        const auto start_body=body.pose(start);
+        const double budget=std::min(400.0,goal->timeout_ms/1000.0);
+        Path raw;
+        const bool paired=goal->leg_motion_mode==0 && (goal->joint_name.size()==2 || goal->joint_name.size()==3);
+        if(goal->leg_motion_mode) {
+            auto planned=body.plan(start,static_cast<motion::LegBodyMotionMode>(goal->leg_motion_mode),
+                goal->body_tilt_deg,goal->body_height_m,goal->speed,dt,budget);
+            raw=std::move(planned.joints.positions);target=planned.joints.target;
+        } else if(paired) {
+            auto planned=orientation.plan(start,goal->joint_name,goal->position,goal->speed,dt,budget);
+            raw=std::move(planned.positions);target=planned.target;
+        } else {
+            for(std::size_t i=0;i<goal->joint_name.size();++i)
+                for(std::size_t j=0;j<4;++j) if(goal->joint_name[i]==names[j]) target[j]=goal->position[i];
+            orientation.validatePosition(target);
+            std::vector<double> v,a(4,5*goal->speed),j(4,10*goal->speed);
+            for(const auto& name:names) v.push_back(goal->speed*std::min(1.5,
+                model.velocityLimit[model.joints[model.getJointId(name)].idx_v()]));
+            for(std::size_t k=0;k<4;++k) if(std::abs(target[k]-start[k])/v[k]>budget) {
+                error="LEG target exceeds timeout at requested speed";return false;
+            }
+            if(!planRuckigSamplesWholeBody(*miracle_algo_,initial,{target.begin(),target.end()},v,a,j,raw,error)) return false;
+        }
+        if(raw.empty() || raw.size()*dt>budget+dt) {error="LEG path exceeds timeout";return false;}
+        // A single waist axis traces an exact straight joint-space segment.
+        // Thousands of collinear Ruckig samples needlessly inflate the cubic
+        // path solver, without adding any geometric information.
+        if(goal->leg_motion_mode==0 && !paired && raw.size()>2 &&
+           std::equal(start.begin(),start.begin()+3,target.begin()))
+            raw={raw.front(),raw.back()};
+        // Retain a dense geometric path, without thousands of near-duplicate
+        // zero-speed endpoint samples in the joint spline.
+        Path full_path;
+        for(std::size_t i=0;i<raw.size();++i) {
+            if(!full_path.empty() && i+1<raw.size()) {
+                double delta=0;
+                for(std::size_t j=0;j<4;++j) delta=std::max(delta,std::abs(raw[i][j]-
+                    full_path.back()[model.joints[model.getJointId(names[j])].idx_q()]));
+                if(delta<(goal->leg_motion_mode || paired ? .002 : .01)) continue;
+            }
+            auto q=start_q;
+            for(std::size_t j=0;j<4;++j) q.at(model.joints[model.getJointId(names[j])].idx_q())=raw[i][j];
+            full_path.push_back(std::move(q));
+        }
+        if(full_path.size()==1) full_path.push_back(full_path.front());
+        if(!level.compensateLegPath(full_path,error)) return false;
+        Path active;
+        for(const auto& q:full_path) {
+            std::vector<double> p;
+            if(!makeWholeBodyActiveWaypoint(*miracle_algo_,q,true,true,p)) {error="LEG active mapping failed";return false;}
+            active.push_back(std::move(p));
+        }
+        std::vector<double> v,a,j;
+        for(bool left:{true,false}) {
+            std::vector<double> av(7,CARTES_V_MAX),aa(7,CARTES_A_MAX),aj(7,CARTES_J_MAX);
+            if(backend_ && !backend_->arm_limits(left,av,aa,aj)) {error="cannot read compensating arm limits";return false;}
+            if(av.size()!=7 || aa.size()!=7 || aj.size()!=7) {error="invalid compensating arm limit dimensions";return false;}
+            for(std::size_t k=0;k<7;++k) {
+                if(!std::isfinite(av[k])||av[k]<=0||!std::isfinite(aa[k])||aa[k]<=0||!std::isfinite(aj[k])||aj[k]<=0) {
+                    error="invalid compensating arm limits";return false;
+                }
+                const auto id=model.getJointId("Joint"+std::to_string(k+1)+(left?"_L":"_R"));
+                v.push_back(goal->speed*std::min(av[k],model.velocityLimit[model.joints[id].idx_v()]));
+                a.push_back(goal->speed*aa[k]);j.push_back(goal->speed*aj[k]);
+            }
+        }
+        for(const auto& name:names) {
+            v.push_back(goal->speed*std::min(1.5,model.velocityLimit[model.joints[model.getJointId(name)].idx_v()]));
+            a.push_back(goal->speed*5);j.push_back(goal->speed*10);
+        }
+        Path samples;
+        if(std::all_of(active.begin(),active.end(),[&](const auto& q){return q==active.front();})) samples={active.front(),active.back()};
+        else if(!miracle_algo_->toppraPlan(active,dt,v,a,samples,MiracleMAlgo::ToppraSolverMode::kStableCartesian,budget,j)) {
+            error="rigid LEG MoveJ joint retiming failed";return false;
+        }
+        if(!motion::validateCommandDerivatives(samples,dt,v,a,j,error)) return false;
+        auto scene=motion::makeCollisionScene(*miracle_algo_,goal->enable_collision_check,start_q,
+            sensor_msgs::msg::PointCloud2(),error);
+        if(!scene) return false;
+        full_path.clear();
+        const auto geometry=[&](const std::vector<double>& q) {
+            if(!level.check(q,error)) return false;
+            motion::LegJoints legs{};
+            for(std::size_t k=0;k<4;++k) legs[k]=q[model.joints[model.getJointId(names[k])].idx_q()];
+            auto orientation_legs=legs;
+            if(paired) orientation_legs[3]=start[3];
+            const auto pose=body.pose(orientation_legs);
+            if((paired || goal->leg_motion_mode>=2) &&
+               Eigen::AngleAxisd(start_body.rotation().transpose()*pose.rotation()).angle()>
+                   motion::LegBodyMotionPlanner::kOrientationTolerance) {error="retimed LEG path changes held body orientation";return false;}
+            if(goal->leg_motion_mode>=2 &&
+               (pose.translation()-start_body.translation()).head<2>().norm()>motion::LegBodyMotionPlanner::kPositionTolerance) {
+                error="retimed height path changes body X/Y";return false;
+            }
+            for(std::size_t k=0;k<4;++k) {
+                const bool held=(goal->leg_motion_mode==1 && k!=2) ||
+                    ((goal->leg_motion_mode>=2 || (paired && goal->joint_name.size()==2)) && k==3) ||
+                    (goal->leg_motion_mode==0 && goal->joint_name.size()==1 && k<3);
+                if(held && std::abs(legs[k]-start[k])>1e-8) {error="retimed LEG path changes frozen joint";return false;}
+            }
+            if(goal->enable_collision_check && !miracle_algo_->isFullQValid(miracle_algo_->toEigenConfig(q))) {
+                error="rigid LEG MoveJ collides or violates model limits";return false;
+            }
+            return true;
+        };
+        for(const auto& p:samples) {
+            std::vector<double> q;
+            if(!miracle_algo_->mergeWholeBodyJoints(start_q,true,true,p,q)) {error="LEG full mapping failed";return false;}
+            if(!geometry(q)) return false;
+            if(!full_path.empty()) {
+                auto mid=q;for(std::size_t k=0;k<q.size();++k) mid[k]=(q[k]+full_path.back()[k])*.5;
+                if(!geometry(mid)) return false;
+            }
+            full_path.push_back(std::move(q));
+        }
+        for(std::size_t k=0;k<4;++k) if(std::abs(samples.back()[14+k]-target[k])>1e-8) {
+            error="rigid LEG MoveJ changed requested final leg target";return false;
+        }
+        if(!level.validatePath(full_path,error) || !miracle_algo_->validateStaticBalancePath(full_path,error,dt)) return false;
+        Path left_result,right_result,leg_result;
+        if(!splitWholeBodyActiveTrajectory(samples,true,true,left_result,right_result,leg_result,error)) return false;
+        left_path=std::move(left_result);right_path=std::move(right_result);leg_path=std::move(leg_result);
+        error.clear();return true;
+    } catch(const std::exception& e) {error=e.what();return false;}
+}
+
+void WholeBodyModule::start_execution_move_pose(std::shared_ptr<GoalHandleMovePose> goal) {
+    start_execution<MovePose>(std::move(goal));
+}
+void WholeBodyModule::start_execution_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal) {
+    start_execution<MoveJoints>(std::move(goal));
+}
+template<class Action>
+void WholeBodyModule::start_execution(std::shared_ptr<rclcpp_action::ServerGoalHandle<Action>> goal_handle)
 {
     const auto goal = goal_handle->get_goal();
     if (!backend_) {
-        auto result = std::make_shared<MovePose::Result>();
+        auto result = std::make_shared<typename Action::Result>();
         result->success = false;
         result->error_message = "whole-body execution backends are not attached (planning-only instance)";
         goal_handle->abort(result);
         return;
     }
-    const bool need_left = goal && (goal->arm_id == WHOLE_BODY_LEFT ||
+    constexpr bool leg_goal=std::is_same_v<Action,MoveJoints>;
+    const bool need_left = goal && (leg_goal || goal->arm_id == WHOLE_BODY_LEFT ||
         goal->arm_id == WHOLE_BODY_BOTH);
-    const bool need_right = goal && (goal->arm_id == WHOLE_BODY_RIGHT ||
+    const bool need_right = goal && (leg_goal || goal->arm_id == WHOLE_BODY_RIGHT ||
         goal->arm_id == WHOLE_BODY_BOTH);
-    if (!goal || (!need_left && !need_right)) {
-        auto result = std::make_shared<MovePose::Result>();
+    if (!goal || (!need_left && !need_right) || (leg_goal && (goal->arm_id!=LEG || !goal->keep_grasp_rigid))) {
+        auto result = std::make_shared<typename Action::Result>();
         result->success = false;
         result->error_message = "unsupported whole-body arm_id";
         goal_handle->abort(result);
@@ -388,7 +652,7 @@ void WholeBodyModule::start_execution_move_pose(
 
     bool expected = false;
     if (!is_executing_.compare_exchange_strong(expected, true)) {
-        auto result = std::make_shared<MovePose::Result>();
+        auto result = std::make_shared<typename Action::Result>();
         result->success = false;
         result->error_message = "whole-body module is already executing";
         goal_handle->abort(result);
@@ -399,7 +663,7 @@ void WholeBodyModule::start_execution_move_pose(
     if (!backend_->reserve_arms(
             need_left, need_right, resource_error)) {
         is_executing_.store(false);
-        auto result = std::make_shared<MovePose::Result>();
+        auto result = std::make_shared<typename Action::Result>();
         result->success = false;
         result->error_message = "whole-body arm resource reservation failed: " +
             resource_error;
@@ -410,7 +674,7 @@ void WholeBodyModule::start_execution_move_pose(
         backend_->release_arms(
             need_left, need_right);
         is_executing_.store(false);
-        auto result = std::make_shared<MovePose::Result>();
+        auto result = std::make_shared<typename Action::Result>();
         result->success = false;
         result->error_message = "whole-body leg resource reservation failed: " +
             resource_error;
@@ -418,28 +682,37 @@ void WholeBodyModule::start_execution_move_pose(
         return;
     }
 
+    if constexpr (leg_goal) {
+        if(!backend_->reserve_head(resource_error)) {
+            backend_->release_arms(true,true);backend_->release_legs();is_executing_.store(false);
+            auto result=std::make_shared<typename Action::Result>();
+            result->error_message=resource_error;goal_handle->abort(result);return;
+        }
+    }
     if (execution_thread_.joinable()) {
         execution_thread_.join();
     }
     try {
         execution_thread_ = std::thread([this,goal_handle,need_left,need_right] {
-            try {execution_loop(goal_handle);}
+            try {execution_loop<Action>(goal_handle);}
             catch (const std::exception& e) {
                 backend_->release_arms(need_left,need_right); backend_->release_legs();
+                if constexpr (leg_goal) backend_->release_head();
                 is_executing_.store(false);
                 if (goal_handle->is_active()) {
-                    auto result=std::make_shared<MovePose::Result>(); result->success=false;
+                    auto result=std::make_shared<typename Action::Result>(); result->success=false;
                     result->error_message=std::string("whole-body worker exception: ")+e.what();
                     try {goal_handle->abort(result);} catch (const std::exception&) {}
                 }
             }
         });
     } catch (const std::exception& error) {
+        if constexpr (leg_goal) backend_->release_head();
         backend_->release_arms(
             need_left, need_right);
         backend_->release_legs();
         is_executing_.store(false);
-        auto result = std::make_shared<MovePose::Result>();
+        auto result = std::make_shared<typename Action::Result>();
         result->success = false;
         result->error_message =
             std::string("failed to create whole-body worker: ") + error.what();
@@ -1079,32 +1352,37 @@ bool WholeBodyModule::plan_trajectory(
     return true;
 }
 
+template<class Action>
 void WholeBodyModule::execution_loop(
-    std::shared_ptr<GoalHandleMovePose> goal_handle)
+    std::shared_ptr<rclcpp_action::ServerGoalHandle<Action>> goal_handle)
 {
     motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
         &is_executing_);
     motion_control_pkg::execution::ActionTerminalGuard<
-        GoalHandleMovePose, MovePose::Result> terminal(goal_handle);
+        rclcpp_action::ServerGoalHandle<Action>, typename Action::Result> terminal(goal_handle);
     const auto started_at = std::chrono::steady_clock::now();
     const auto goal = goal_handle->get_goal();
     const auto action_precision = motion_control_pkg::execution::actionPrecisionPolicy(
         leg_precision_policy_, goal->precision_arrival);
-    const bool need_left = goal->arm_id == WHOLE_BODY_LEFT ||
+    constexpr bool leg_goal=std::is_same_v<Action,MoveJoints>;
+    const bool need_left = leg_goal || goal->arm_id == WHOLE_BODY_LEFT ||
         goal->arm_id == WHOLE_BODY_BOTH;
-    const bool need_right = goal->arm_id == WHOLE_BODY_RIGHT ||
+    const bool need_right = leg_goal || goal->arm_id == WHOLE_BODY_RIGHT ||
         goal->arm_id == WHOLE_BODY_BOTH;
+    std::unique_ptr<LegRigidStateGuard> leg_state_guard;
     const auto release_child_resources = [&]() {
+        leg_state_guard.reset();
         backend_->release_arms(
             need_left, need_right);
         backend_->release_legs();
+        if constexpr (leg_goal) backend_->release_head();
     };
-    auto result = std::make_shared<MovePose::Result>();
+    auto result = std::make_shared<typename Action::Result>();
     motion_control_pkg::execution::MotionSafetyScope safety_scope((need_left?1U:0U)|(need_right?2U:0U)|4U);
     result->success = false;
-    auto feedback = std::make_shared<MovePose::Feedback>();
+    auto feedback = std::make_shared<typename Action::Feedback>();
     const auto publish_feedback = [&](float progress, const std::string& step,
-                                      std::uint8_t phase=MovePose::Feedback::STATUS_EXECUTING) {
+                                      std::uint8_t phase=Action::Feedback::STATUS_EXECUTING) {
         feedback->task_status = progress>=100.0F ? "SUCCEEDED" : "RUNNING";
         feedback->progress_rate = std::clamp(progress, 0.0F, 100.0F);
         feedback->dual_task_status = phase;
@@ -1122,21 +1400,26 @@ void WholeBodyModule::execution_loop(
     };
 
     if (goal_handle->is_canceling()) {
-        result->error_message = "whole-body MovePose canceled before planning";
+        result->error_message = "whole-body motion canceled before planning";
         finish_time();
         terminal.cancel(result);
         release_child_resources();
         return;
     }
     std::vector<double> start_q;
-    if (!read_balance_state(start_q, result->error_message)) {
+    if (!(leg_goal ? read_leg_compensation_state(start_q,result->error_message) : read_balance_state(start_q,result->error_message))) {
         if (result->error_message.empty()) result->error_message = "failed to obtain whole-body start state";
         finish_time();
         terminal.abort(result);
         release_child_resources();
         return;
     }
-    publish_feedback(5.0F, "whole-body weighted IK planning",MovePose::Feedback::STATUS_PLANNING);
+    if constexpr (leg_goal) {
+        leg_state_guard=std::make_unique<LegRigidStateGuard>(miracle_algo_->getModel(),start_q,*goal,result->error_message);
+        if(!leg_state_guard->valid()) {finish_time();terminal.abort(result);release_child_resources();return;}
+    }
+    publish_feedback(5.0F, leg_goal ? "planning leg MoveJ with rigid two-arm compensation" :
+        "whole-body weighted IK planning",Action::Feedback::STATUS_PLANNING);
     std::vector<std::vector<double>> left_path;
     std::vector<std::vector<double>> right_path;
     std::vector<std::vector<double>> leg_path;
@@ -1144,9 +1427,14 @@ void WholeBodyModule::execution_loop(
     std::optional<Eigen::Isometry3d> left_target_tcp;
     std::optional<Eigen::Isometry3d> right_target_tcp;
     motion_control_pkg::wbc::ReferenceResult reference;
-    if (!plan_trajectory(
-        goal, start_q, left_path, right_path, leg_path, planning_error,
-        left_target_tcp, right_target_tcp, backend_->needs_reference() ? &reference : nullptr)) {
+    bool planned=false;
+    if constexpr (leg_goal) {
+        planned=plan_leg_trajectory(goal,start_q,left_path,right_path,leg_path,planning_error);
+    } else {
+        planned=plan_trajectory(goal,start_q,left_path,right_path,leg_path,planning_error,
+            left_target_tcp,right_target_tcp,backend_->needs_reference() ? &reference : nullptr);
+    }
+    if(!planned) {
         result->error_message = planning_error;
         finish_time();
         terminal.abort(result);
@@ -1156,26 +1444,43 @@ void WholeBodyModule::execution_loop(
     if (goal->timeout_ms > 0 &&
         std::chrono::steady_clock::now() - started_at >=
         std::chrono::milliseconds(goal->timeout_ms)) {
-        result->error_message = "whole-body MovePose timed out during planning";
+        result->error_message = "whole-body motion timed out during planning";
         finish_time();
         terminal.abort(result);
         release_child_resources();
         return;
     }
     if (goal_handle->is_canceling()) {
-        result->error_message = "whole-body MovePose canceled after planning";
+        result->error_message = "whole-body motion canceled after planning";
         finish_time();
         terminal.cancel(result);
         release_child_resources();
         return;
     }
 
+    const auto check_execution_state = [&] {
+        if constexpr (leg_goal) {
+            const auto safety=motion_control_pkg::execution::motionSafety();
+            if(!safety || !safety->ready(result->error_message)) {
+                if(result->error_message.empty()) result->error_message="rigid LEG measured safety unavailable";
+                return false;
+            }
+        }
+        return check_balance_feedback(start_q,need_left,need_right,false,result->error_message);
+    };
+    const auto check_start = [&] {
+        if constexpr (leg_goal) {
+            std::vector<double> measured;
+            if(!read_leg_compensation_state(measured,result->error_message,&start_q) || !check_execution_state()) return false;
+        }
+        return check_balance_feedback(start_q,need_left,need_right,true,result->error_message);
+    };
     if (backend_->needs_reference() && (!reference.valid || !miracle_algo_->staticBalance() ||
         !backend_->prepare(miracle_algo_->staticBalance()->model().neutralSnapshot().names,reference,result->error_message))) {
         if (result->error_message.empty()) result->error_message="backend requires a validated dynamic reference";
         finish_time(); terminal.abort(result); release_child_resources(); return;
     }
-    if (!check_balance_feedback(start_q, need_left, need_right, true, result->error_message)) {
+    if (!check_start()) {
         finish_time(); terminal.abort(result); release_child_resources(); return;
     }
     const std::size_t arm_samples=need_left ? left_path.size() : right_path.size();
@@ -1207,12 +1512,12 @@ void WholeBodyModule::execution_loop(
     }
     if (goal_handle->is_canceling() || (goal->timeout_ms>0 &&
         std::chrono::steady_clock::now()-started_at>=std::chrono::milliseconds(goal->timeout_ms))) {
-        result->error_message="whole-body MovePose canceled or timed out during preparation";
+        result->error_message="whole-body motion canceled or timed out during preparation";
         finish_time();
         if (goal_handle->is_canceling()) terminal.cancel(result); else terminal.abort(result);
         release_child_resources(); return;
     }
-    if (!check_balance_feedback(start_q,need_left,need_right,true,result->error_message)) {
+    if (!check_start()) {
         finish_time(); terminal.abort(result); release_child_resources(); return;
     }
     if (!enough_time()) {
@@ -1225,7 +1530,7 @@ void WholeBodyModule::execution_loop(
     motion_control_pkg::execution::LatestProgressPublisher stream_progress([&](float value) {
         publish_feedback(value,cancel->requested() ? "stopping synchronized whole-body trajectory" :
             "executing synchronized whole-body trajectory",cancel->requested() ?
-            MovePose::Feedback::STATUS_STOPPING : MovePose::Feedback::STATUS_EXECUTING);
+            Action::Feedback::STATUS_STOPPING : Action::Feedback::STATUS_EXECUTING);
     });
     if (stream_progress.failed()) {
         result->error_message=stream_progress.error();stream_progress.stop();
@@ -1286,7 +1591,7 @@ void WholeBodyModule::execution_loop(
             child_failed=true;cancel->request();
             if(result->error_message.empty())result->error_message=stream_progress.error();
         }
-        if (!check_balance_feedback(start_q, need_left, need_right, false, result->error_message)) {
+        if (!check_execution_state()) {
             child_failed = true; cancel->request();
         }
         if (!arm_ok && arm_future.wait_for(std::chrono::milliseconds(20)) ==
@@ -1316,7 +1621,7 @@ void WholeBodyModule::execution_loop(
         {
             timed_out = true;
             cancel->request();
-            result->error_message = "whole-body MovePose timed out";
+            result->error_message = "whole-body motion timed out";
         }
         stream_progress.update(30.0F);
     }
@@ -1346,7 +1651,7 @@ void WholeBodyModule::execution_loop(
                 result->error_message = "ROS shutdown while waiting for whole-body completion";
                 break;
             }
-            if (!check_balance_feedback(start_q,need_left,need_right,false,result->error_message)) {
+            if (!check_execution_state()) {
                 child_failed = true;
                 break;
             }
@@ -1369,6 +1674,7 @@ void WholeBodyModule::execution_loop(
                 child_failed = true; result->error_message = "cannot reconstruct measured completion state"; break;
             }
             bool tcp_reached = true;
+            if constexpr (!leg_goal) {
             for (bool left : {true, false}) {
                 if ((left && !need_left) || (!left && !need_right)) continue;
                 Eigen::Isometry3d actual;
@@ -1389,6 +1695,25 @@ void WholeBodyModule::execution_loop(
                 tcp_reached = tcp_reached && position_error <= motion_control_pkg::execution::kGoalTranslationToleranceM &&
                     angle_error <= motion_control_pkg::execution::kGoalRotationToleranceRad;
             }
+            } else {
+                if(!level_monitor.validate({measured_active},result->error_message)) child_failed=true;
+                result->final_distance_error=0;
+                for(std::size_t j=0;j<4;++j) result->final_distance_error=std::max(
+                    result->final_distance_error,std::abs(measured.leg_positions[j]-leg_path.back()[j]));
+                for(std::size_t arm=0;arm<2;++arm) {
+                    double error=0;
+                    const auto& target=arm==0 ? left_path.back() : right_path.back();
+                    for(std::size_t j=0;j<7;++j) error=std::max(error,std::abs(measured.arms.arms[arm].joint_position[j]*radians-target[j]));
+                    if(arm==0) result->left_final_distance_error_rad=error;else result->right_final_distance_error_rad=error;
+                    result->final_distance_error=std::max(result->final_distance_error,error);
+                }
+                if(goal->leg_motion_mode>=2) {
+                    motion_control_pkg::motion::LegBodyMotionPlanner body(miracle_algo_->getModel());
+                    motion_control_pkg::motion::LegJoints target{};
+                    std::copy(leg_path.back().begin(),leg_path.back().end(),target.begin());
+                    tcp_reached=(body.pose(measured.leg_positions).translation()-body.pose(target).translation()).norm()<=.001;
+                }
+            }
             if (child_failed) break;
             const auto status = guard.update(measured,Guard::Clock::now(),result->error_message,tcp_reached);
             if (status == Guard::Status::Failed) { child_failed = true; break; }
@@ -1403,7 +1728,7 @@ void WholeBodyModule::execution_loop(
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         if (goal_handle->is_canceling())
-            result->error_message = "whole-body MovePose canceled while waiting for measured completion";
+            result->error_message = "whole-body motion canceled while waiting for measured completion";
     }
     finish_time();
 
@@ -1439,7 +1764,7 @@ void WholeBodyModule::execution_loop(
     }
     if (goal_handle->is_canceling()) {
         if (result->error_message.empty()) {
-            result->error_message = !arm_error.empty() ? arm_error : !leg_error.empty() ? leg_error : "whole-body MovePose canceled";
+            result->error_message = !arm_error.empty() ? arm_error : !leg_error.empty() ? leg_error : "whole-body motion canceled";
         }
         terminal.cancel(result);
     } else if (child_failed || timed_out || !*arm_ok || !*leg_ok) {
@@ -1450,9 +1775,9 @@ void WholeBodyModule::execution_loop(
     } else {
         result->success = true;
         result->error_message.clear();
-        result->final_distance_error = std::max(
+        if constexpr (!leg_goal) result->final_distance_error = std::max(
             result->left_final_distance_error_m, result->right_final_distance_error_m);
-        publish_feedback(100.0F, "whole-body MovePose complete");
+        publish_feedback(100.0F, "whole-body motion complete");
         terminal.succeed(result);
     }
     release_child_resources();

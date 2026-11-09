@@ -17,6 +17,7 @@
 #include "dual_arm_module.hpp"
 #include "main_node.hpp"
 #include "miracle_lower_body_module.hpp"
+#include "miracle_head_module.hpp"
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/action_terminal_guard.hpp"
 #include "motion_control_pkg/execution/execution_control.hpp"
@@ -34,7 +35,8 @@ public:
         std::string planning_frame,
         Eigen::Isometry3d left_model_end_to_tool_tcp,
         Eigen::Isometry3d right_model_end_to_tool_tcp,
-        std::shared_ptr<motion_control_pkg::execution::WholeBodyExecutionBackend> backend = nullptr);
+        std::shared_ptr<motion_control_pkg::execution::WholeBodyExecutionBackend> backend = nullptr,
+        std::shared_ptr<miracle::MiracleHeadModule> head = nullptr);
 
     ~WholeBodyModule();
 
@@ -42,6 +44,7 @@ public:
 
     void start_execution_move_pose(
         std::shared_ptr<GoalHandleMovePose> goal_handle);
+    void start_execution_move_joints(std::shared_ptr<GoalHandleMoveJoints> goal_handle);
 
     // Read-only planning/feedback seams for hardware-free integration tests.
     // plan_trajectory never dispatches commands. Dynamic mode callers must
@@ -57,7 +60,10 @@ private:
     std::unique_ptr<motion_control_pkg::wbc::WholeBodyState> balance_state_;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr balance_subscription_;
     double balance_age_{.15}, balance_skew_{.06};
-    void execution_loop(std::shared_ptr<GoalHandleMovePose> goal_handle);
+    template<class Action> void start_execution(std::shared_ptr<rclcpp_action::ServerGoalHandle<Action>> goal_handle);
+    template<class Action> void execution_loop(std::shared_ptr<rclcpp_action::ServerGoalHandle<Action>> goal_handle);
+    bool read_leg_compensation_state(std::vector<double>& q,std::string& error,
+                                    const std::vector<double>* expected_start=nullptr) const;
 
     bool normalize_target(
         const geometry_msgs::msg::PoseStamped& input,
@@ -66,6 +72,10 @@ private:
         std::string& error_message) const;
 
 public:
+    bool plan_leg_trajectory(const std::shared_ptr<const MoveJoints::Goal>& goal,
+        const std::vector<double>& start_q,std::vector<std::vector<double>>& left_path,
+        std::vector<std::vector<double>>& right_path,std::vector<std::vector<double>>& leg_path,
+        std::string& error) const;
     bool plan_trajectory(
         const std::shared_ptr<const MovePose::Goal>& goal,
         const std::vector<double>& start_q,

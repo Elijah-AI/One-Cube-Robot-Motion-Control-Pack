@@ -136,4 +136,13 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_BINARY_DIR}/vertical_down_parser_case.yaml")
 endif()
 
+if(BUILD_TESTING)
+  enable_testing()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME rigid_leg_contract COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/run_rigid_leg_contract.py
+    ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(rigid_leg_contract PROPERTIES TIMEOUT 120)
+endif()
+
 ament_package()

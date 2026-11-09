@@ -59,12 +59,20 @@ uint8 leg_motion_mode
 # TILT holds measured J1/J2/body_joint; omitted angle means upright (0 degrees).
 float64 body_tilt_deg
 # RELATIVE: delta Z; ABSOLUTE: body_link origin Z in base_link; metres.
-# Both height modes hold body_link orientation, X/Y and all upper-body joints.
+# Both height modes hold body_link orientation and X/Y. Upper-body joints hold
+# by default; keep_grasp_rigid enables synchronized arm compensation.
 float64 body_height_m
 # Optional precision arrival for HEAD/LEG only; defaults off.
 # true selects head_precision/leg_precision, including the ordinary MoveJ slow suffix.
-# Body orientation/height modes retain their constrained paths and only change settling.
+# Body orientation/height and rigid-grasp modes retain their constrained paths
+# and only change settling; no ordinary single-leg slow suffix is appended.
 bool precision_arrival false
+# LEG position MoveJ with coupled arm compensation. Both calibrated suction
+# TCPs must initially face down and share a height. Preserve initial left_T_right
+# while executing the requested leg/waist path on one synchronized time base.
+bool keep_grasp_rigid false
+float64 grasp_position_tolerance_m 0.001
+float64 grasp_orientation_tolerance_rad 0.005
 ---
 bool success
 string error_message

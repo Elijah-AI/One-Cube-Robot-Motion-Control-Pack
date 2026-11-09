@@ -844,8 +844,9 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   // 关节空间移动参数
   act.move_joints_param.arm_id = p["arm_id"].as<uint8_t>();
   act.move_joints_param.precision_arrival = parse_precision_arrival(p, act.move_joints_param.arm_id, false);
-  if(p["keep_grasp_rigid"] && p["keep_grasp_rigid"].as<bool>())
-    throw std::invalid_argument("keep_grasp_rigid is only supported by WBC BOTH MovePose");
+  act.move_joints_param.keep_grasp_rigid = p["keep_grasp_rigid"] ? p["keep_grasp_rigid"].as<bool>() : false;
+  act.move_joints_param.grasp_position_tolerance_m = p["grasp_position_tolerance_m"] ? p["grasp_position_tolerance_m"].as<double>() : .001;
+  act.move_joints_param.grasp_orientation_tolerance_rad = p["grasp_orientation_tolerance_rad"] ? p["grasp_orientation_tolerance_rad"].as<double>() : .005;
   act.move_joints_param.enable_collision_check = parse_collision_mode(p);
   act.move_joints_param.acceleration_scale = scale("acceleration_scale");
   act.move_joints_param.jerk_scale = scale("jerk_scale");
@@ -883,6 +884,16 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   }
   const auto& move = act.move_joints_param;
   std::string body_error;
+  if (!com_interfaces::validateRigidLegGraspRequest(move.keep_grasp_rigid,
+      move.grasp_position_tolerance_m,move.grasp_orientation_tolerance_rad,move.arm_id,
+      p["control_mode"] ? p["control_mode"].as<uint8_t>() : 0,
+      p["synchronization_mode"] ? p["synchronization_mode"].as<uint8_t>() : 0,
+      p["keep_tcp_level"] ? p["keep_tcp_level"].as<bool>() : false,body_error))
+    throw std::invalid_argument(body_error);
+  if (move.keep_grasp_rigid && (!std::isfinite(move.speed)||move.speed<=0||move.speed>1||move.timeout_ms<=0||
+      move.acceleration_scale!=0||move.jerk_scale!=0||
+      !com_interfaces::validateRigidLegTargets(move.joint_name,move.position,move.leg_motion_mode,body_error)))
+    throw std::invalid_argument("Invalid rigid LEG MoveJ speed, timeout, extra scales or targets: "+body_error);
   if (!com_interfaces::validateLegBodyMotionGoal(move.arm_id, move.leg_motion_mode,
       move.body_tilt_deg, move.body_height_m, move.joint_name, move.position, move.speed,
       move.timeout_ms, p["control_mode"] ? p["control_mode"].as<uint8_t>() : 0,

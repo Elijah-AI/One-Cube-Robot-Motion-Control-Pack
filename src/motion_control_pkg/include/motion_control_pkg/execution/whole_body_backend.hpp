@@ -2,6 +2,7 @@
 #include "motion_control_pkg/execution/execution_control.hpp"
 #include "motion_control_pkg/execution/whole_body_completion.hpp"
 #include "motion_control_pkg/wbc/trajectory.hpp"
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -20,6 +21,11 @@ public:
   virtual bool reserve_legs(std::string& error)=0;
   virtual void release_arms(bool left,bool right) noexcept=0;
   virtual void release_legs() noexcept=0;
+  virtual bool reserve_head(std::string& error) {error="rigid LEG MoveJ requires a head reservation";return false;}
+  virtual void release_head() noexcept {}
+  virtual bool read_body_state(sensor_msgs::msg::JointState&,std::string& error) {
+    error="rigid LEG MoveJ needs fresh measured arm/leg/head feedback";return false;
+  }
   virtual bool arm_limits(bool left,std::vector<double>& v,std::vector<double>& a,std::vector<double>& j) const=0;
   virtual bool needs_reference() const {return false;}
   virtual bool prepare(const std::vector<std::string>&,const wbc::ReferenceResult&,std::string&) {return true;}

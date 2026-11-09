@@ -225,7 +225,7 @@ public:
         whole_body_module_ = std::make_shared<WholeBodyModule>(
             shared_from_this(), miracleAlgo_ptr_, dual_arm_module_,
             lower_body_module_, planning_frame, left_tool_transform.transform,
-            right_tool_transform.transform);
+            right_tool_transform.transform, nullptr, head_module_);
 
         configureMotionSafety();
 
@@ -924,6 +924,18 @@ private:
             RCLCPP_WARN(get_logger(), "%s", body_error.c_str());
             return rclcpp_action::GoalResponse::REJECT;
         }
+        if (!com_interfaces::validateRigidLegGraspGoal(*goal,body_error)) {
+            RCLCPP_WARN(get_logger(), "%s", body_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (goal->keep_grasp_rigid &&
+            (!com_interfaces::validateRigidLegTargets(goal->joint_name,goal->position,goal->leg_motion_mode,body_error) ||
+             !whole_body_module_->is_idle() || !dual_arm_module_->is_idle(ID_LEFT_ARM) ||
+             !dual_arm_module_->is_idle(ID_RIGHT_ARM) || !lower_body_module_->is_idle(ID_LEG) ||
+             !head_module_->is_idle(ID_HEAD))) {
+            RCLCPP_WARN(get_logger(), "Rigid LEG MoveJ requires idle arms/legs/head and valid targets: %s",body_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (!com_interfaces::validateLegBodyMotionGoal(goal->arm_id, goal->leg_motion_mode,
                 goal->body_tilt_deg, goal->body_height_m, goal->joint_name, goal->position,
                 goal->speed, goal->timeout_ms, goal->control_mode, goal->acceleration_scale,
@@ -1123,6 +1135,10 @@ private:
                 goal_handle);
         }
         else if (goal->arm_id == LEG) {
+            if (goal->keep_grasp_rigid) {
+                whole_body_module_->start_execution_move_joints(goal_handle);
+                return;
+            }
             RCLCPP_INFO(this->get_logger(), "Dispatching joints task to leg.");
             lower_body_module_->start_execution_move_joints(goal_handle);
         }

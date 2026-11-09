@@ -162,6 +162,9 @@ struct ControlResetParam
 struct MoveJointsParam
 {
   bool precision_arrival{false};          ///< 头部/腿腰精定位，默认关闭
+  bool keep_grasp_rigid{false};            ///< LEG MoveJ with automatic rigid two-arm compensation
+  double grasp_position_tolerance_m{.001};
+  double grasp_orientation_tolerance_rad{.005};
   uint8_t leg_motion_mode{0}; ///< 0=关节目标；1=绝对身体倾角；2=相对升降；3=绝对身体高度
   double body_tilt_deg{0};    ///< 身体 +Z 向 base_link +X 的有符号倾角（度）
   double body_height_m{0};    ///< 相对 Z 距离或 body_link 原点的绝对 Z（米）

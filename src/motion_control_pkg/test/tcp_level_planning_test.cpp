@@ -4,24 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-// Hardware entry points are traps; this executable links no vendor drivers.
-[[noreturn]] static void hardware() {throw std::runtime_error("UNEXPECTED HARDWARE ACCESS");}
-using Path=std::vector<std::vector<double>>;
-using Time=std::chrono::steady_clock::time_point;
-using Cancel=std::shared_ptr<motion_control_pkg::execution::CancellationToken>;
-bool DualArmModule::reserve_preplanned_trajectory_resources(bool,bool,std::string&) {hardware();}
-void DualArmModule::release_preplanned_trajectory_resources(bool,bool) noexcept {std::terminate();}
-bool DualArmModule::get_joint_motion_limits(bool,std::vector<double>&,std::vector<double>&,std::vector<double>&) const {hardware();}
-bool DualArmModule::prepare_preplanned_dispatch(const Path&,const Path&,std::uint8_t,std::string&) {hardware();}
-bool DualArmModule::dispatch_preplanned(const Time&,const Cancel&,std::string&) {hardware();}
-bool DualArmModule::read_preplanned_completion_feedback(motion_control_pkg::sdk::DualArmDeviceState&,std::string&) {hardware();}
-namespace miracle {
-bool MiracleLowerBodyModule::reserve_preplanned_trajectory_resource(std::string&) {hardware();}
-void MiracleLowerBodyModule::release_preplanned_trajectory_resource() noexcept {std::terminate();}
-bool MiracleLowerBodyModule::prepare_preplanned_dispatch(const Path&,std::string&) {hardware();}
-bool MiracleLowerBodyModule::dispatch_preplanned(const Path&,const Time&,const Cancel&,std::string&) {hardware();}
-bool MiracleLowerBodyModule::read_body_orientation_feedback(std::array<double,4>&,std::array<double,4>&,uint64_t&,std::string&) {hardware();}
-}
+#include "whole_body_hardware_traps.hpp"
 static void require(bool ok,const std::string& e) {if(!ok) throw std::runtime_error(e);}
 int main(int argc,char** argv) try {
   require(argc==2,"expected repository path");

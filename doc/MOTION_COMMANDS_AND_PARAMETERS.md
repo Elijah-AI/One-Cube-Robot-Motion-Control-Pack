@@ -101,7 +101,7 @@ ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
 | 视觉位姿目标及偏移 | YAML `use_config_pose`、`vision_*` | 视觉缓存、基准系/视觉局部平移、旋转、目标向下、保持当前 TCP 高度 |
 | 动作编排与恢复 | YAML `parallel_actions`、`move_compound`、结果分支等 | 任务层功能，详见第 10 节；仍受底层资源和运动约束限制 |
 
-WBC 启用水平约束时，要求起点已水平、目标与水平兼容。单独 LEG 动作不支持该约束，也不会自动扩成全身动作；需要手臂补偿时应使用 WBC。`force_vertical_down` 仅生成目标姿态；全程约束需在 WBC 动作中显式设置 `keep_tcp_level: true`。
+WBC 启用水平约束时，要求起点已水平、目标与水平兼容。独立 LEG MoveJ 可使用 `keep_grasp_rigid: true` 自动补偿双臂，保持双吸盘同高、朝下和固定相对位姿；普通 LEG 命令默认不补偿。`force_vertical_down` 仅生成目标姿态；全程约束需在 WBC 动作中显式设置 `keep_tcp_level: true`。
 
 ## 2. 编译、启动与生效配置
 
@@ -345,7 +345,7 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 
 绝对身体高度不是 TCP 高度，也不是相机到地面距离。倾角 0°不等于 J3=0 rad。倾角模式不要给高度；升降模式不要给倾角。启用动态 ZMP 时当前身体专用模式拒绝执行，静态 COM 和碰撞检查仍可使用。
 
-这些独立腿部 MoveJoints 模式不支持 `keep_tcp_level: true`；需要手臂补偿时使用 WBC MovePose。详见 [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)。
+这些独立腿部 MoveJoints 模式使用 `keep_grasp_rigid: true` 开启双臂自动补偿，不需指定手臂目标。仍不支持 `keep_tcp_level: true`。纯腰转支持单独指定 `body_joint`，四关节、两腿加第三关节补偿、俯仰和升降均可使用刚性约束。详见 [独立腰腿 MoveJ 刚性搬箱](RIGID_GRASP.md#独立腰腿-movej双臂自动补偿)。
 
 ```bash
 # 身体竖直
@@ -516,9 +516,9 @@ ros2 action send_goal /Control/move_pose com_interfaces/action/MovePose \
   enable_collision_check: 1, timeout_ms: 60000}' --feedback
 ```
 
-改为 MoveL 时将 `enable_move_line` 设 true，并保持 `whole_body_waist_only=false`。任务 YAML 的完整动作片段见第 10.3 节。WBC 根据 TCP 目标解算腿腰与手臂，接口没有同时指定某个腰腿关节角的字段；独立 LEG MoveJ 不支持开启 `keep_tcp_level`；本次发布仅包含 WBC MovePose 的水平约束。
+改为 MoveL 时将 `enable_move_line` 设 true，并保持 `whole_body_waist_only=false`。任务 YAML 的完整动作片段见第 10.3 节。WBC 根据 TCP 目标解算腿腰与手臂，接口没有同时指定某个腰腿关节角的字段；独立 LEG MoveJ 使用 `keep_grasp_rigid: true` 在保持指定腰腿目标的同时自动补偿双臂，不支持开启 `keep_tcp_level`。
 
-全程约束使用实际 `left_arm_tool_tf/right_arm_tool_tf`，覆盖最终 4 ms 指令点、点间关节插值及执行/到位期间的实测 TCP 姿态。腿腰与手臂共用时间参数，不能只检查起终点水平。普通手臂 `arm_id=0/1/2`、头部、独立腿部 MovePose 均不支持启用；MoveJoints 仅 `arm_id=4` 支持；阻抗模式也会被拒绝。水平补偿不可行、越限、碰撞或监控异常时动作失败，不转为关闭约束执行。
+全程约束使用实际 `left_arm_tool_tf/right_arm_tool_tf`，覆盖最终 4 ms 指令点、点间关节插值及执行/到位期间的实测 TCP 姿态。腿腰与手臂共用时间参数，不能只检查起终点水平。普通手臂 `arm_id=0/1/2`、头部、独立腿部 MovePose 均不支持启用；MoveJoints 的 `keep_tcp_level` 均不支持，`arm_id=4` 改用刚性抓取开关；阻抗模式也会被拒绝。水平补偿不可行、越限、碰撞或监控异常时动作失败，不转为关闭约束执行。
 
 参考系为固定 `base_link`，底盘须固定且水平；当前没有 IMU 重力补偿。该约束也没有加入双臂刚性抓持的固定相对位姿或受力约束。`force_vertical_down` 只生成视觉目标姿态，不能代替全程水平约束。
 

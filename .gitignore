@@ -185,3 +185,10 @@ Testing/
 
 # Coupled suction grasp offline regression.
 !/src/motion_control_pkg/test/rigid_grasp_test.cpp
+
+!/src/motion_control_pkg/test/rigid_grasp_fixture.hpp
+!/src/motion_control_pkg/test/whole_body_hardware_traps.hpp
+!/src/motion_control_pkg/test/leg_rigid_grasp_test.cpp
+!/src/motion_control_pkg/test/leg_rigid_execution_test.cpp
+!/src/task_manager/test/test_rigid_leg_contract.cpp
+!/src/task_manager/test/run_rigid_leg_contract.py

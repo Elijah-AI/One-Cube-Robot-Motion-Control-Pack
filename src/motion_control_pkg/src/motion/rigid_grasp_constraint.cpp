@@ -213,6 +213,32 @@ bool RigidGraspConstraint::projectPath(Path& path,const Path& pinned,std::string
   if(!validatePath(result,e)) return false;
   path=std::move(result);return true;
 }
+bool RigidGraspConstraint::compensateLegPath(Path& path,std::string& e) {
+  if(path.empty()||!check(path.front(),e)) {e="rigid LEG start: "+e;return false;}
+  for(const auto& q:path) if(!impl_->configuration(q,e)) return false;
+  Path result{path.front()};
+  for(std::size_t i=1;i<path.size();++i) {
+    const auto count=std::max<std::size_t>(1,std::ceil(distance(path[i-1],path[i])/.025));
+    if(result.size()+count>10000) {e="rigid LEG compensation budget exceeded";return false;}
+    for(std::size_t k=1;k<=count;++k) {
+      Q q=path[i-1];const double alpha=double(k)/count;
+      for(std::size_t j=0;j<q.size();++j) q[j]+=alpha*(path[i][j]-q[j]);
+      if(k==count) q=path[i];
+      for(int index:impl_->arms) q[index]=result.back()[index];
+      if(!impl_->project(q,e)) return false;
+      if(distance(result.back(),q)>.2) {e="rigid LEG compensation changed IK branch";return false;}
+      result.push_back(std::move(q));
+    }
+  }
+  if(result.size()==2) {
+    // TOPPRA's clamped spline needs an interior point even for pure waist yaw.
+    Q mid=result.front();for(std::size_t j=0;j<mid.size();++j) mid[j]=.5*(mid[j]+result.back()[j]);
+    if(!impl_->project(mid,e)) return false;
+    result.insert(result.begin()+1,std::move(mid));
+  }
+  if(!validatePath(result,e)) return false;
+  path=std::move(result);e.clear();return true;
+}
 bool RigidGraspConstraint::checkMeasured(const std::vector<std::string>& names,const Q& values,std::string& e) {
   if(names.size()!=values.size()) {e="rigid grasp measured layout mismatch";return false;}
   std::map<std::string,double> measured;

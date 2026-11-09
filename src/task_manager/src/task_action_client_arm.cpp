@@ -580,6 +580,9 @@ ActionCallResult TaskActionClient::call_move_joints(
   goal.jerk_scale = param.jerk_scale;
   goal.timeout_ms = param.timeout_ms;
   goal.leg_motion_mode = param.leg_motion_mode;
+  goal.keep_grasp_rigid = param.keep_grasp_rigid;
+  goal.grasp_position_tolerance_m = param.grasp_position_tolerance_m;
+  goal.grasp_orientation_tolerance_rad = param.grasp_orientation_tolerance_rad;
   goal.body_tilt_deg = param.body_tilt_deg;
   goal.body_height_m = param.body_height_m;
   goal.precision_arrival = param.precision_arrival;
@@ -656,7 +659,7 @@ ActionCallResult TaskActionClient::call_move_joints(
 
   LOG_INFO(node_->get_logger(), task_log::Tag::ARM, "MoveJoints action server connected successfully");
 
-  if (param.relative_position || waist_only_goal) {
+  if (param.relative_position || (waist_only_goal && !param.keep_grasp_rigid)) {
     std::lock_guard<std::mutex> lock(waist_state_mutex_);
     const double age = waist_state_ ?
       (node_->now().nanoseconds() - rclcpp::Time(waist_state_->header.stamp).nanoseconds()) * 1e-9 : 1e9;
@@ -681,6 +684,12 @@ ActionCallResult TaskActionClient::call_move_joints(
       "J4 " << (param.relative_position ? "delta=" : "absolute=")
       << param.position[0] << ", target=" << goal.position[3]
       << ", held legs=[" << goal.position[0] << "," << goal.position[1] << "," << goal.position[2] << "]");
+    if (param.keep_grasp_rigid) {
+      // The server freezes legs from its own fresh measured start. Only resolve
+      // a relative waist angle here; do not turn it into three leg commands.
+      const double waist_target=goal.position[3];
+      goal.joint_name={"body_joint"};goal.position={waist_target};
+    }
   }
 
   auto send_goal_options = rclcpp_action::Client<MoveJoints>::SendGoalOptions();

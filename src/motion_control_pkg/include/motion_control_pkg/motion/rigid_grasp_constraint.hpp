@@ -26,6 +26,9 @@ public:
   bool checkTargets(const Eigen::Isometry3d& left, const Eigen::Isometry3d& right,
                     std::string& error) const;
   bool projectPath(Path&, const Path& pinned, std::string& error);
+  // Prescribed leg path: preserve every non-arm coordinate, solve both arms
+  // including the final grasp pose, and leave the input unchanged on failure.
+  bool compensateLegPath(Path&, std::string& error);
   bool validatePath(const Path&, std::string& error);
   bool checkMeasured(const std::vector<std::string>&, const Q&, std::string& error);
 private:

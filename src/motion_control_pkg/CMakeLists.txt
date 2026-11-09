@@ -453,6 +453,19 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    get_filename_component(_rigid_interface_prefix "${com_interfaces_DIR}/../../.." ABSOLUTE)
+    foreach(rigid_test leg_rigid_grasp leg_rigid_execution)
+        add_executable(test_${rigid_test} test/${rigid_test}_test.cpp src/whole_body_module.cpp)
+        target_include_directories(test_${rigid_test} PRIVATE
+            $<TARGET_PROPERTY:motion_control_node,INCLUDE_DIRECTORIES>
+            include/motion_control_pkg/MarvinSDK)
+        target_link_libraries(test_${rigid_test} motion_planning_core dual_arm_sdk_core)
+        ament_target_dependencies(test_${rigid_test} rclcpp_action tf2 tf2_ros tf2_geometry_msgs)
+        add_test(NAME ${rigid_test} COMMAND test_${rigid_test} "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+        set_tests_properties(${rigid_test} PROPERTIES TIMEOUT 180
+            ENVIRONMENT "ROS_DOMAIN_ID=225;ROS_LOCALHOST_ONLY=1;LD_LIBRARY_PATH=${_rigid_interface_prefix}/lib:$ENV{LD_LIBRARY_PATH};AMENT_PREFIX_PATH=${_rigid_interface_prefix}:$ENV{AMENT_PREFIX_PATH}"
+            RUN_SERIAL TRUE)
+    endforeach()
     add_executable(test_rigid_grasp test/rigid_grasp_test.cpp)
     target_link_libraries(test_rigid_grasp motion_planning_core dual_arm_sdk_core)
     ament_target_dependencies(test_rigid_grasp com_interfaces)
