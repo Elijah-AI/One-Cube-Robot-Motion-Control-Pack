@@ -182,3 +182,6 @@ Testing/
 !/vendor/driver_sdk/lib/*.so
 !/vendor/driver_sdk/loong_third_party/lib/*.so
 !/vendor/driver_sdk/igh_install/lib/*.so*
+
+# Coupled suction grasp offline regression.
+!/src/motion_control_pkg/test/rigid_grasp_test.cpp

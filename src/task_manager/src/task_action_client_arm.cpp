@@ -258,6 +258,11 @@ ActionCallResult TaskActionClient::call_move_pose(
   goal.enable_move_line = param.enable_move_line;
   goal.whole_body_waist_only = param.whole_body_waist_only;
   goal.precision_arrival = param.precision_arrival;
+  goal.keep_tcp_level = param.keep_tcp_level;
+  goal.tcp_level_tolerance_rad = param.tcp_level_tolerance_rad;
+  goal.keep_grasp_rigid = param.keep_grasp_rigid;
+  goal.grasp_position_tolerance_m = param.grasp_position_tolerance_m;
+  goal.grasp_orientation_tolerance_rad = param.grasp_orientation_tolerance_rad;
 
   // ========== 参数打印（实际发送的 Goal） ==========
   {

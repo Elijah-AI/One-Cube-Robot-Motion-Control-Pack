@@ -76,6 +76,11 @@ struct MovePoseParam
   bool enable_move_line;                  ///< 是否启用笛卡尔直线运动
   bool whole_body_waist_only{false};       ///< 全身 MoveP 仅使用腰部 J4 和所选手臂
   bool precision_arrival{false};          ///< 腿腰/WBC 精定位，按动作显式开启
+  bool keep_tcp_level{false};             ///< 仅 WBC arm_id=5/6/7 可开启腿腰运动中的 TCP 水平补偿
+  double tcp_level_tolerance_rad{0.02};    ///< 水平倾角容差，rad
+  bool keep_grasp_rigid{false};            ///< 双吸盘刚性约束，仅 WBC BOTH
+  double grasp_position_tolerance_m{.001};
+  double grasp_orientation_tolerance_rad{.005};
   float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
   float jerk_scale{0.0f};                 ///< 0=默认，(0,1]额外 jerk 比例
   float speed;                            ///< 控制速度，范围0～1

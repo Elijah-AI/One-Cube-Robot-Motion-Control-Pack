@@ -11,6 +11,8 @@
 // 以及开机自检/复位任务序列。
 
 #include "task_manager/task_config_parser.hpp"
+#include "com_interfaces/tcp_level_goal.hpp"
+#include "com_interfaces/rigid_grasp_goal.hpp"
 #include "task_manager/log_helper.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
 #include <rclcpp/rclcpp.hpp>
@@ -631,7 +633,28 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
   // 机械臂位姿移动参数（对应 MovePose.action）
   act.arm_param.arm_id = p["arm_id"].as<uint8_t>();
   act.arm_param.precision_arrival = parse_precision_arrival(p, act.arm_param.arm_id, true);
+  act.arm_param.keep_tcp_level = p["keep_tcp_level"] ? p["keep_tcp_level"].as<bool>() : false;
+  act.arm_param.tcp_level_tolerance_rad = p["tcp_level_tolerance_rad"] ?
+    p["tcp_level_tolerance_rad"].as<double>() : 0.02;
+  std::string level_error;
+  if (!com_interfaces::validateTcpLevelGoal(act.arm_param.keep_tcp_level,
+      act.arm_param.tcp_level_tolerance_rad, act.arm_param.arm_id, true,
+      p["control_mode"] ? p["control_mode"].as<uint8_t>() : 0, level_error))
+    throw std::invalid_argument(level_error);
   act.arm_param.enable_collision_check = parse_collision_mode(p);
+  act.arm_param.keep_grasp_rigid = p["keep_grasp_rigid"] ? p["keep_grasp_rigid"].as<bool>() : false;
+  act.arm_param.grasp_position_tolerance_m = p["grasp_position_tolerance_m"] ? p["grasp_position_tolerance_m"].as<double>() : .001;
+  act.arm_param.grasp_orientation_tolerance_rad = p["grasp_orientation_tolerance_rad"] ? p["grasp_orientation_tolerance_rad"].as<double>() : .005;
+  struct RigidGoalView {
+    bool keep_grasp_rigid, keep_tcp_level, use_force_control;
+    int arm_id, control_mode, synchronization_mode;
+    double grasp_position_tolerance_m, grasp_orientation_tolerance_rad;
+  } rigid_view{act.arm_param.keep_grasp_rigid, act.arm_param.keep_tcp_level,
+    p["use_force_control"] ? p["use_force_control"].as<bool>() : false, act.arm_param.arm_id,
+    p["control_mode"] ? p["control_mode"].as<int>() : 0,
+    p["synchronization_mode"] ? p["synchronization_mode"].as<int>() : 0,
+    act.arm_param.grasp_position_tolerance_m, act.arm_param.grasp_orientation_tolerance_rad};
+  if(!com_interfaces::validateRigidGraspGoal(rigid_view,level_error)) throw std::invalid_argument(level_error);
   act.arm_param.use_config_pose = p["use_config_pose"].as<bool>();
   act.arm_param.use_force_control = p["use_force_control"].as<bool>();
     act.arm_param.enable_move_line = p["enable_move_line"] ?
@@ -821,6 +844,8 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   // 关节空间移动参数
   act.move_joints_param.arm_id = p["arm_id"].as<uint8_t>();
   act.move_joints_param.precision_arrival = parse_precision_arrival(p, act.move_joints_param.arm_id, false);
+  if(p["keep_grasp_rigid"] && p["keep_grasp_rigid"].as<bool>())
+    throw std::invalid_argument("keep_grasp_rigid is only supported by WBC BOTH MovePose");
   act.move_joints_param.enable_collision_check = parse_collision_mode(p);
   act.move_joints_param.acceleration_scale = scale("acceleration_scale");
   act.move_joints_param.jerk_scale = scale("jerk_scale");

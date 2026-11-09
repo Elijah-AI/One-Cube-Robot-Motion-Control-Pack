@@ -3,6 +3,7 @@
 #include "motion_control_pkg/motion/scoped_collision_scene.hpp"
 #include "motion_control_pkg/motion/tcp_level_plan.hpp"
 #include "com_interfaces/tcp_level_goal.hpp"
+#include "com_interfaces/rigid_grasp_goal.hpp"
 #include "com_interfaces/precision_arrival_goal.hpp"
 #include "whole_body_module.hpp"
 
@@ -19,6 +20,13 @@
 
 namespace
 {
+motion_control_pkg::motion::RigidGraspOptions graspOptions(const MovePose::Goal& goal) {
+    return {goal.keep_grasp_rigid,goal.grasp_position_tolerance_m,goal.grasp_orientation_tolerance_rad};
+}
+Eigen::Isometry3d graspFrame(const Eigen::Isometry3d& left,const Eigen::Isometry3d& right) {
+    Eigen::Isometry3d frame=left;
+    frame.translation()=.5*(left.translation()+right.translation());return frame;
+}
 
 class HardwareWholeBodyBackend final : public motion_control_pkg::execution::WholeBodyExecutionBackend {
 public:
@@ -515,6 +523,10 @@ bool WholeBodyModule::plan_trajectory(
             goal->arm_id, true, goal->control_mode, error_message)) return false;
     if (!com_interfaces::validateTcpLevelGoal(goal->keep_tcp_level, goal->tcp_level_tolerance_rad,
             goal->arm_id, true, goal->control_mode, error_message)) return false;
+    if (!com_interfaces::validateRigidGraspGoal(*goal,error_message)) return false;
+    if(goal->keep_grasp_rigid && dynamic_zmp_enabled_) {
+        error_message="rigid grasp currently requires fixed-base kinematic WBC (dynamic ZMP disabled)";return false;
+    }
     if (goal->whole_body_waist_only && goal->enable_move_line) {
         error_message = "whole_body_waist_only requires MoveP (enable_move_line=false)";
         return false;
@@ -530,7 +542,7 @@ bool WholeBodyModule::plan_trajectory(
         goal->arm_id == WHOLE_BODY_BOTH;
     motion_control_pkg::motion::TcpLevelPlan level(goal->keep_tcp_level,
         miracle_algo_->getModel(), start_q, use_left, use_right, true,
-        left_model_end_to_tool_tcp_, right_model_end_to_tool_tcp_, goal->tcp_level_tolerance_rad);
+        left_model_end_to_tool_tcp_, right_model_end_to_tool_tcp_, goal->tcp_level_tolerance_rad,graspOptions(*goal));
     if (!level.initialize(error_message)) return false;
     std::vector<double> frozen_leg_q;
     if (goal->whole_body_waist_only &&
@@ -607,6 +619,8 @@ bool WholeBodyModule::plan_trajectory(
 
     if ((use_left && !level.target(true, left_root_goal * left_model_end_to_tool_tcp_, error_message)) ||
         (use_right && !level.target(false, right_root_goal * right_model_end_to_tool_tcp_, error_message))) return false;
+    if(!level.targets(left_root_goal*left_model_end_to_tool_tcp_,
+                      right_root_goal*right_model_end_to_tool_tcp_,error_message)) return false;
     Eigen::Isometry3d left_start = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d right_start = Eigen::Isometry3d::Identity();
     if (use_left && !miracle_algo_->getFramePoseAtConfiguration(
@@ -629,6 +643,16 @@ bool WholeBodyModule::plan_trajectory(
     const double acceleration_scale = goal->acceleration_scale == 0 ? 1 : goal->acceleration_scale;
     const double jerk_scale = goal->jerk_scale == 0 ? 1 : goal->jerk_scale;
     std::vector<std::vector<double>> full_waypoints;
+    const auto object_start=graspFrame(left_start*left_model_end_to_tool_tcp_,right_start*right_model_end_to_tool_tcp_);
+    const auto object_goal=graspFrame(left_root_goal*left_model_end_to_tool_tcp_,right_root_goal*right_model_end_to_tool_tcp_);
+    const Eigen::Isometry3d object_left=object_start.inverse()*left_start*left_model_end_to_tool_tcp_;
+    const Eigen::Isometry3d object_right=object_start.inverse()*right_start*right_model_end_to_tool_tcp_;
+    const auto rigid_steps=[&](double alpha) {
+        const auto object=interpolatePose(object_start,object_goal,alpha);
+        return std::array<Eigen::Isometry3d,2>{
+            object*object_left*left_model_end_to_tool_tcp_.inverse(),
+            object*object_right*right_model_end_to_tool_tcp_.inverse()};
+    };
 
     if (goal->enable_move_line) {
         // Sample TCP geometry independently of time. Both arms use one path
@@ -655,14 +679,17 @@ bool WholeBodyModule::plan_trajectory(
                 full_waypoints.push_back(start_q);
                 continue;
             }
-            const auto left_step = use_left ?
+            auto left_step = use_left ?
                 std::optional<Eigen::Isometry3d>(interpolatePose(
                     left_start * left_model_end_to_tool_tcp_, left_root_goal * left_model_end_to_tool_tcp_, alpha) *
                     left_model_end_to_tool_tcp_.inverse()) : std::nullopt;
-            const auto right_step = use_right ?
+            auto right_step = use_right ?
                 std::optional<Eigen::Isometry3d>(interpolatePose(
                     right_start * right_model_end_to_tool_tcp_, right_root_goal * right_model_end_to_tool_tcp_, alpha) *
                     right_model_end_to_tool_tcp_.inverse()) : std::nullopt;
+            if(goal->keep_grasp_rigid) {
+                const auto coupled=rigid_steps(alpha);left_step=coupled[0];right_step=coupled[1];
+            }
             Eigen::VectorXd q_next;
             if (!miracle_algo_->solveWholeBodyIK(
                 q_current, left_step, right_step, q_next,
@@ -724,10 +751,13 @@ bool WholeBodyModule::plan_trajectory(
             for (std::size_t step = 1U; step <= steps; ++step) {
                 const double alpha = static_cast<double>(step) /
                     static_cast<double>(steps);
-                const auto left_step = std::optional<Eigen::Isometry3d>(
+                auto left_step = std::optional<Eigen::Isometry3d>(
                     interpolatePose(left_start, left_root_goal, alpha));
-                const auto right_step = std::optional<Eigen::Isometry3d>(
+                auto right_step = std::optional<Eigen::Isometry3d>(
                     interpolatePose(right_start, right_root_goal, alpha));
+                if(goal->keep_grasp_rigid) {
+                    const auto coupled=rigid_steps(alpha);left_step=coupled[0];right_step=coupled[1];
+                }
                 Eigen::VectorXd q_next;
                 if (!miracle_algo_->solveWholeBodyIK(
                         q_current, left_step, right_step, q_next,
@@ -798,7 +828,7 @@ bool WholeBodyModule::plan_trajectory(
     // Keep the existing four-axis lower-body wire format: J1/J2/J3 hold the
     // measured start, J4 moves. Never repair a genuinely moving leg trajectory
     // by overwriting it after IK; only remove floating-point interpolation noise.
-    if (!goal->enable_move_line && !level.project(active_waypoints, error_message)) return false;
+    if ((!goal->enable_move_line || goal->keep_grasp_rigid) && !level.project(active_waypoints, error_message)) return false;
     const auto enforce_frozen_legs = [&](std::vector<std::vector<double>>& path) {
         if (!goal->whole_body_waist_only) return true;
         const std::size_t offset = (use_left ? 7U : 0U) + (use_right ? 7U : 0U);
@@ -999,7 +1029,18 @@ bool WholeBodyModule::plan_trajectory(
                 error_message = "retimed whole-body trajectory violates URDF position limits"; return false;
             }
         }
-        if (goal->enable_move_line) {
+        if (goal->enable_move_line && goal->keep_grasp_rigid) {
+            Eigen::Isometry3d actual_left,actual_right;
+            if(!miracle_algo_->getFramePoseAtConfiguration("base_link","gripper_base_l_link",full_q,actual_left)||
+               !miracle_algo_->getFramePoseAtConfiguration("base_link","gripper_base_r_link",full_q,actual_right)) {
+                error_message="cannot validate rigid object MoveL FK";return false;
+            }
+            const auto actual=graspFrame(actual_left*left_model_end_to_tool_tcp_,actual_right*right_model_end_to_tool_tcp_);
+            const auto deviation=motion_control_pkg::motion::evaluateCartesianLineSample(object_start,object_goal,actual);
+            if(!deviation.valid||deviation.position_error_m>.003||deviation.orientation_error_rad>.02) {
+                error_message="rigid object MoveL exceeds 3 mm / 0.02 rad object-frame line tolerance";return false;
+            }
+        } else if (goal->enable_move_line) {
             for (bool left : {true, false}) {
                 if ((left && !use_left) || (!left && !use_right)) continue;
                 const auto& tool = left ? left_model_end_to_tool_tcp_ : right_model_end_to_tool_tcp_;
@@ -1156,7 +1197,7 @@ void WholeBodyModule::execution_loop(
     publish_feedback(20.0F,"preparing arm and leg trajectories");
     motion_control_pkg::motion::TcpLevelPlan level_monitor(goal->keep_tcp_level,
         miracle_algo_->getModel(), start_q, need_left, need_right, true,
-        left_model_end_to_tool_tcp_, right_model_end_to_tool_tcp_, goal->tcp_level_tolerance_rad);
+        left_model_end_to_tool_tcp_, right_model_end_to_tool_tcp_, goal->tcp_level_tolerance_rad,graspOptions(*goal));
     if (!level_monitor.initialize(result->error_message) ||
         !level_monitor.startMonitoring(result->error_message)) {
         finish_time(); terminal.abort(result); release_child_resources(); return;

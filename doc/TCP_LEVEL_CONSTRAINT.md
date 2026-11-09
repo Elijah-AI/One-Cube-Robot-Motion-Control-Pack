@@ -1,5 +1,7 @@
 # WBC 末端水平约束
 
+双吸盘搬运同一个刚性箱体时，请使用 [keep_grasp_rigid 刚性搬箱模式](RIGID_GRASP.md)。本页的 `keep_tcp_level` 仅保持各自倾角，不保持双手相对位姿、间距或共同高度。
+
 ## 默认行为
 
 仅 WBC `MovePose` 的 MoveP/MoveL（`arm_id=5/6/7`）可显式开启。所有 `MoveJoints`（包括独立腰腿 `arm_id=4`）设置 true 均被拒绝：

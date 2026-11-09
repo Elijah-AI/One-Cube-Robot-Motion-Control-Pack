@@ -253,7 +253,7 @@ endif()
 add_executable(motion_control_node ${SOURCES})
 
 # Shared production planning core, independent of hardware SDKs.
-add_library(motion_planning_core STATIC src/miracle_m_algo.cpp src/parallel_planning.cpp src/motion/leg_body_orientation.cpp src/motion/leg_body_motion.cpp src/motion/tcp_level_constraint.cpp)
+add_library(motion_planning_core STATIC src/miracle_m_algo.cpp src/parallel_planning.cpp src/motion/leg_body_orientation.cpp src/motion/leg_body_motion.cpp src/motion/tcp_level_constraint.cpp src/motion/rigid_grasp_constraint.cpp)
 target_include_directories(motion_planning_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg
@@ -453,6 +453,11 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    add_executable(test_rigid_grasp test/rigid_grasp_test.cpp)
+    target_link_libraries(test_rigid_grasp motion_planning_core dual_arm_sdk_core)
+    ament_target_dependencies(test_rigid_grasp com_interfaces)
+    add_test(NAME rigid_grasp COMMAND test_rigid_grasp "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+    set_tests_properties(rigid_grasp PROPERTIES TIMEOUT 180)
     add_test(NAME robot_tf COMMAND /usr/bin/python3
         "${CMAKE_CURRENT_SOURCE_DIR}/test/robot_tf_test.py"
         "${CMAKE_CURRENT_SOURCE_DIR}")

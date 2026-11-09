@@ -28,6 +28,14 @@ uint8 control_mode
 bool keep_tcp_level false
 float64 tcp_level_tolerance_rad 0.02 
 
+# Rigid two-suction top grasp, WBC BOTH only. Uses calibrated tool TCPs.
+# Capture initial left_T_right; hold it throughout the path and measured execution.
+# Both contact points share a height and both suction +Z axes point down.
+# Common translation and yaw are allowed. Mutually exclusive with keep_tcp_level.
+bool keep_grasp_rigid false
+float64 grasp_position_tolerance_m 0.001
+float64 grasp_orientation_tolerance_rad 0.005
+
 # ARM_LEFT/ARM_RIGHT 使用 target_pose/bound_size。
 # Optional continuous MoveP via TCP poses; single arm only, no intermediate stops.
 # Empty preserves the existing one-target action. Each via pose supplies its frame.

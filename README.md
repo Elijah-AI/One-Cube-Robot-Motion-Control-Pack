@@ -5,6 +5,7 @@ ROS 2 Humble 全身运控、双臂运动、视觉与任务编排工作区，源�
 - **[运控指令与参数完整说明](doc/MOTION_COMMANDS_AND_PARAMETERS.md)**：全部运控 Action 字段、部件模式、MoveJ/MoveP/MoveL、腰腿协同、身体升降/倾角、夹爪/吸盘、启动参数、WBC、碰撞、反馈和任务 YAML。
 - [工作区与专题文档](doc/README.md)
 - [任务节点命令](doc/TASK_NODE_COMMANDS.md)
+- [双吸盘刚性搬箱](doc/RIGID_GRASP.md)：吸盘竖直向下、接触点同高、双手相对位姿和间距保持。
 
 当前发布保留功能源码、接口、配置、模型、必要的第三方依赖和使用示例；保留由 `BUILD_TESTING` 控制的硬件无关回归源码；构建产物、现场测试任务和备份不提交。构建产物与备份不提交。
 

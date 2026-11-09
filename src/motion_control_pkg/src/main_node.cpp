@@ -18,6 +18,7 @@
 #include "com_interfaces/leg_joint_goal.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
 #include "com_interfaces/tcp_level_goal.hpp"
+#include "com_interfaces/rigid_grasp_goal.hpp"
 #include "com_interfaces/precision_arrival_goal.hpp"
 #include "dual_arm_module.hpp"
 #include "ethercat_bus_manager.hpp"
@@ -594,6 +595,10 @@ private:
         std::string constraint_error;
         if (!com_interfaces::validatePrecisionArrivalGoal(goal->precision_arrival,
                 goal->arm_id, true, goal->control_mode, constraint_error)) {
+            RCLCPP_WARN(get_logger(), "%s", constraint_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (!com_interfaces::validateRigidGraspGoal(*goal,constraint_error)) {
             RCLCPP_WARN(get_logger(), "%s", constraint_error.c_str());
             return rclcpp_action::GoalResponse::REJECT;
         }
