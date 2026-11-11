@@ -967,7 +967,7 @@ bool WholeBodyModule::plan_trajectory(
             if (!miracle_algo_->solveWholeBodyIK(
                 q_current, left_step, right_step, q_next,
                 std::array<double, 4>{1.0, 1.0, 1.0, 0.2},
-                0.0, 10.0, 3U, false)) {
+                0.0, 10.0, 3U, false, false, true)) {
                 error_message = "whole-body weighted IK failed at Cartesian line waypoint " +
                     std::to_string(sample_index) + "/" +
                     std::to_string(scalars.size() - 1U);
@@ -1427,6 +1427,10 @@ void WholeBodyModule::execution_loop(
     std::optional<Eigen::Isometry3d> left_target_tcp;
     std::optional<Eigen::Isometry3d> right_target_tcp;
     motion_control_pkg::wbc::ReferenceResult reference;
+    motion_control_pkg::motion::IkPlanningStopScope ik_stop([&] {
+        return goal_handle->is_canceling() || (goal->timeout_ms > 0 &&
+            std::chrono::steady_clock::now() - started_at >= std::chrono::milliseconds(goal->timeout_ms));
+    });
     bool planned=false;
     if constexpr (leg_goal) {
         planned=plan_leg_trajectory(goal,start_q,left_path,right_path,leg_path,planning_error);
@@ -1435,9 +1439,11 @@ void WholeBodyModule::execution_loop(
             left_target_tcp,right_target_tcp,backend_->needs_reference() ? &reference : nullptr);
     }
     if(!planned) {
-        result->error_message = planning_error;
+        const bool canceled = goal_handle->is_canceling();
+        result->error_message = canceled ? "whole-body motion canceled during planning" : planning_error;
         finish_time();
-        terminal.abort(result);
+        if (canceled) terminal.cancel(result);
+        else terminal.abort(result);
         release_child_resources();
         return;
     }

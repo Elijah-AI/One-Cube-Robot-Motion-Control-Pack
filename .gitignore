@@ -192,3 +192,10 @@ Testing/
 !/src/motion_control_pkg/test/leg_rigid_execution_test.cpp
 !/src/task_manager/test/test_rigid_leg_contract.cpp
 !/src/task_manager/test/run_rigid_leg_contract.py
+
+# IK failure recovery regression and deterministic failure fixtures.
+!/src/motion_control_pkg/test/ik_seed_sampler_test.cpp
+!/src/motion_control_pkg/test/ik_recovery_test.cpp
+!/src/motion_control_pkg/test/fixtures/
+/src/motion_control_pkg/test/fixtures/*
+!/src/motion_control_pkg/test/fixtures/ik_recovery_failures.json

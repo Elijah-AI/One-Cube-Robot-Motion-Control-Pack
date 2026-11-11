@@ -46,6 +46,13 @@ def generate_launch_description():
                     '/opt/onecube/driver_sdk/configuration.xml'),
                 description='Driver SDK XML configuration file',
             ),
+            DeclareLaunchArgument('ik_recovery_enabled', default_value='true', choices=['true', 'false']),
+            DeclareLaunchArgument('ik_recovery_seed_count', default_value='24'),
+            DeclareLaunchArgument('ik_recovery_worker_count', default_value='8'),
+            DeclareLaunchArgument('ik_recovery_cpus', default_value='auto',
+                                  description='auto prefers E cores on hybrid SMT CPUs; or comma-separated CPU IDs'),
+            DeclareLaunchArgument('ik_recovery_seed_timeout_s', default_value='0.5'),
+            DeclareLaunchArgument('ik_recovery_timeout_s', default_value='2.0'),
             DeclareLaunchArgument(
                 'active_arm_configuration',
                 default_value='dual_arm',
@@ -81,6 +88,12 @@ def generate_launch_description():
                         'planning_worker_count': ParameterValue(
                             LaunchConfiguration('planning_worker_count'), value_type=int),
                         'collision_pointcloud_topic': LaunchConfiguration('collision_pointcloud_topic'),
+                        'ik_recovery_enabled': ParameterValue(LaunchConfiguration('ik_recovery_enabled'), value_type=bool),
+                        'ik_recovery_seed_count': ParameterValue(LaunchConfiguration('ik_recovery_seed_count'), value_type=int),
+                        'ik_recovery_worker_count': ParameterValue(LaunchConfiguration('ik_recovery_worker_count'), value_type=int),
+                        'ik_recovery_cpus': ParameterValue(LaunchConfiguration('ik_recovery_cpus'), value_type=str),
+                        'ik_recovery_seed_timeout_s': ParameterValue(LaunchConfiguration('ik_recovery_seed_timeout_s'), value_type=float),
+                        'ik_recovery_timeout_s': ParameterValue(LaunchConfiguration('ik_recovery_timeout_s'), value_type=float),
                     }
                 ],
             ),

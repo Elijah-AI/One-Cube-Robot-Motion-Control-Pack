@@ -248,6 +248,38 @@ ros2 param get /motion_control_ns/motion_control planning_worker_count
 
 实现依据：[启动参数](../src/motion_control_pkg/launch/bringup.launch.py)、[节点初始化](../src/motion_control_pkg/src/main_node.cpp)、[并行规划](../src/motion_control_pkg/src/parallel_planning.cpp)、[持久线程池](../src/motion_control_pkg/include/motion_control_pkg/motion/planning_worker_pool.hpp)、[离线回归](../src/motion_control_pkg/test/parallel_planning_test.cpp)。
 
+### 2.6 普通 IK 失败后的多 seed 重解
+
+2026-11-11 新增。原 IK（包括其已有回退）成功时直接返回；数值失败后追加最多 **24 个新初值**，默认由 **8 个持久求解进程**并行计算。该功能独立于 `planning_worker_count`。启动时预热模型与进程，正常请求不派发随机重解。
+
+| 启动参数 | 默认值 | 作用 |
+|---|---|---|
+| `ik_recovery_enabled` | `true` | 开启普通 IK 失败重解 |
+| `ik_recovery_seed_count` | `24` | 额外初值上限，范围 1–96；不重复已失败的参考初值 |
+| `ik_recovery_worker_count` | `8` | 工作进程上限，范围 1–8 |
+| `ik_recovery_cpus` | `auto` | 混合 SMT 拓扑优先单线程能效核；也可指定逗号分隔的 CPU 编号，数量须与进程数一致 |
+| `ik_recovery_seed_timeout_s` | `0.5` | 单 seed 求解预算，最大 0.5 秒 |
+| `ik_recovery_timeout_s` | `2.0` | 一轮重解总预算，含生成和当前场景传递；仍受 Action 自身剩余时限约束 |
+
+在已核验的 i7-1355U 上，`auto` 对应 CPU 4–11，保留两个 P 核的全部线程；其他机器根据允许的 CPU 集合和拓扑选择，不能把相同逻辑编号直接当作能效核。无混合 SMT 特征时退回可用物理核；可用核不足时缩减进程数。以 `IK failure recovery` 启动日志中的实际 CPUs 和 workers 为准。参数均为启动时只读。
+
+```bash
+# 下一次正常启动时可显式固定这台 x86 的 8 个 E 核。
+ros2 launch motion_control_pkg bringup.launch.py \
+  ik_recovery_enabled:=true ik_recovery_seed_count:=24 \
+  ik_recovery_worker_count:=8 ik_recovery_cpus:=4,5,6,7,8,9,10,11
+```
+
+接入普通单/双臂目标、通用头部/腰腿位姿内核及全身目标 IK。MoveL 续接、旧直线规划接口和全身直线插点保留原求解方式；竖直升降的专用 `LegBodyMotionPlanner::solveHeight` 不属于这次普通位姿 IK 接口。全身调用显式设置 `max_seed_attempts=0` 时保留禁止额外重试的语义。
+
+种子按近/中/远 2:1:1 交错生成，直接在限位和 J6/J7 耦合范围内采样，按关节范围归一化距离去重，保持冻结关节。每次传递当前碰撞模式、碰撞对、盒体/点云及静态 COM 配置；返回候选还在主规划上下文复核 FK、限位、冻结关节、J6/J7、自碰撞/环境及适用的静态 COM。完整轨迹的碰撞、水平/刚性约束、重定时和下发前反馈检查继续执行。
+
+协调进程通过 `posix_spawn` 启动独立 `ik_recovery_worker`，加载模型后在单线程状态创建工作进程，避免从 ROS/DDS 多线程进程直接 `fork`。首个合格候选获确认后停止派发并取消在途求解；请求编号隔离迟到结果。每 seed 的 0.5 秒在迭代边界检查，卡住的工作进程另由协调端隔离回收；总预算/取消后可能有短暂清理时间，不是精确到 0.500 秒的硬实时返回保证。
+
+取消、Action 超时、反馈失效或运动保护阻止重解，超预算结果不被采纳。单个工作进程异常由协调端回收；协调进程本身异常则当次重解失败并记录状态，原 IK 成功路径仍可使用，重新启动运控会重建进程池。`IK recovery` 日志记录实际生成/派发数、超时数、进程数和耗时。
+
+新增离线测试为 `ik_seed_sampler`、`ik_recovery`；求解工作程序不初始化 ROS、不连接电机 SDK。源码编译安装与运行实例是否重启生效须分别核对。
+
 ## 3. MoveJoints：手臂、头部、腰腿
 
 ### 3.1 Goal 全字段

@@ -253,7 +253,7 @@ endif()
 add_executable(motion_control_node ${SOURCES})
 
 # Shared production planning core, independent of hardware SDKs.
-add_library(motion_planning_core STATIC src/miracle_m_algo.cpp src/parallel_planning.cpp src/motion/leg_body_orientation.cpp src/motion/leg_body_motion.cpp src/motion/tcp_level_constraint.cpp src/motion/rigid_grasp_constraint.cpp)
+add_library(motion_planning_core STATIC src/miracle_m_algo.cpp src/parallel_planning.cpp src/ik_recovery_client.cpp src/ik_recovery_solver.cpp src/motion/leg_body_orientation.cpp src/motion/leg_body_motion.cpp src/motion/tcp_level_constraint.cpp src/motion/rigid_grasp_constraint.cpp)
 target_include_directories(motion_planning_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg
@@ -265,6 +265,13 @@ target_link_libraries(motion_planning_core
     Threads::Threads
     Eigen3::Eigen pinocchio::pinocchio coal::coal ompl::ompl ruckig::ruckig
     toppra_lib ${sysCoreLibs} octomap octomath jsoncpp ${PCL_LIBRARIES})
+
+# Model-only executable: posix_spawn from ROS, then fork its workers before
+# creating any threads. No motor SDK is linked; ROS is not initialized here.
+add_executable(ik_recovery_worker src/ik_recovery_worker.cpp)
+target_link_libraries(ik_recovery_worker motion_planning_core)
+set_target_properties(ik_recovery_worker PROPERTIES INSTALL_RPATH "$ORIGIN;$ORIGIN/..")
+install(TARGETS ik_recovery_worker DESTINATION lib/${PROJECT_NAME})
 
 # Pinocchio 会把 Boost MPL 容器上限扩展到 30；必须同时禁用 Boost
 # 自带的 20 元素预生成头，否则 OMPL 引入 Boost.MultiIndex 时会模板展开失败。
@@ -453,6 +460,14 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    add_executable(test_ik_seed_sampler test/ik_seed_sampler_test.cpp)
+    target_include_directories(test_ik_seed_sampler PRIVATE include)
+    add_test(NAME ik_seed_sampler COMMAND test_ik_seed_sampler)
+    add_executable(test_ik_recovery test/ik_recovery_test.cpp)
+    target_link_libraries(test_ik_recovery motion_planning_core)
+    add_dependencies(test_ik_recovery ik_recovery_worker)
+    add_test(NAME ik_recovery COMMAND test_ik_recovery "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+    set_tests_properties(ik_recovery PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
     get_filename_component(_rigid_interface_prefix "${com_interfaces_DIR}/../../.." ABSOLUTE)
     foreach(rigid_test leg_rigid_grasp leg_rigid_execution)
         add_executable(test_${rigid_test} test/${rigid_test}_test.cpp src/whole_body_module.cpp)

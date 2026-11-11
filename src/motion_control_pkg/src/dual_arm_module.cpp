@@ -1003,6 +1003,7 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
     }
     motion_control_pkg::execution::SteadyDeadline deadline(
         std::chrono::milliseconds(goal->timeout_ms));
+    motion_control_pkg::motion::IkPlanningStopScope ik_stop([&] { return deadline.expired() || goal_handle->is_canceling(); });
     publish_feedback(
         MoveJoints::Feedback::STATUS_PLANNING, 0.0F, 0.0F,
         "reading one synchronized dual-arm state snapshot");
@@ -1441,6 +1442,10 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
         result->success = false;
         result->error_message = message;
         update_time();
+        if (goal_handle->is_canceling()) {
+            terminal.cancel(result);
+            return;
+        }
         RCLCPP_ERROR(
             rclcpp::get_logger("dual_arm_module"),
             "Dual-arm MovePose failed: %s",
@@ -1502,6 +1507,7 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
     }
     motion_control_pkg::execution::SteadyDeadline deadline(
         requested_timeout - elapsed_before_planning);
+    motion_control_pkg::motion::IkPlanningStopScope ik_stop([&] { return deadline.expired() || goal_handle->is_canceling(); });
     publish_feedback(
         MovePose::Feedback::STATUS_PLANNING, 0.0F, 0.0F,
         "reading one synchronized dual-arm state snapshot");
@@ -2181,6 +2187,7 @@ void DualArmModule::execution_loop_move_joint_impl(
     const auto timeout = std::chrono::milliseconds(
         goal->timeout_ms > 0 ? goal->timeout_ms : 5000);
     motion_control_pkg::execution::SteadyDeadline deadline(timeout);
+    motion_control_pkg::motion::IkPlanningStopScope ik_stop([&] { return deadline.expired() || goal_handle->is_canceling(); });
     const std::size_t arm_index = static_cast<std::size_t>(channel);
     const char* arm_name =
         channel == motion_control_pkg::sdk::ArmChannel::kLeft ?
@@ -2501,6 +2508,10 @@ void DualArmModule::execution_loop_move_pose_impl(
         result->success = ACTION_FAIL;
         result->error_message = message;
         update_execution_time();
+        if (goal_handle->is_canceling()) {
+            terminal.cancel(result);
+            return;
+        }
         RCLCPP_ERROR(
             rclcpp::get_logger("dual_arm_module"),
             "MovePose (%s arm) failed: %s",
@@ -2615,6 +2626,7 @@ void DualArmModule::execution_loop_move_pose_impl(
     const auto timeout = std::chrono::milliseconds(
         goal->timeout_ms > 0 ? goal->timeout_ms : 5000);
     motion_control_pkg::execution::SteadyDeadline deadline(timeout);
+    motion_control_pkg::motion::IkPlanningStopScope ik_stop([&] { return deadline.expired() || goal_handle->is_canceling(); });
     RCLCPP_INFO(
         rclcpp::get_logger("dual_arm_module"),
         "Starting %s arm MovePose using Pinocchio%s and existing trajectory libraries",
@@ -3486,6 +3498,7 @@ void DualArmModule::execution_loop_control_suck(
     ControlSuckTerminalGuard terminal(goal_handle);
     motion_control_pkg::execution::SteadyDeadline deadline(
         std::chrono::milliseconds(goal->timeout_ms));
+    motion_control_pkg::motion::IkPlanningStopScope ik_stop([&] { return deadline.expired() || goal_handle->is_canceling(); });
 
     auto feedback = std::make_shared<ControlSuck::Feedback>();
     auto result = std::make_shared<ControlSuck::Result>();

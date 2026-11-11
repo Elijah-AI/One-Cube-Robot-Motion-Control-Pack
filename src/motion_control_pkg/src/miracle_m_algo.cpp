@@ -1193,7 +1193,7 @@ bool MiracleMAlgo::solveIKWithLockedData(
     return solveIKWithData(q_init, goal, q_res, mode, workspace, *data_, continuous_path, {});
 }
 
-bool MiracleMAlgo::solveIKWithData(
+bool MiracleMAlgo::solveIKKernel(
     const Eigen::VectorXd& q_init, const Eigen::Isometry3d& goal,
     Eigen::VectorXd& q_res, int mode, SingleArmIkWorkspace& workspace,
     pinocchio::Data& data, bool continuous_path, const PlanningStop& stop)
@@ -1299,7 +1299,7 @@ bool MiracleMAlgo::solveIKWithData(
 
     Eigen::VectorXd& err = workspace.error;
     for (int i=0; i<IT_MAX; i++) {
-        if (stop && stop()) return false;
+        if (motion_control_pkg::motion::ikPlanningStopped() || (stop && stop())) return false;
         // pinocchio::forwardKinematics(model_, data, q_res);
         // pinocchio::updateFramePlacements(model_, data);
         pinocchio::computeJointJacobians(model_, data, q_res);
@@ -1399,7 +1399,7 @@ bool MiracleMAlgo::solveIKWithData(
             if (!step_accepted) {
                 // Refinement may recover a smaller continuation step. A distant
                 // fallback seed would invalidate the continuous-path contract.
-                if (continuous_path) {break;}
+                if (continuous_path || motion_control_pkg::motion::ik_single_seed_kernel) {break;}
                 bool reseeded = false;
                 while (next_fallback_seed <
                     kSingleArmFallbackJoint6SeedsDeg.size() && !reseeded)
@@ -1452,7 +1452,7 @@ bool MiracleMAlgo::solveIKWithData(
     return success;
 }
 
-bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
+bool MiracleMAlgo::solveDualIKKernel(const Eigen::VectorXd& q_init,
                                   const Eigen::Isometry3d& left_goal,
                                   const Eigen::Isometry3d& right_goal,
                                   Eigen::VectorXd& q_res) {
@@ -1495,6 +1495,7 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
     Eigen::VectorXd err_left(6);
     Eigen::VectorXd err_right(6);
     for (int i=0; i<IT_MAX; i++) {
+        if (motion_control_pkg::motion::ikPlanningStopped()) return false;
         // pinocchio::forwardKinematics(model_, *data_, q_res);
         pinocchio::computeJointJacobians(model_, *data_, q_res);
         pinocchio::updateFramePlacements(model_, *data_);
@@ -1602,7 +1603,7 @@ bool MiracleMAlgo::solveDualIK(const Eigen::VectorXd& q_init,
         }
         if (!step_accepted) {
             bool reseeded = false;
-            while (next_fallback_seed <
+            while (!motion_control_pkg::motion::ik_single_seed_kernel && next_fallback_seed <
                 kDualArmFallbackJoint6SeedsDeg.size() && !reseeded)
             {
                 q_res = q_init;
@@ -1871,7 +1872,7 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
     Eigen::VectorXd err(n_task);
 
     for (int iter = 0; iter < IT_MAX; ++iter) {
-        if (std::chrono::steady_clock::now() > deadline) {
+        if (motion_control_pkg::motion::ikPlanningStopped() || std::chrono::steady_clock::now() > deadline) {
             RCLCPP_WARN(rclcpp::get_logger("MiracleMAlgo"),
                         "solveWholeBodyIKOnce: 迭代超时(iter=%d)", iter);
             break;
@@ -2288,7 +2289,7 @@ bool MiracleMAlgo::solveWholeBodyIKOnce(
 //       enable_collision_avoidance 是否启用自碰撞避免约束。
 // 输出：q_res 求得的关节角度；返回 true=有效解，false=无解/奇异/超时。
 // =============================================================================
-bool MiracleMAlgo::solveWholeBodyIK(
+bool MiracleMAlgo::solveWholeBodyIKPrimary(
     const Eigen::VectorXd& q_init,
     const std::optional<Eigen::Isometry3d>& left_goal,
     const std::optional<Eigen::Isometry3d>& right_goal,
@@ -2383,7 +2384,7 @@ bool MiracleMAlgo::solveWholeBodyIK(
     }
 
     for (std::size_t s = 0U; s < max_seed_attempts; ++s) {
-        if (std::chrono::steady_clock::now() > deadline) break;
+        if (motion_control_pkg::motion::ikPlanningStopped() || std::chrono::steady_clock::now() > deadline) break;
         Eigen::VectorXd seed = q_init;
         for (int q_idx : arm_q) {
             const double lo = model_.lowerPositionLimit[q_idx];
@@ -2651,6 +2652,7 @@ bool MiracleMAlgo::planDualArmCartesianPath(const std::vector<double>& start_q,
                                                const Eigen::Isometry3d& right_goal,
                                                std::vector<std::vector<double>>& path,
                                                double step_size) {
+    motion_control_pkg::motion::IkRecoverySuppressionScope continuation_scope;
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     Eigen::VectorXd q_current = toEigenConfig(start_q);
     pinocchio::forwardKinematics(model_, *data_, q_current);
@@ -2705,7 +2707,8 @@ bool MiracleMAlgo::planDualArmCartesianLine(const std::vector<double>& start_q,
                                            const std::vector<double>& right_end_poseture,
                                            const double& dt,const double& v_max,
                                            const double& a_max, const double& j_max,
-                                           std::vector<std::vector<double>>& path) { 
+                                           std::vector<std::vector<double>>& path) {
+    motion_control_pkg::motion::IkRecoverySuppressionScope continuation_scope;
     
     std::vector<std::vector<double>> left_path,right_path;
 
@@ -2779,6 +2782,7 @@ bool MiracleMAlgo::planSingleArmCartesianPath(bool is_left,
                                                  const Eigen::Isometry3d& goal,
                                                  std::vector<std::vector<double>>& path,
                                                  double step_size) {
+    motion_control_pkg::motion::IkRecoverySuppressionScope continuation_scope;
     std::lock_guard<std::recursive_mutex> data_lock(pinocchio_data_mutex_);
     Eigen::VectorXd q_current = toEigenConfig(start_q);
     pinocchio::forwardKinematics(model_, *data_, q_current);
@@ -3164,6 +3168,7 @@ bool MiracleMAlgo::planSingleArmCartesianLine(bool is_left, const std::vector<do
                                                     std::vector<std::vector<double>>& path,
                                                     double* ik_time_seconds)
 {
+    motion_control_pkg::motion::IkRecoverySuppressionScope continuation_scope;
     if (ik_time_seconds != nullptr) {
         *ik_time_seconds = 0.0;
     }

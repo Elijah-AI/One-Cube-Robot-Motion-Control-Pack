@@ -45,6 +45,7 @@
 #include <mutex>
 #include <limits>
 #include "motion_control_pkg/motion/trajectory_derivative_limits.hpp"
+#include "motion_control_pkg/motion/ik_recovery.hpp"
 #include <optional>
 
 #include <pinocchio/multibody/model.hpp>
@@ -263,6 +264,10 @@ public:
     // Startup configuration: 1 preserves serial planning; 2/4 use persistent
     // workers with private mutable caches and the same read-only model/meshes.
     void configurePlanningWorkers(std::size_t count);
+    // Startup-only: prewarm isolated processes; submit only after primary IK fails.
+    void configureIkRecovery(const motion_control_pkg::motion::IkRecoveryOptions& options,
+                             const std::function<bool()>& stop = {});
+    motion_control_pkg::motion::IkRecoveryStats ikRecoveryStats() const;
     using PlanningStop = std::function<bool()>;  // Must be safe for concurrent reads.
     bool planDualArmCartesianIkWaypoints(
         const std::vector<double>& start_q,
@@ -445,7 +450,8 @@ public:
         double timeout_seconds = 10.0,
         std::size_t max_seed_attempts = 10U,
         bool enable_collision_avoidance = true,
-        bool waist_only = false);
+        bool waist_only = false,
+        bool continuous_path = false);
     bool mergeSingleArmJoints(bool is_left, const std::vector<double>& reference,
                               const std::vector<double>& arm, std::vector<double>& full) const;
     bool extractSingleArmJoints(bool is_left,
@@ -802,6 +808,21 @@ public:
 
 
 private:
+    friend struct IkRecoveryAccess;
+    std::shared_ptr<motion_control_pkg::motion::IkRecoveryClient> ik_recovery_;
+    std::function<bool()> ik_recovery_stop_;
+    bool recoverIk(const Eigen::VectorXd& reference,
+        const std::optional<Eigen::Isometry3d>& left,
+        const std::optional<Eigen::Isometry3d>& right,
+        Eigen::VectorXd& result, int mode, bool whole,
+        const std::array<double,4>& weights, bool collision, bool waist,
+        pinocchio::Data& data, const PlanningStop& stop = {});
+    bool solveWholeBodyIKPrimary(const Eigen::VectorXd& q_init,
+        const std::optional<Eigen::Isometry3d>& left_goal,
+        const std::optional<Eigen::Isometry3d>& right_goal,
+        Eigen::VectorXd& q_res, const std::array<double,4>& leg_weights,
+        double legacy_body_pitch_limit_rad, double timeout_seconds,
+        std::size_t max_seed_attempts, bool enable_collision_avoidance, bool waist_only);
     struct SingleArmIkWorkspace
     {
         Eigen::MatrixXd jacobian;
@@ -861,6 +882,10 @@ private:
         const Eigen::Isometry3d& goal, Eigen::VectorXd& q_res, int mode,
         SingleArmIkWorkspace& workspace, pinocchio::Data& data,
         bool continuous_path, const PlanningStop& stop);
+    bool solveIKKernel(const Eigen::VectorXd& q_init,
+        const Eigen::Isometry3d& goal, Eigen::VectorXd& q_res, int mode,
+        SingleArmIkWorkspace& workspace, pinocchio::Data& data,
+        bool continuous_path, const PlanningStop& stop);
     bool planSingleArmCartesianIkWaypointsWithData(bool is_left,
         const std::vector<double>& start_q, const Eigen::Isometry3d& goal,
         double translation_step, double rotation_step,
@@ -878,6 +903,9 @@ private:
                      const Eigen::Isometry3d& left_goal,
                      const Eigen::Isometry3d& right_goal,
                      Eigen::VectorXd& q_res);
+    bool solveDualIKKernel(const Eigen::VectorXd& q_init,
+        const Eigen::Isometry3d& left_goal, const Eigen::Isometry3d& right_goal,
+        Eigen::VectorXd& q_res);
     
     Eigen::Quaterniond slerp_ruckig(const Eigen::Quaterniond& q0,
                                     const Eigen::Quaterniond& q1,

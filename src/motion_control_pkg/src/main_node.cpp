@@ -99,6 +99,44 @@ public:
         miracleAlgo_ptr_->configurePlanningWorkers(static_cast<std::size_t>(planning_workers));
         RCLCPP_INFO(get_logger(), "Planning workers: %d (private caches, shared immutable model)", planning_workers);
 
+        rcl_interfaces::msg::ParameterDescriptor recovery_descriptor;
+        recovery_descriptor.read_only = true;
+        recovery_descriptor.description = "Startup-only IK failure recovery configuration";
+        motion_control_pkg::motion::IkRecoveryOptions recovery;
+        recovery.enabled = declare_parameter<bool>("ik_recovery_enabled", true, recovery_descriptor);
+        const auto recovery_seeds = declare_parameter<int>("ik_recovery_seed_count", 24, recovery_descriptor);
+        const auto recovery_workers = declare_parameter<int>("ik_recovery_worker_count", 8, recovery_descriptor);
+        if (recovery_seeds < 1 || recovery_seeds > 96 || recovery_workers < 1 || recovery_workers > 8)
+            throw std::invalid_argument("IK recovery requires 1..96 seeds and 1..8 workers");
+        recovery.seeds = static_cast<std::size_t>(recovery_seeds);
+        recovery.workers = static_cast<std::size_t>(recovery_workers);
+        recovery.seed_timeout_s = declare_parameter<double>("ik_recovery_seed_timeout_s", 0.5, recovery_descriptor);
+        recovery.request_timeout_s = declare_parameter<double>("ik_recovery_timeout_s", 2.0, recovery_descriptor);
+        const auto recovery_cpus = declare_parameter<std::string>("ik_recovery_cpus", "auto", recovery_descriptor);
+        if (recovery_cpus != "auto") {
+            std::istringstream cpu_stream(recovery_cpus); std::string cpu;
+            while (std::getline(cpu_stream, cpu, ',')) {
+                std::size_t consumed=0; const auto index=std::stoi(cpu,&consumed);
+                if(consumed!=cpu.size())throw std::invalid_argument("invalid ik_recovery_cpus");
+                recovery.cpus.push_back(index);
+            }
+            if(recovery.cpus.empty())throw std::invalid_argument("ik_recovery_cpus must be auto or a CPU list");
+        }
+        miracleAlgo_ptr_->configureIkRecovery(recovery, [] {
+            if (!rclcpp::ok()) return true;
+            const auto safety = motion_control_pkg::execution::motionSafety();
+            std::string error;
+            return safety && !safety->ready(error);
+        });
+        std::ostringstream selected_cpus;
+        for (const auto cpu : miracleAlgo_ptr_->ikRecoveryStats().cpus) {
+            if (selected_cpus.tellp() > 0) selected_cpus << ',';
+            selected_cpus << cpu;
+        }
+        RCLCPP_INFO(get_logger(), "IK failure recovery: enabled=%d seeds=%zu workers=%zu CPUs=%s seed_timeout=%.3fs request_timeout=%.3fs",
+            recovery.enabled, recovery.seeds, miracleAlgo_ptr_->ikRecoveryStats().cpus.size(),
+            selected_cpus.str().c_str(), recovery.seed_timeout_s, recovery.request_timeout_s);
+
         //创建头部模块
         head_module_ = std::make_shared<MiracleHeadModule>("head", shared_from_this());
         head_module_->initDevices(ethercat_bus_manager_ptr_);
