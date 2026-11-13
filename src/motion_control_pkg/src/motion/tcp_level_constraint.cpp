@@ -170,6 +170,12 @@ bool TcpLevelConstraint::initialize(std::string& error) {
   return true;
 }
 bool TcpLevelConstraint::check(const Q& q,std::string& error) {return impl_->check(q,error);}
+bool TcpLevelConstraint::projectConfiguration(Q& q,std::string& error) {
+  if(!impl_->initialized || !impl_->configuration(q,error)) return false;
+  Q candidate=q;
+  if(!impl_->project(candidate,error)) return false;
+  q=std::move(candidate);return true;
+}
 bool TcpLevelConstraint::checkTarget(bool left,const Eigen::Isometry3d& tcp,std::string& error) const {
   const auto& p=*impl_;
   if(!p.initialized || !tcp.matrix().allFinite() ||

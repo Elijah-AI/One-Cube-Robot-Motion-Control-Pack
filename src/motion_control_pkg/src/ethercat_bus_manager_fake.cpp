@@ -7,6 +7,12 @@
 
 namespace miracle {
 
+motion_control_pkg::sdk::DriveControlResult EthercatBusManager::recoverAllDrives(
+    const std::function<bool(const motion_control_pkg::sdk::EthercatEnableSample&,std::string&)>&,
+    const std::function<bool()>&) {
+    return {false,false,"physical drive recovery unavailable on pseudo EtherCAT backend"};
+}
+
 bool EthercatBusManager::beginHeadPitchStartupRecovery(
     double, double, double, std::string&) { return true; }
 void EthercatBusManager::endHeadPitchStartupRecovery() noexcept {}

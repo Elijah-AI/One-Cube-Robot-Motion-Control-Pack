@@ -20,6 +20,15 @@ public:
     explicit MeasuredFeedbackBuilder(std::array<uint16_t, 6> motor_ids)
         : motor_ids_(motor_ids) {}
 
+    // Called under the publisher mutex after explicit recovery confirms every
+    // drive enabled. Only subsequently acquired samples may seed new counters;
+    // ordinary publishing still rejects repeated/reversed frames and bad data.
+    bool beginRecoveryEpoch(int64_t after_ns) {
+        if (after_ns<=0) return false;
+        last_stamp_=after_ns; last_motor_sequence_=0; last_arm_sequence_={{-1,-1}};
+        return true;
+    }
+
     // Snapshot readers may reuse a still-fresh physical frame. They must not
     // consume the publisher's advancement history or refresh acquisition time.
     bool buildSnapshot(const sdk::DualArmDeviceState& arms,

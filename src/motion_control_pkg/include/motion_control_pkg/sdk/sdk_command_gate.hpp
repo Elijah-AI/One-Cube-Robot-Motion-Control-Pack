@@ -13,6 +13,7 @@
 
 #include "motion_control_pkg/sdk/dual_arm_device_interface.hpp"
 #include "motion_control_pkg/sdk/drive_control.hpp"
+#include "motion_control_pkg/execution/teach_standstill.hpp"
 
 namespace motion_control_pkg::sdk
 {
@@ -45,6 +46,8 @@ struct SdkCommandGateOptions
     std::chrono::milliseconds(200)};
   std::chrono::milliseconds impedance_mode_settle_time{
     std::chrono::milliseconds(1000)};
+  std::chrono::milliseconds mode_transition_timeout{std::chrono::milliseconds(2000)};
+  std::chrono::milliseconds teach_transition_timeout{execution::kTeachStandstillTimeout};
 };
 
 /**
@@ -68,13 +71,25 @@ public:
   void disableLogging();
   SdkCommandResult readState(DualArmDeviceState & state);
   // Caller must fence all motion and reject clearing while resources are busy.
-  DriveControlResult controlDrives(bool left, bool right, bool clear_fault);
+  DriveControlResult controlDrives(bool left, bool right, bool clear_fault, bool recovery_stop=false,
+      const std::function<bool()>& cancel_clear={});
+  DriveControlResult setTeachMode(const std::vector<ArmControlModeCommand>& commands,
+      bool enable, const std::function<bool()>& canceled);
+  DriveControlResult recoverPositionMode(
+      const std::function<bool(const DualArmDeviceState&,std::string&)>& check,
+      const std::function<bool()>& canceled,
+      const std::function<bool(const DualArmDeviceState&,std::string&)>& settling_check = {});
+  unsigned teachingMask() const { return teaching_mask_.load(); }
+  // Only the expected vendor transition, selected arm, live transaction epoch
+  // and bounded lifetime qualify. This is for safety sampling, never admission.
+  bool expectedModeTransition(ArmChannel channel,const ArmFeedback& feedback) const;
 
   SdkCommandResult initializePositionMode(
     int velocity_ratio = 10, int acceleration_ratio = 10);
 
   SdkCommandResult configureControlModes(
-    const std::vector<ArmControlModeCommand> & commands);
+    const std::vector<ArmControlModeCommand> & commands,
+    bool* command_issued = nullptr, const std::function<bool()>& canceled = {});
 
   SdkCommandResult sendJointPosition(
     ArmChannel channel,
@@ -87,7 +102,21 @@ public:
   ActiveArmConfiguration configuration() const noexcept {return configuration_;}
 
 private:
+  SdkCommandResult configureControlModesImpl(
+      const std::vector<ArmControlModeCommand>& commands, bool* command_issued,
+      const std::function<bool()>& canceled, bool teaching);
+  struct ModeFeedbackScope {
+    ModeFeedbackScope(SdkCommandGate&,unsigned mask,int target,
+        std::chrono::milliseconds lifetime,bool mode_lock_held=false);
+    ~ModeFeedbackScope();
+    explicit operator bool() const {return active;}
+    ModeFeedbackScope(const ModeFeedbackScope&)=delete;
+    ModeFeedbackScope& operator=(const ModeFeedbackScope&)=delete;
+    SdkCommandGate& gate;
+    bool active{false};
+  };
   bool beginCommandBatchWithRetry();
+  bool modeTransitionBlocksCaller() const;
   SdkCommandResult fail(const std::string & operation) const;
 
   DualArmDeviceInterface & device_;
@@ -97,6 +126,12 @@ private:
   mutable std::mutex mode_transition_mutex_;
   std::mutex drive_clear_mutex_;
   std::atomic<std::uint64_t> drive_epoch_{0};
+  std::atomic<unsigned> teaching_mask_{0};
+  std::atomic<unsigned> mode_feedback_mask_{0};
+  std::atomic<int> mode_feedback_target_{-1};
+  std::atomic<std::int64_t> mode_feedback_deadline_ns_{0};
+  std::atomic<std::uint64_t> mode_feedback_epoch_{0};
+  std::thread::id mode_feedback_owner_{}; // protected by mutex_
   std::chrono::steady_clock::time_point last_joint_command_commit_time_{};
   bool has_last_joint_command_commit_time_{false};
   std::size_t joint_command_batch_id_{0};

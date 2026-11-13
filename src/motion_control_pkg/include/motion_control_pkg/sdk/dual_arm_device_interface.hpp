@@ -130,6 +130,9 @@ struct ArmFeedback
   int current_state{0};
   int error_code{0};
   bool low_speed{false};
+  int impedance_type{-1};
+  int drag_space{-1};
+  int tip_di{-1};
   std::array<double, kToolKinematicsSize> tool_kinematics{};
   std::array<double, kToolDynamicsSize> tool_dynamics{};
   // Optional controller output echo in vendor degrees, for fault diagnosis only.
@@ -178,6 +181,7 @@ public:
   virtual bool beginCommandBatch() = 0;
   virtual bool clearServoError(ArmChannel channel) = 0;
   virtual bool setServoOff(ArmChannel) { return false; }
+  virtual bool setDragSpace(ArmChannel, int) { return false; }
   virtual bool setPositionMode(ArmChannel channel) = 0;
   virtual bool setTorqueMode(ArmChannel channel) = 0;
   virtual bool setJointLimits(

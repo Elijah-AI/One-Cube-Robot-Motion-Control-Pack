@@ -127,8 +127,8 @@ struct Pool {
 } // namespace
 
 int main(int argc,char** argv) try {
-  int fd=-1;std::string urdf,meshes,cpu_list;
-  for(int i=1;i+1<argc;i+=2) {const std::string key=argv[i];if(key=="--fd")fd=std::stoi(argv[i+1]);else if(key=="--urdf")urdf=argv[i+1];else if(key=="--meshes")meshes=argv[i+1];else if(key=="--cpus")cpu_list=argv[i+1];else throw std::runtime_error("invalid broker argument");}
+  int fd=-1;std::string urdf,meshes,cpu_list,arm_limits;
+  for(int i=1;i+1<argc;i+=2) {const std::string key=argv[i];if(key=="--fd")fd=std::stoi(argv[i+1]);else if(key=="--urdf")urdf=argv[i+1];else if(key=="--meshes")meshes=argv[i+1];else if(key=="--cpus")cpu_list=argv[i+1];else if(key=="--arm-limits")arm_limits=argv[i+1];else throw std::runtime_error("invalid broker argument");}
   if(fd<0||urdf.empty()||meshes.empty())return 2;
   const auto parent=getppid();prctl(PR_SET_PDEATHSIG,SIGTERM);if(getppid()!=parent)return 2;
   for(const char* name:{"OMP_NUM_THREADS","OPENBLAS_NUM_THREADS","MKL_NUM_THREADS"})setenv(name,"1",1);
@@ -138,6 +138,10 @@ int main(int argc,char** argv) try {
   cpu_set_t mask;CPU_ZERO(&mask);for(int cpu:cpus)CPU_SET(cpu,&mask);if(sched_setaffinity(0,sizeof(mask),&mask))return 3;
   // No rclcpp::init, DDS, hardware SDK or planning thread pool in this process.
   MiracleMAlgo algo(urdf,meshes);
+  if (!arm_limits.empty()) {
+    Json::Value limits;std::istringstream input(arm_limits);input>>limits;
+    IkRecoveryAccess::applySdkArmPositionLimits(algo,limits);
+  }
   if(std::distance(std::filesystem::directory_iterator("/proc/self/task"),std::filesystem::directory_iterator{})!=1)
     throw std::runtime_error("broker must remain single threaded before fork");
   Pool pool(algo,fd,cpus);

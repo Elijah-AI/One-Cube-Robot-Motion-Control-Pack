@@ -7,11 +7,15 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace motion_control_pkg::wbc {
 
-// SI units throughout. All properties, including locked joints, come from URDF.
+using PositionLimitOverrides = std::map<std::string, std::pair<double, double>>;
+
+// SI units throughout. Runtime arm position limits may come from the SDK;
+// geometry, dynamics and the remaining joint properties come from URDF.
 struct JointSpec {
   std::string name;
   double lower{}, upper{}, velocity{}, effort{};
@@ -81,6 +85,8 @@ struct CentroidalDynamics {
 class CentroidalModel {
 public:
   explicit CentroidalModel(const std::string& urdf_path);
+  CentroidalModel(const std::string& urdf_path,
+                  const PositionLimitOverrides& position_limits);
   ~CentroidalModel();
   const std::vector<JointSpec>& joints() const;
   const std::string& rootFrame() const;

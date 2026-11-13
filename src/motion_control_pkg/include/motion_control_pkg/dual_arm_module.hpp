@@ -39,10 +39,30 @@ class MiracleMAlgo;
 class DualArmModule
 {
 public:
-    motion_control_pkg::sdk::DriveControlResult controlDrives(bool left, bool right, bool clear_fault) {
+    motion_control_pkg::sdk::DriveControlResult setTeachMode(unsigned mask, bool enable,
+        const std::function<bool()>& canceled);
+    bool expectedModeTransition(unsigned arm,const motion_control_pkg::sdk::ArmFeedback& feedback) const {
+        return sdk_command_gate_ && arm<2 && sdk_command_gate_->expectedModeTransition(
+            static_cast<motion_control_pkg::sdk::ArmChannel>(arm),feedback);
+    }
+    bool beginMeasuredFeedbackRecoveryEpoch() {
+        const auto node=lockNode(__func__);
+        if (!node) return false;
+        std::lock_guard<std::mutex> lock(measured_feedback_mutex_);
+        return measured_feedback_.beginRecoveryEpoch(node->now().nanoseconds());
+    }
+    motion_control_pkg::sdk::DriveControlResult recoverPositionMode(
+        const std::function<bool(const motion_control_pkg::sdk::DualArmDeviceState&,std::string&)>& check,
+        const std::function<bool()>& canceled,
+        const std::function<bool(const motion_control_pkg::sdk::DualArmDeviceState&,std::string&)>& settling_check = {}) {
+        if (!sdk_command_gate_ || !sdk_connected_) return {false,false,"arm SDK is not connected"};
+        return sdk_command_gate_->recoverPositionMode(check,canceled,settling_check);
+    }
+    motion_control_pkg::sdk::DriveControlResult controlDrives(bool left, bool right, bool clear_fault, bool recovery_stop=false,
+        const std::function<bool()>& cancel_clear={}) {
         if (!sdk_command_gate_ || !sdk_connected_)
             return {false,false,"arm SDK is not connected"};
-        return sdk_command_gate_->controlDrives(left,right,clear_fault);
+        return sdk_command_gate_->controlDrives(left,right,clear_fault,recovery_stop,cancel_clear);
     }
     bool shutdownDriverConnected() const { return sdk_connected_; }
     bool readShutdownFeedback(std::vector<motion_control_pkg::sdk::DriveAxis>& axes, std::string& error) {

@@ -197,6 +197,7 @@ set_target_properties(kine_lib PROPERTIES
 add_library(dual_arm_sdk_core STATIC
     src/sdk/sdk_command_gate.cpp
     src/sdk/arm_drive_control.cpp
+    src/sdk/arm_teach_recovery.cpp
     src/sdk/ethercat_drive_maintenance.cpp
     src/execution/motion_safety.cpp
 )
@@ -443,6 +444,8 @@ install(DIRECTORY config
 
 install(FILES doc/ORDERLY_SHUTDOWN.txt DESTINATION share/${PROJECT_NAME}/doc)
 install(FILES doc/ROBOT_TF.md DESTINATION share/${PROJECT_NAME}/doc)
+install(FILES doc/TEACH_AND_RECOVERY.md doc/SDK_LIMITS_AND_TEACH_RELEASE.md
+    DESTINATION share/${PROJECT_NAME}/doc)
 
 install(DIRECTORY launch   
   DESTINATION share/${PROJECT_NAME}
@@ -460,6 +463,11 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    add_executable(test_sdk_arm_position_limits test/sdk_arm_position_limits_test.cpp)
+    target_link_libraries(test_sdk_arm_position_limits motion_planning_core)
+    add_dependencies(test_sdk_arm_position_limits ik_recovery_worker)
+    add_test(NAME sdk_arm_position_limits COMMAND test_sdk_arm_position_limits "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+    set_tests_properties(sdk_arm_position_limits PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
     add_executable(test_ik_seed_sampler test/ik_seed_sampler_test.cpp)
     target_include_directories(test_ik_seed_sampler PRIVATE include)
     add_test(NAME ik_seed_sampler COMMAND test_ik_seed_sampler)
@@ -575,6 +583,10 @@ if(BUILD_TESTING)
     add_executable(test_drive_control test/drive_control_test.cpp)
     target_link_libraries(test_drive_control dual_arm_sdk_core)
     add_test(NAME drive_control COMMAND test_drive_control)
+    add_executable(test_teach_recovery test/teach_recovery_test.cpp)
+    target_link_libraries(test_teach_recovery dual_arm_sdk_core)
+    add_test(NAME teach_recovery COMMAND test_teach_recovery)
+    set_tests_properties(teach_recovery PROPERTIES TIMEOUT 60)
     set_tests_properties(drive_control PROPERTIES TIMEOUT 45)
     add_executable(test_tcp_level_constraint test/tcp_level_constraint_test.cpp)
     target_link_libraries(test_tcp_level_constraint motion_planning_core dual_arm_sdk_core)
@@ -589,6 +601,17 @@ if(BUILD_TESTING)
     ament_target_dependencies(test_tcp_level_planning rclcpp_action tf2 tf2_ros tf2_geometry_msgs)
     add_test(NAME tcp_level_planning COMMAND test_tcp_level_planning "${CMAKE_CURRENT_SOURCE_DIR}/../..")
     set_tests_properties(tcp_level_planning PROPERTIES ENVIRONMENT "ROS_DOMAIN_ID=216;ROS_LOCALHOST_ONLY=1")
+endif()
+
+option(WBC_MUJOCO_VALIDATION "Build hardware-free trajectory exporter for MuJoCo" OFF)
+if(WBC_MUJOCO_VALIDATION)
+    add_executable(wbc_mujoco_export tools/mujoco_validation/export_trajectories.cpp
+        tools/mujoco_validation/hardware_traps.cpp src/whole_body_module.cpp)
+    target_include_directories(wbc_mujoco_export PRIVATE
+        $<TARGET_PROPERTY:motion_control_node,INCLUDE_DIRECTORIES>
+        include/motion_control_pkg/MarvinSDK)
+    target_link_libraries(wbc_mujoco_export motion_planning_core dual_arm_sdk_core)
+    ament_target_dependencies(wbc_mujoco_export rclcpp_action tf2 tf2_ros tf2_geometry_msgs)
 endif()
 
 # 导出包配置

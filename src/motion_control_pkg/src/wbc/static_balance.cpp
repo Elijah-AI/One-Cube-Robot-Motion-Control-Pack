@@ -6,7 +6,12 @@
 namespace motion_control_pkg::wbc {
 StaticBalance::StaticBalance(const std::string& path, StaticBalanceOptions options,
                              const std::vector<std::string>& dirs)
-  : options_(std::move(options)), model_(path), support_(path, options_.support_links, dirs) {
+  : StaticBalance(path, std::move(options), dirs, {}) {}
+
+StaticBalance::StaticBalance(const std::string& path, StaticBalanceOptions options,
+                             const std::vector<std::string>& dirs,
+                             const PositionLimitOverrides& position_limits)
+  : options_(std::move(options)), model_(path, position_limits), support_(path, options_.support_links, dirs) {
   if (!std::isfinite(options_.com_weight) || options_.com_weight < 0)
     throw std::invalid_argument("invalid COM weight");
   if (!std::isfinite(options_.inset) || options_.inset < 0)

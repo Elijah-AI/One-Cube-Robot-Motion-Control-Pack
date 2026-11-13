@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -36,11 +37,21 @@ public:
     }
     bool requestShutdownDisable(std::string& error);
     bool releaseAfterShutdown(std::string& error);
-    motion_control_pkg::sdk::DriveControlResult controlLowerBodyDrives(bool clear_fault) {
+    motion_control_pkg::sdk::DriveControlResult controlLowerBodyDrives(bool clear_fault, bool recovery_stop=false,
+        const std::function<bool()>& cancel_clear={}) {
         if (!ready_ || !drive_maintenance_available_)
             return {false,false,"physical EtherCAT maintenance unavailable (bus not ready or pseudo driver)"};
-        return drive_maintenance_.control(clear_fault);
+        return drive_maintenance_.control(clear_fault,recovery_stop,cancel_clear);
     }
+    motion_control_pkg::sdk::DriveControlResult controlHeadDrives(bool clear_fault, bool recovery_stop=false,
+        const std::function<bool()>& cancel_clear={}) {
+        if (!ready_ || !head_maintenance_available_)
+            return {false,false,"physical head EtherCAT maintenance unavailable"};
+        return head_maintenance_.control(clear_fault,recovery_stop,cancel_clear);
+    }
+    motion_control_pkg::sdk::DriveControlResult recoverAllDrives(
+        const std::function<bool(const motion_control_pkg::sdk::EthercatEnableSample&,std::string&)>& check,
+        const std::function<bool()>& canceled);
     bool getMotorActualSnapshot(std::vector<DriverSDK::motorActualStruct> &motor_actual_data) const;
     // A successful SDK acquisition only; callers must retain its age and sequence.
     bool getTimedMotorActualSnapshot(std::vector<DriverSDK::motorActualStruct>& data,
@@ -81,7 +92,9 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> ready_{false};
     bool drive_maintenance_available_{false};
+    bool head_maintenance_available_{false};
     motion_control_pkg::sdk::EthercatDriveMaintenance drive_maintenance_;
+    motion_control_pkg::sdk::EthercatDriveMaintenance head_maintenance_{{31,30}};
     motion_control_pkg::sdk::EthercatDriveMaintenance shutdown_maintenance_{{29,28,27,26,31,30}};
     bool released_{false};
 

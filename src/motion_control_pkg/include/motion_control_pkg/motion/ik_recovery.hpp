@@ -55,7 +55,7 @@ class IkSingleSeedScope {
 class IkRecoveryClient {
  public:
   IkRecoveryClient(IkRecoveryOptions options, std::string urdf, std::string meshes,
-                   std::string model_signature);
+                   std::string model_signature, Json::Value arm_limits = Json::Value());
   ~IkRecoveryClient();
   IkRecoveryClient(const IkRecoveryClient&)=delete;
   bool solve(Json::Value request, const std::function<bool(const Json::Value&)>& accept,
@@ -74,6 +74,8 @@ class MiracleMAlgo;
 // Only the hardware-free broker uses this adapter. It cannot submit motion.
 struct IkRecoveryAccess {
   static std::string signature(const MiracleMAlgo& algo);
+  static Json::Value sdkArmPositionLimits(const MiracleMAlgo& algo);
+  static void applySdkArmPositionLimits(MiracleMAlgo& algo, const Json::Value& limits);
   static Json::Value scene(const MiracleMAlgo& algo);
   static void applyScene(MiracleMAlgo& algo,const Json::Value& scene);
   static Json::Value evaluate(MiracleMAlgo& algo,const Json::Value& request,

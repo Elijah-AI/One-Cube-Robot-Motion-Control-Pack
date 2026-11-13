@@ -1,0 +1,12 @@
+# Explicit whole-robot recovery: both arms, waist/legs and head.
+# false clears drives and retains disable/fault fence; true also enables at
+# measured positions and resets the software latch after feedback confirmation.
+bool enable_after_clear true
+---
+bool success
+bool arms_cleared
+bool lower_body_cleared
+bool head_cleared
+bool drives_enabled
+bool motion_ready
+string message

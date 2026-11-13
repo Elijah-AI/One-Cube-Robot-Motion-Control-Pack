@@ -24,6 +24,28 @@ std::string IkRecoveryAccess::signature(const MiracleMAlgo& a) {
   return ik_transport::encode(signature);
 }
 
+Json::Value IkRecoveryAccess::sdkArmPositionLimits(const MiracleMAlgo& a) {
+  Json::Value limits;
+  for (const auto& item : a.sdk_arm_position_limits_) {
+    limits[item.first].append(item.second.first);
+    limits[item.first].append(item.second.second);
+  }
+  return limits;
+}
+
+void IkRecoveryAccess::applySdkArmPositionLimits(MiracleMAlgo& a, const Json::Value& limits) {
+  if (!limits.isObject() || limits.size() != 14U)
+    throw std::invalid_argument("invalid SDK arm position-limit payload");
+  motion_control_pkg::wbc::PositionLimitOverrides parsed;
+  for (const auto& name : limits.getMemberNames()) {
+    const auto& pair = limits[name];
+    if (!pair.isArray() || pair.size() != 2U || !pair[0].isNumeric() || !pair[1].isNumeric())
+      throw std::invalid_argument("invalid SDK arm position-limit pair");
+    parsed[name] = {pair[0].asDouble(), pair[1].asDouble()};
+  }
+  a.setSdkArmPositionLimits(parsed);
+}
+
 Json::Value IkRecoveryAccess::scene(const MiracleMAlgo& a) {
   Json::Value scene;scene["revision"]=Json::UInt64(a.geometry_revision_);scene["mode"]=a.collision_check_mode_;
   scene["external"]=Json::Value(Json::arrayValue);scene["pairs"]=Json::Value(Json::arrayValue);
@@ -87,7 +109,8 @@ Json::Value IkRecoveryAccess::evaluate(MiracleMAlgo& a,const Json::Value& reques
 void MiracleMAlgo::configureIkRecovery(const IkRecoveryOptions& options,const std::function<bool()>& stop) {
   std::lock_guard<std::recursive_mutex> lock(pinocchio_data_mutex_);
   ik_recovery_.reset();ik_recovery_stop_=stop;
-  if(options.enabled)ik_recovery_=std::make_shared<IkRecoveryClient>(options,urdf_path_,mesh_dir_,IkRecoveryAccess::signature(*this));
+  if(options.enabled)ik_recovery_=std::make_shared<IkRecoveryClient>(options,urdf_path_,mesh_dir_,
+      IkRecoveryAccess::signature(*this),IkRecoveryAccess::sdkArmPositionLimits(*this));
 }
 IkRecoveryStats MiracleMAlgo::ikRecoveryStats() const {return ik_recovery_?ik_recovery_->stats():IkRecoveryStats{};}
 

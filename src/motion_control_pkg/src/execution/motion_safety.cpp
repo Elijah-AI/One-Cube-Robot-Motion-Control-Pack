@@ -2,6 +2,7 @@
 #include "motion_control_pkg/execution/motion_safety.hpp"
 #include "motion_control_pkg/execution/head_startup_home.hpp"
 #include "motion_control_pkg/wbc/tracking.hpp"
+#include "motion_control_pkg/sdk/drive_control.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -29,11 +30,12 @@ struct MotionSafety::Impl {
     Read read;
     std::unique_ptr<wbc::PositionTrackingGuard> tracking;
     SafetySample sample;
+    SafetyClock::time_point recovery_after{};
     bool healthy{false}, active{false};
     std::string error{"waiting for measured feedback"};
     std::optional<SafetyClock::time_point> stable_since;
     unsigned stable_frames{};
-    double peak{};
+    double peak{}, measured_speed{};
     std::uint64_t commands{};
     SafetyClock::time_point last_command{};
     double max_command_gap_ms{};
@@ -247,7 +249,7 @@ void MotionSafety::poll(SafetyClock::time_point now) {
     p.max_reader_ms=std::max(p.max_reader_ms,1000*(seconds(observed)-seconds(read_started)));
     const auto old=c.sample;
     valid=valid && sample.position.size()==c.joints.size() && sample.velocity.size()==c.joints.size() &&
-      sample.acquired!=SafetyClock::time_point{} && sample.acquired<=observed &&
+      sample.acquired!=SafetyClock::time_point{} && sample.acquired>c.recovery_after && sample.acquired<=observed &&
       seconds(observed)-seconds(sample.acquired)<p.policy.max_feedback_age &&
       (sample.sequence>0 || sample.wraps_at_million);
     if (sample.wraps_at_million && sample.sequence>1000000) valid=false;
@@ -295,7 +297,7 @@ void MotionSafety::poll(SafetyClock::time_point now) {
         p.trip("channel="+std::to_string(i)+": "+c.error,observed);
       continue;
     }
-    c.sample=sample; c.error.clear();
+    c.sample=sample; c.error.clear(); c.measured_speed=speed;
     // Startup homing keeps its independent ancestor-motion guard. Ordinary
     // holding errors use body_error below, with the selected limits and stop policy.
     if (!p.fault && !c.active && i==2 && p.home==Impl::Home::Running &&
@@ -348,35 +350,77 @@ void MotionSafety::removeStateConstraint(std::uint64_t id) {
   std::lock_guard<std::mutex> lock(impl_->mutex);impl_->constraints.erase(id);
 }
 
-MotionSafety::CommandPermit::CommandPermit(MotionSafety& owner,SafetyMask mask,std::string& error,bool configuration)
+MotionSafety::CommandPermit::CommandPermit(MotionSafety& owner,SafetyMask mask,std::string& error,bool configuration,
+    std::chrono::milliseconds wait,const std::function<bool()>& canceled,bool teaching)
   : owner_(&owner),lock_(owner.impl_->mutex),channels_(mask) {
-  auto& p=*owner.impl_; const auto now=SafetyClock::now();
-  acquired_=now;
-  if (shutdownRequested()) {error="orderly shutdown in progress";return;}
-  if (p.fault) {error=(p.tracking_stop?"position tracking stop in progress: ":"motion fault latched: ")+p.cause; return;}
-  if (p.home==Impl::Home::Failed || (p.homeException() &&
-      (!p.homeCaller() || mask!=kHeadSafety || configuration))) {
-    error="head startup home reserves motion; normal commands unavailable";return;
+  auto& p=*owner.impl_; const auto deadline=SafetyClock::now()+wait;
+  if(teaching && (!configuration || (mask&~kArmSafety))) {
+    error="teaching standstill permit requires arm configuration only";return;
   }
-  if (!mask || (mask&~p.configured)) {error="unregistered motion safety channel"; return;}
-  for (unsigned i=0;i<4;++i) if ((p.configured&(1U<<i)) && !p.fresh(p.channels[i],now)) {
-    error="related chain feedback unhealthy: channel="+std::to_string(i);return;
-  }
-  for (unsigned i=0;i<4;++i) if (mask&(1U<<i)) {
-    auto& c=p.channels[i];
-    if (configuration && (c.active || !p.stationary(c,now))) {
-      error="control mode change requires an idle stationary chain";return;
+  sdk::DriveFeedbackWindow teach_window(SafetyClock::now(),std::chrono::milliseconds(100),
+      kTeachStandstillVelocity,kTeachStandstillDisplacement);
+  for (;;) {
+    const auto now=SafetyClock::now(); acquired_=now;
+    if (shutdownRequested()) {error="orderly shutdown in progress";return;}
+    if (canceled && canceled()) {error="control mode change canceled while waiting for standstill";return;}
+    if (p.fault) {error=(p.tracking_stop?"position tracking stop in progress: ":"motion fault latched: ")+p.cause; return;}
+    if (p.home==Impl::Home::Failed || (p.homeException() &&
+        (!p.homeCaller() || mask!=kHeadSafety || configuration))) {
+      error="head startup home reserves motion; normal commands unavailable";return;
     }
-    if (!p.fresh(c,now) || (!c.active && !p.stationary(c,now))) {
-      error="motion feedback not qualified: channel="+std::to_string(i)+" "+c.error;
-      if (c.active) p.trip(error,now);
-      return;
+    if (!mask || (mask&~p.configured)) {error="unregistered motion safety channel"; return;}
+    for (unsigned i=0;i<4;++i) if ((p.configured&(1U<<i)) && !p.fresh(p.channels[i],now)) {
+      error="related chain feedback unhealthy: channel="+std::to_string(i);return;
     }
+    bool waiting=false;
+    bool teach_stationary=false;
+    if(teaching) {
+      std::vector<sdk::DriveAxis> axes;
+      for(unsigned i=0;i<4;++i)if(mask&(1U<<i)) {
+        const auto& c=p.channels[i];
+        for(std::size_t j=0;j<c.sample.position.size();++j)
+          axes.push_back({c.sample.position[j],std::max(std::abs(c.sample.velocity[j]),c.measured_speed),
+              c.sample.sequence,c.sample.acquired,!c.active,false,!c.active,c.sample.wraps_at_million});
+      }
+      teach_stationary=teach_window.update(axes,false,false,now);
+    }
+    for (unsigned i=0;i<4;++i) if (mask&(1U<<i)) {
+      auto& c=p.channels[i];
+      const bool stationary=teaching?teach_stationary:p.stationary(c,now);
+      if (configuration && (c.active || !stationary)) {
+        std::ostringstream detail;
+        detail << "control mode change requires an idle stationary chain: channel=" << i
+            << " active=" << c.active << " stationary_frames=" << c.stable_frames
+            << " stationary_ms=" << (c.stable_since ?
+                1000*(seconds(c.sample.acquired)-seconds(*c.stable_since)) : 0)
+            << " measured_speed_rad_s=" << c.measured_speed;
+        if(teaching)detail << " teaching_window=1 max_velocity_rad_s=" << kTeachStandstillVelocity
+            << " max_displacement_rad=" << kTeachStandstillDisplacement;
+        error=detail.str();
+        if(c.active || now>=deadline)return;
+        waiting=true;break;
+      }
+      if (!p.fresh(c,now) || (!c.active && !stationary)) {
+        error="motion feedback not qualified: channel="+std::to_string(i)+" "+c.error;
+        if (c.active) p.trip(error,now);
+        return;
+      }
+    }
+    if(waiting) {p.changed.wait_for(lock_,std::chrono::milliseconds(10));continue;}
+    allowed_=true; error.clear();
+    return;
   }
-  allowed_=true; error.clear();
 }
 MotionSafety::CommandPermit MotionSafety::command(SafetyMask mask,std::string& error) { return CommandPermit(*this,mask,error); }
 MotionSafety::CommandPermit MotionSafety::configuration(SafetyMask mask,std::string& error) { return CommandPermit(*this,mask,error,true); }
+MotionSafety::CommandPermit MotionSafety::configurationWhenStationary(SafetyMask mask,std::string& error,
+    const std::function<bool()>& canceled,std::chrono::milliseconds timeout) {
+  return CommandPermit(*this,mask,error,true,timeout,canceled);
+}
+MotionSafety::CommandPermit MotionSafety::teachingConfigurationWhenStationary(SafetyMask mask,std::string& error,
+    const std::function<bool()>& canceled,std::chrono::milliseconds timeout) {
+  return CommandPermit(*this,mask,error,true,timeout,canceled,true);
+}
 bool MotionSafety::CommandPermit::validate(SafetyMask channel,const std::vector<double>& q) {
   if (!allowed_ || !(channels_&channel)) return false;
   auto& p=*owner_->impl_;
@@ -458,6 +502,38 @@ bool MotionSafety::setErrorTrackingEnabled(SafetyMask group,bool enabled,double 
 }
 bool MotionSafety::latched() const {std::lock_guard<std::mutex> lock(impl_->mutex);return impl_->fault;}
 bool MotionSafety::workersIdle() const {std::lock_guard<std::mutex> lock(impl_->mutex);return impl_->executions==0;}
+bool MotionSafety::validateRecoverySample(SafetyMask mask, const SafetySample& sample,
+    std::string& error, bool require_stationary) const {
+  auto& p=*impl_; std::lock_guard<std::mutex> lock(p.mutex);
+  const auto now=SafetyClock::now();
+  if (shutdownRequested() || p.executions || !p.fault || p.home==Impl::Home::Running) {
+    error="recovery requires an idle controller with its motion fence retained";return false;
+  }
+  if (!mask || (mask&(mask-1)) || !(p.configured&mask)) {
+    error="invalid recovery channel";return false;
+  }
+  const auto& c=p.channels[index(mask)];
+  if (!sample.sequence || sample.acquired==SafetyClock::time_point{} || sample.acquired>now ||
+      std::chrono::duration<double>(now-sample.acquired).count()>=p.policy.max_feedback_age ||
+      sample.position.size()!=c.joints.size() || sample.velocity.size()!=c.joints.size()) {
+    error="recovery requires fresh measured feedback for every selected joint";return false;
+  }
+  for (std::size_t j=0;j<c.joints.size();++j) {
+    const auto& bound=c.joints[j];
+    const double speed_limit=require_stationary?std::min(.01,bound.velocity):bound.velocity;
+    if (!std::isfinite(sample.position[j]) || !std::isfinite(sample.velocity[j]) ||
+        sample.position[j]<bound.lower || sample.position[j]>bound.upper ||
+        std::abs(sample.velocity[j])>speed_limit) {
+      std::ostringstream detail;
+      detail << "recovery feedback exceeds validation limits: " << bound.name
+             << " position=" << sample.position[j] << " velocity_rad_s=" << sample.velocity[j]
+             << " lower=" << bound.lower << " upper=" << bound.upper
+             << " max_velocity_rad_s=" << speed_limit << " stationary_required=" << require_stationary;
+      error=detail.str();return false;
+    }
+  }
+  error.clear();return true;
+}
 bool MotionSafety::ready(std::string& error) const {
   if (shutdownRequested()) {error="orderly shutdown in progress";return false;}
   auto& p=*impl_; std::lock_guard<std::mutex> lock(p.mutex);
@@ -470,12 +546,42 @@ bool MotionSafety::ready(std::string& error) const {
   }
   error.clear();return p.configured!=0;
 }
+bool MotionSafety::beginRecoveryFeedbackQualification(std::string& error) {
+  auto& p=*impl_; std::lock_guard<std::mutex> lock(p.mutex);
+  if (shutdownRequested() || !p.fault || p.tracking_stop || p.executions ||
+      p.homeException() || !p.configured ||
+      std::any_of(p.channels.begin(),p.channels.end(),[](const auto& c){return c.active;})) {
+    error="feedback requalification requires idle explicit recovery with its fault fence retained";
+    return false;
+  }
+  const auto after=SafetyClock::now();
+  for (auto& c:p.channels) if (c.read) {
+    // Disabled/error feedback was not admitted to normal monitoring. Its frame
+    // counter may have wrapped or restarted since the last accepted sample.
+    // An in-flight read acquired before this boundary cannot seed the new epoch.
+    c.recovery_after=after; c.sample={}; c.healthy=false;
+    c.stable_since.reset(); c.stable_frames=0; c.measured_speed=0;
+    c.error="waiting for post-recovery acquired feedback";
+  }
+  p.confirmed=false; p.affected=p.configured; p.changed.notify_all();
+  error.clear(); return true;
+}
 bool MotionSafety::reset(std::string& error) {
   if (shutdownRequested()) {error="orderly shutdown in progress";return false;}
   auto& p=*impl_; std::lock_guard<std::mutex> lock(p.mutex);
   if (p.executions) {error="old execution workers still own resources";return false;}
   if (!p.fault) {error="no latched fault";return false;}
-  if (!p.confirmed) {error="physical standstill not confirmed";return false;}
+  if (!p.confirmed) {
+    std::ostringstream detail; detail << "physical standstill not confirmed";
+    const auto now=SafetyClock::now();
+    for (unsigned i=0;i<4;++i) if ((p.configured&(1U<<i)) && !p.stationary(p.channels[i],now)) {
+      const auto& c=p.channels[i];
+      detail << "; channel=" << i << " fresh=" << p.fresh(c,now)
+             << " sequence=" << c.sample.sequence << " stationary_frames=" << c.stable_frames
+             << " measured_speed=" << c.measured_speed << " error=" << c.error;
+    }
+    error=detail.str(); return false;
+  }
   for (unsigned i=0;i<4;++i) if ((p.configured&(1U<<i)) && !p.stationary(p.channels[i],SafetyClock::now())) {
     error="all channels must have fresh fault-free stationary feedback";return false;
   }

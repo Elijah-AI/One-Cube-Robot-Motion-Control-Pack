@@ -19,7 +19,7 @@ bool arraysNear(
 {
   constexpr double kReadbackTolerance = 1.0e-5;
   for (std::size_t index = 0; index < Size; ++index) {
-    if (std::abs(expected[index] - actual[index]) > kReadbackTolerance) {
+    if (!std::isfinite(actual[index]) || std::abs(expected[index] - actual[index]) > kReadbackTolerance) {
       return false;
     }
   }
@@ -37,9 +37,14 @@ bool toolMatchesFeedback(
 // the monitor mutex. A partly applied mode transaction requires explicit reset.
 class ModeCommandFence {
 public:
-  explicit ModeCommandFence(unsigned channels)
+  explicit ModeCommandFence(unsigned channels,const std::function<bool()>& canceled={},
+      std::chrono::milliseconds timeout=std::chrono::milliseconds(2000),bool teaching=false)
       : safety_(motion_control_pkg::execution::motionSafety()) {
-    if (safety_) permit_.emplace(safety_->configuration(channels,error_));
+    if (safety_) {
+      if(teaching)permit_.emplace(safety_->teachingConfigurationWhenStationary(channels,error_,canceled,timeout));
+      else if(canceled)permit_.emplace(safety_->configurationWhenStationary(channels,error_,canceled,timeout));
+      else permit_.emplace(safety_->configuration(channels,error_));
+    }
   }
   ~ModeCommandFence() {
     if (permit_ && *permit_ && !complete_)
@@ -159,8 +164,21 @@ SdkCommandResult SdkCommandGate::initializePositionMode(
 }
 
 SdkCommandResult SdkCommandGate::configureControlModes(
-  const std::vector<ArmControlModeCommand> & commands)
+  const std::vector<ArmControlModeCommand> & commands,
+  bool* command_issued,const std::function<bool()>& canceled)
 {
+  return configureControlModesImpl(commands,command_issued,canceled,false);
+}
+
+SdkCommandResult SdkCommandGate::configureControlModesImpl(
+  const std::vector<ArmControlModeCommand> & commands,
+  bool* command_issued,const std::function<bool()>& canceled,bool teaching)
+{
+  const auto timeout=teaching?options_.teach_transition_timeout:options_.mode_transition_timeout;
+  if(command_issued)*command_issued=false;
+  if(canceled && canceled())return fail("control mode change canceled");
+  if(modeTransitionBlocksCaller())return fail("normal mode changes blocked by a teaching/recovery transition");
+  if (teaching_mask_.load()) return fail("normal mode changes blocked by teaching mode");
   if (const auto safety=motion_control_pkg::execution::motionSafety(); safety && safety->latched())
     return fail("control mode change refused while motion fault is latched");
 
@@ -212,15 +230,18 @@ SdkCommandResult SdkCommandGate::configureControlModes(
   }
 
   std::lock_guard<std::mutex> transition_lock(mode_transition_mutex_);
+  if(modeTransitionBlocksCaller())return fail("normal mode changes blocked by a teaching/recovery transition");
+  if (teaching_mask_.load()) return fail("normal mode changes blocked by teaching mode");
   const unsigned channels=(seen[0]?1U:0U)|(seen[1]?2U:0U);
 
   if (!has_impedance) {
-    ModeCommandFence fence(channels);
+    ModeCommandFence fence(channels,canceled,timeout,teaching);
     if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
       return fail("position_mode_begin");
     }
+    if(command_issued)*command_issued=true;
     for (const auto & command : commands) {
       if (!device_.setPositionMode(command.channel)) {
         return fail(
@@ -236,7 +257,7 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_left_joint_limits" : "set_right_joint_limits");
       }
     }
-    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || (canceled && canceled()) || !device_.commitCommandBatch()) {
       return fail("position_mode_commit");
     }
     fence.complete();
@@ -245,12 +266,13 @@ SdkCommandResult SdkCommandGate::configureControlModes(
 
   // 先写入工具参数并回读确认，再设置 K/D 和扭矩/阻抗模式。
   {
-    ModeCommandFence fence(channels);
+    ModeCommandFence fence(channels,canceled,timeout,teaching);
     if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
       return fail("tool_parameters_begin");
     }
+    if(command_issued)*command_issued=true;
     for (const auto & command : commands) {
       if (command.mode != ArmControlMode::kPosition &&
         !device_.setTool(command.channel, command.tool))
@@ -260,7 +282,7 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_left_tool_parameters" : "set_right_tool_parameters");
       }
     }
-    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || (canceled && canceled()) || !device_.commitCommandBatch()) {
       return fail("tool_parameters_commit");
     }
     fence.complete();
@@ -307,7 +329,7 @@ SdkCommandResult SdkCommandGate::configureControlModes(
   }
 
   {
-    ModeCommandFence fence(channels);
+    ModeCommandFence fence(channels,canceled,timeout,teaching);
     if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
@@ -344,7 +366,7 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_right_cartesian_impedance_gains");
       }
     }
-    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || (canceled && canceled()) || !device_.commitCommandBatch()) {
       return fail("impedance_parameters_commit");
     }
     fence.complete();
@@ -355,7 +377,7 @@ SdkCommandResult SdkCommandGate::configureControlModes(
   }
 
   {
-    ModeCommandFence fence(channels);
+    ModeCommandFence fence(channels,canceled,timeout,teaching);
     if (!fence) return SdkCommandResult::failure(fence.error());
     std::lock_guard<std::mutex> lock(mutex_);
     if (!beginCommandBatchWithRetry()) {
@@ -381,7 +403,7 @@ SdkCommandResult SdkCommandGate::configureControlModes(
           "set_left_impedance_type" : "set_right_impedance_type");
       }
     }
-    if (execution::shutdownRequested() || !device_.commitCommandBatch()) {
+    if (execution::shutdownRequested() || (canceled && canceled()) || !device_.commitCommandBatch()) {
       return fail("impedance_mode_commit");
     }
     fence.complete();
@@ -406,6 +428,8 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
   const std::optional<std::array<double, kArmDof>> & left_joints,
   const std::optional<std::array<double, kArmDof>> & right_joints)
 {
+  if (teaching_mask_.load() || mode_feedback_mask_.load())
+    return fail("trajectory commands blocked by teaching mode or mode transition");
   if (!left_joints && !right_joints) {
     return fail("empty_joint_command");
   }
@@ -441,6 +465,8 @@ SdkCommandResult SdkCommandGate::sendJointPositions(
   };
   std::lock_guard<std::mutex> lock(mutex_);
   const auto batch_start_time = std::chrono::steady_clock::now();
+  if (teaching_mask_.load() || mode_feedback_mask_.load())
+    return fail_motion("trajectory commands blocked by teaching mode or mode transition");
   const auto batch_start_timestamp_ms = std::chrono::duration_cast<
     std::chrono::milliseconds>(
     std::chrono::system_clock::now().time_since_epoch()).count();

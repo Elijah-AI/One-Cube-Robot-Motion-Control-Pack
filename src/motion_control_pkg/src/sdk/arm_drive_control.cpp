@@ -4,7 +4,8 @@
 #include <sstream>
 
 namespace motion_control_pkg::sdk {
-DriveControlResult SdkCommandGate::controlDrives(bool left, bool right, bool clear_fault) {
+DriveControlResult SdkCommandGate::controlDrives(bool left, bool right, bool clear_fault, bool recovery_stop,
+    const std::function<bool()>& cancel_clear) {
   DriveControlResult result;
   if (execution::shutdownRequested()) { result.message="shutdown in progress"; return result; }
   if (!left && !right) { result.message="no arm selected"; return result; }
@@ -15,7 +16,8 @@ DriveControlResult SdkCommandGate::controlDrives(bool left, bool right, bool cle
   // Mark stop intent before waiting for the SDK mutex. A clearing loop must
   // yield after its current vendor call instead of taking the next transaction.
   auto epoch=clear_fault ? drive_epoch_.load() : drive_epoch_.fetch_add(1)+1;
-  const auto canceled=[&] { return epoch!=drive_epoch_.load() || execution::shutdownRequested(); };
+  const auto canceled=[&] { return epoch!=drive_epoch_.load() || execution::shutdownRequested() ||
+      (clear_fault && cancel_clear && cancel_clear()); };
   const auto read=[&](std::vector<DriveAxis>& axes,std::string& detail) {
     DualArmDeviceState state;
     if (!readState(state)) { detail="SDK read failed or frame sequence invalid"; return false; }
@@ -46,7 +48,7 @@ DriveControlResult SdkCommandGate::controlDrives(bool left, bool right, bool cle
       if (canceled()) { result.message="clear superseded by emergency stop"; return result; }
       bool ok=true;
       if (left) ok=device_.clearServoError(ArmChannel::kLeft) && ok;
-      if (right) ok=device_.clearServoError(ArmChannel::kRight) && ok;
+      if (right) ok=!canceled() && device_.clearServoError(ArmChannel::kRight) && ok;
       result.command_issued=ok;
     } else {
       result.command_issued=device_.emergencyStop(left,right);
@@ -54,7 +56,34 @@ DriveControlResult SdkCommandGate::controlDrives(bool left, bool right, bool cle
     issued=DriveClock::now();
   }
   if (!result.command_issued) { result.message="SDK operation unavailable or invocation failed"; return result; }
-  result.feedback_confirmed=waitDriveFeedback(read,canceled,clear_fault,false,issued,result.message);
+  result.feedback_confirmed=waitDriveFeedback(read,canceled,clear_fault,recovery_stop && !clear_fault,issued,result.message);
+  if (!clear_fault && recovery_stop && !result.feedback_confirmed && !canceled()) {
+    // The vendor's void EStop ignores its internal batch/commit return values.
+    // During recovery/rollback, a busy enable transaction can therefore leave
+    // the arm enabled. Make one checked servo-off transaction after timeout;
+    // never repeat a clear, an enable or a position target here.
+    const auto first_failure=result.message;
+    bool committed=false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (released_ || canceled()) result.message="servo-off superseded or driver released";
+      else if (!beginCommandBatchWithRetry()) result.message="servo-off batch begin failed";
+      else {
+        bool set=true;
+        if(left)set=device_.setServoOff(ArmChannel::kLeft) && set;
+        if(right)set=device_.setServoOff(ArmChannel::kRight) && set;
+        if(!set)result.message="servo-off setter failed";
+        else if(canceled())result.message="servo-off superseded before commit";
+        else {
+          committed=device_.commitCommandBatch();
+          issued=DriveClock::now();
+          if(!committed)result.message="servo-off commit failed";
+        }
+      }
+    }
+    if(committed)result.feedback_confirmed=waitDriveFeedback(read,canceled,false,true,issued,result.message);
+    result.message="EStop confirmation failed: "+first_failure+"; checked servo-off fallback: "+result.message;
+  }
   if (clear_fault && result.feedback_confirmed) {
     // A controller error of zero alone does not prove seven servo errors clear.
     // Query each register with checked SDK return status, one transaction per
@@ -80,7 +109,7 @@ DriveControlResult SdkCommandGate::controlDrives(bool left, bool right, bool cle
     result.message+="; servo readback:"+servo.str();
   }
   if (canceled()) result.feedback_confirmed=false;
-  result.message=(result.feedback_confirmed ? "confirmed disabled and stationary; " :
+  result.message=(result.feedback_confirmed ? (recovery_stop?"confirmed reset-eligible and stationary; ":"confirmed disabled and stationary; ") :
       "command invoked, outcome unconfirmed; ")+result.message+
       "; motion fence retained; no enable or trajectory resume";
   return result;

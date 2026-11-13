@@ -122,6 +122,47 @@ int main() try {
     for(auto& a:wrap.arms.arms)a.feedback_sequence=0;
     check(wrap.read(w,false,e,501,kStamp+2000000,kStamp+3000000),"valid vendor wrap rejected");
   });
+  run("explicit recovery requalifies missed wraps without weakening advancement",[] {
+    Fixture f;MeasuredFeedbackBuilder b(f.ids);std::string e;
+    for(auto& a:f.arms.arms)a.feedback_sequence=482060;
+    check(f.read(b,false,e),"baseline failed");
+    for(auto& a:f.arms.arms)a.feedback_sequence=143303;
+    check(!f.read(b,false,e,501,kStamp+1000000,kStamp+2000000),"missed wrap silently accepted");
+    check(!b.beginRecoveryEpoch(0),"zero recovery boundary accepted");
+    check(b.beginRecoveryEpoch(kStamp+2000000),"recovery boundary rejected");
+    for(auto stamp:{kStamp+1000000,kStamp+2000000})
+      check(!f.read(b,false,e,501,stamp,kStamp+3000000),"pre-recovery acquisition seeded publisher");
+    check(f.read(b,false,e,501,kStamp+3000000,kStamp+4000000),"new low frame rejected after recovery");
+    check(!f.read(b,false,e,502,kStamp+4000000,kStamp+5000000),"repeated arm frame accepted after recovery");
+    --f.arms.arms[0].feedback_sequence;
+    check(!f.read(b,false,e,502,kStamp+4000000,kStamp+5000000),"reversed arm frame accepted after recovery");
+    for(auto& a:f.arms.arms)a.feedback_sequence=143304;
+    check(f.read(b,false,e,502,kStamp+4000000,kStamp+5000000),"valid publisher did not resume");
+  });
+  run("recovery epoch still requires valid operational fresh measurements",[] {
+    for(int bad=0;bad<7;++bad) {
+      Fixture f;MeasuredFeedbackBuilder b(f.ids);std::string e;
+      check(b.beginRecoveryEpoch(kStamp),"recovery boundary failed");
+      auto stamp=kStamp+1000000,now=kStamp+2000000;uint64_t sequence=501;
+      if(bad==0)f.arms.arms[0].current_state=0;
+      if(bad==1)f.arms.arms[0].error_code=7;
+      if(bad==2)f.arms.arms[0].joint_position[0]=std::numeric_limits<double>::quiet_NaN();
+      if(bad==3)sequence=0;
+      if(bad==4)now=stamp-1;
+      if(bad==5)now=stamp+101000000;
+      if(bad==6)f.motors[0].errorCode=0x8611;
+      check(!f.read(b,false,e,sequence,stamp,now),"invalid post-recovery feedback accepted");
+      Fixture valid;
+      check(valid.read(b,false,e,501,kStamp+1000000,kStamp+2000000),"rejected feedback poisoned new epoch");
+    }
+  });
+  run("snapshot readers remain independent of recovery publisher epoch",[] {
+    Fixture f;MeasuredFeedbackBuilder b(f.ids);std::string e;
+    check(b.beginRecoveryEpoch(kStamp+2000000),"recovery boundary failed");
+    check(f.read(b,true,e),"publisher epoch affected an independent fresh snapshot");
+    check(!f.read(b,false,e),"snapshot replaced publisher boundary");
+    check(f.read(b,false,e,501,kStamp+3000000,kStamp+4000000),"new publisher frame failed");
+  });
   const auto start=JointCompletionGuard::Time(std::chrono::seconds(1));
   run("leg completion cannot settle or stay fresh from repeated PDOs",[&] {
     JointCompletionGuard guard({0},start,start+std::chrono::seconds(1));std::string e;

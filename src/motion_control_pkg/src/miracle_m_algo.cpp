@@ -1668,9 +1668,37 @@ bool MiracleMAlgo::solveDualIKKernel(const Eigen::VectorXd& q_init,
 // 单臂模式仅激活对应手臂 + 腿部；双臂模式激活双臂 + 腿部。
 // 采用 qpOASES 求解；并以回溯线搜索保证关节限位/自碰撞不被违反(线性化安全网)。
 // =============================================================================
+void MiracleMAlgo::setSdkArmPositionLimits(
+    const motion_control_pkg::wbc::PositionLimitOverrides& limits) {
+    std::lock_guard<std::recursive_mutex> lock(pinocchio_data_mutex_);
+    if (ik_recovery_ || static_balance_)
+        throw std::logic_error("SDK arm position limits must be set before IK recovery/static balance");
+    if (limits.size() != 14U)
+        throw std::invalid_argument("SDK arm position limits require exactly 14 joints");
+    // Validate the complete update before changing any model entry.
+    for (const char side : {'L', 'R'}) {
+        for (int joint = 1; joint <= 7; ++joint) {
+            const std::string name = "Joint" + std::to_string(joint) + "_" + side;
+            const auto found = limits.find(name);
+            if (found == limits.end() || !model_.existJointName(name) ||
+                model_.joints[model_.getJointId(name)].nq() != 1 ||
+                !std::isfinite(found->second.first) || !std::isfinite(found->second.second) ||
+                found->second.first >= found->second.second)
+                throw std::invalid_argument("invalid SDK arm position limits for " + name);
+        }
+    }
+    sdk_arm_position_limits_ = limits;
+    for (const auto& entry : limits) {
+        const auto index = model_.joints[model_.getJointId(entry.first)].idx_q();
+        model_.lowerPositionLimit[index] = entry.second.first;
+        model_.upperPositionLimit[index] = entry.second.second;
+    }
+}
+
 void MiracleMAlgo::configureStaticBalance(const motion_control_pkg::wbc::StaticBalanceOptions& options) {
     std::lock_guard<std::recursive_mutex> lock(pinocchio_data_mutex_);
-    static_balance_ = std::make_unique<motion_control_pkg::wbc::StaticBalance>(urdf_path_, options);
+    static_balance_ = std::make_unique<motion_control_pkg::wbc::StaticBalance>(
+        urdf_path_, options, std::vector<std::string>{}, sdk_arm_position_limits_);
 }
 
 bool MiracleMAlgo::balanceStateToFullQ(const motion_control_pkg::wbc::JointSnapshot& state,

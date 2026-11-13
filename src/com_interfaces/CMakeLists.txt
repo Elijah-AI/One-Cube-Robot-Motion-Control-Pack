@@ -16,6 +16,8 @@ find_package(sensor_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetSystemStatus.srv"
   "srv/DriveControl.srv"
+  "srv/SetTeachMode.srv"
+  "srv/RecoverRobot.srv"
   "msg/HeartBeat.msg"
   "msg/NodeStatus.msg"
   "msg/MotorStatus.msg"

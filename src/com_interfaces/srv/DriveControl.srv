@@ -3,6 +3,7 @@ uint8 LEFT_ARM=0
 uint8 RIGHT_ARM=1
 uint8 BOTH_ARMS=2
 uint8 LOWER_BODY=3
+uint8 HEAD=4
 uint8 EMERGENCY_STOP=0
 uint8 CLEAR_FAULT=1
 uint8 target

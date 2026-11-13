@@ -538,6 +538,22 @@ rclcpp::Node::SharedPtr DualArmModule::lockNode(const char *context) const
     return node;
 }
 
+motion_control_pkg::sdk::DriveControlResult DualArmModule::setTeachMode(
+    unsigned mask, bool enable, const std::function<bool()>& canceled) {
+    using namespace motion_control_pkg::sdk;
+    if (!sdk_connected_ || !sdk_command_gate_) return {false,false,"arm SDK is not connected"};
+    std::vector<ArmControlModeCommand> commands;
+    for (unsigned i=0;i<2;++i) if (mask&(1U<<i)) {
+        ArmControlModeCommand command;
+        command.channel=static_cast<ArmChannel>(i);
+        command.mode=ArmControlMode::kJointImpedance;
+        command.tool=tool_parameters_[i];
+        command.impedance=joint_impedance_parameters_[i];
+        commands.push_back(command);
+    }
+    return sdk_command_gate_->setTeachMode(commands,enable,canceled);
+}
+
 motion_control_pkg::sdk::SdkCommandResult
 DualArmModule::configureGoalControlMode(
     std::uint8_t control_mode,
@@ -4009,6 +4025,27 @@ void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleCon
       r_jerk_limit_[i] = 5.0 * pnva_[1][i][3] * motion_control_pkg::kinematics::kDegreesToRadians * jerk_scale_;
       
     //   std::cout<<"i:="<<i<<","<<"j:="<< l_jerk_limit_[i]<<","<<r_jerk_limit_[i]<<std::endl;
+    }
+    motion_control_pkg::wbc::PositionLimitOverrides sdk_position_limits;
+    for (int joint = 0; joint < arm_dof_; ++joint) {
+        const std::string prefix = "Joint" + std::to_string(joint + 1);
+        sdk_position_limits[prefix + "_L"] = {l_q_lower_limits_[joint], l_q_upper_limits_[joint]};
+        sdk_position_limits[prefix + "_R"] = {r_q_lower_limits_[joint], r_q_upper_limits_[joint]};
+    }
+    try {
+        miracle_algo_->setSdkArmPositionLimits(sdk_position_limits);
+    } catch (const std::exception& error) {
+        RCLCPP_ERROR(rclcpp::get_logger("dual_arm_module"),
+            "Invalid SDK arm position limits: %s", error.what());
+        return false;
+    }
+    for (int arm = 0; arm < 2; ++arm) {
+        for (int joint = 0; joint < arm_dof_; ++joint) {
+            RCLCPP_INFO(rclcpp::get_logger("dual_arm_module"),
+                "Arm position limit source=SDK arm=%s joint=J%d lower_deg=%.6f upper_deg=%.6f config=%s",
+                arm == 0 ? "left" : "right", joint + 1,
+                pnva_[arm][joint][1], pnva_[arm][joint][0], sdk_config_path_.c_str());
+        }
     }
     res = true;
     return res;

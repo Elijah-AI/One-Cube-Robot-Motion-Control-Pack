@@ -50,6 +50,9 @@ bool MarvinDualArmSdkAdapter::readState(DualArmDeviceState & state)
     output.current_state = vendor_state.m_State[arm].m_CurState;
     output.error_code = vendor_state.m_State[arm].m_ERRCode;
     output.low_speed = vendor_state.m_Out[arm].m_LowSpdFlag == 1;
+    output.impedance_type = vendor_state.m_In[arm].m_ImpType;
+    output.drag_space = vendor_state.m_In[arm].m_DragSpType;
+    output.tip_di = vendor_state.m_Out[arm].m_TipDI;
     output.controller_joint_command.emplace();
     for (std::size_t joint = 0; joint < kArmDof; ++joint) {
       output.joint_position[joint] = vendor_state.m_Out[arm].m_FB_Joint_Pos[joint];
@@ -102,6 +105,12 @@ bool MarvinDualArmSdkAdapter::clearServoError(ArmChannel channel)
 bool MarvinDualArmSdkAdapter::setServoOff(ArmChannel channel)
 {
   return channel == ArmChannel::kLeft ? OnSetTargetState_A(0) : OnSetTargetState_B(0);
+}
+
+bool MarvinDualArmSdkAdapter::setDragSpace(ArmChannel channel, int space)
+{
+  if (space < 0 || space > 5) return false;
+  return channel == ArmChannel::kLeft ? OnSetDragSpace_A(space) : OnSetDragSpace_B(space);
 }
 
 bool MarvinDualArmSdkAdapter::setPositionMode(ArmChannel channel)
@@ -187,6 +196,8 @@ bool MarvinDualArmSdkAdapter::commitCommandBatch()
 }
 
 #else
+
+bool MarvinDualArmSdkAdapter::setDragSpace(ArmChannel, int) { return false; }
 
 bool MarvinDualArmSdkAdapter::emergencyStop(bool, bool)
 {

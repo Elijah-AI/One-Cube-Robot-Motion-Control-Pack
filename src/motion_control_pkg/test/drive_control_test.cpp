@@ -14,6 +14,9 @@ struct ArmDevice : DualArmDeviceInterface {
   DualArmDeviceState state;
   std::atomic<int> reads{0}, clears{0}, modes{0}, batches{0}, stops{0};
   bool advance{true}, stop_ok{true}, clear_ok{true};
+  bool ignore_stop=false,off_ok=true,commit_ok=true;
+  std::array<bool,2> pending_off{{false,false}};
+  std::atomic<int> servo_off{0};
   bool servo_read_ok{true};
   long servo_error{0};
   bool selected_left{},selected_right{};
@@ -29,13 +32,16 @@ struct ArmDevice : DualArmDeviceInterface {
   }
   bool emergencyStop(bool left,bool right) override {
     ++stops; selected_left=left; selected_right=right;
-    for (int i=0;i<2;++i) if (i==0 ? left : right) state.arms[i].current_state=0;
+    for (int i=0;i<2;++i) if (!ignore_stop && (i==0 ? left : right)) state.arms[i].current_state=0;
     return stop_ok;
   }
   bool readServoError(ArmChannel,std::size_t,long& error) override {
     error=servo_error; return servo_read_ok;
   }
-  bool beginCommandBatch() override { ++batches; return true; }
+  bool beginCommandBatch() override { ++batches;pending_off.fill(false);return true; }
+  bool setServoOff(ArmChannel channel) override {
+    ++servo_off;pending_off[static_cast<unsigned>(channel)]=true;return off_ok;
+  }
   bool clearServoError(ArmChannel channel) override {
     ++clears;
     if (clear_ok) { auto& a=state.arms[static_cast<int>(channel)]; a.error_code=0; a.current_state=0; }
@@ -49,7 +55,11 @@ struct ArmDevice : DualArmDeviceInterface {
   bool setCartesianImpedanceGains(ArmChannel,const std::array<double,7>&,const std::array<double,7>&) override {return true;}
   bool setImpedanceType(ArmChannel,ArmControlMode) override {return true;}
   bool setJointPosition(ArmChannel,const std::array<double,7>&) override { ++modes; return true; }
-  bool commitCommandBatch() override { ++batches; return true; }
+  bool commitCommandBatch() override {
+    ++batches;
+    if(commit_ok)for(unsigned i=0;i<2;++i)if(pending_off[i])state.arms[i].current_state=0;
+    return commit_ok;
+  }
 };
 
 struct Bus {
@@ -99,6 +109,33 @@ int main() try {
   const auto base=DriveClock::now();
   const DriveAxis axis{0,0,1,base,true,false,true,false};
   {
+    DriveFeedbackWindow teaching(base,100ms,
+        motion_control_pkg::execution::kTeachStandstillVelocity,
+        motion_control_pkg::execution::kTeachStandstillDisplacement);
+    DriveFeedbackWindow ordinary(base);
+    bool confirmed=false;
+    for(int i=0;i<=5;++i) {
+      auto a=axis;a.sequence+=i;a.acquired=base+i*20ms;
+      a.velocity=.03;a.position=i*.01;
+      confirmed=teaching.update({a},true,false,a.acquired);
+      check(!ordinary.update({a},true,false,a.acquired),"teaching limits leaked into normal drive window");
+      if(i<5)check(!confirmed,"teaching accepted before 100 ms");
+    }
+    check(confirmed,"teaching rejected .03 rad/s or .05 rad window boundary");++cases;
+  }
+  for(int bad=0;bad<4;++bad) {
+    DriveFeedbackWindow teaching(base,100ms,.03,.05);
+    for(int i=0;i<12;++i) {
+      auto a=axis;a.sequence+=i;a.acquired=base+i*20ms;
+      if(bad==0)a.velocity=.030001;
+      if(bad==1)a.position=i*.0101;
+      if(bad==2)a.disabled=false;
+      if(bad==3){a.sequence=axis.sequence;a.acquired=base;}
+      check(!teaching.update({a},true,false,base+i*20ms),"teaching accepted excess speed/displacement or unqualified frames");
+    }
+    ++cases;
+  }
+  {
     DriveFeedbackWindow window(base);
     std::vector<DriveAxis> axes{axis};
     for(int i=0;i<30;++i) check(!window.update(axes,false,false,base+1ms),"repeated frame accepted");
@@ -136,6 +173,30 @@ int main() try {
     check(r.success() && device.selected_left==left && device.selected_right==right,"arm routing/stop failed");
     check(device.modes==0 && device.batches==0 && device.clears==0,"stop nested/changed modes");
     ++cases;
+  }
+  for (int selection=0;selection<3;++selection) {
+    ArmDevice device;device.ignore_stop=true;
+    for(auto& a:device.state.arms)a.current_state=1;
+    SdkCommandGate gate(device,ActiveArmConfiguration::kDualArm);
+    const bool left=selection!=1,right=selection!=0;
+    const auto r=gate.controlDrives(left,right,false,true);
+    check(r.success() && device.stops==1 && device.servo_off==int(left)+int(right),
+      "recovery stop fallback did not confirm selected arms disabled");
+    for(unsigned i=0;i<2;++i)check(device.state.arms[i].current_state==((i==0?left:right)?0:1),
+      "recovery stop fallback changed unselected arm");
+    check(device.modes==0 && device.clears==0 && r.message.find("checked servo-off fallback")!=std::string::npos,
+      "fallback sent a position/enable/clear command or hid its diagnostic");++cases;
+  }
+  for (int bad=0;bad<3;++bad) {
+    ArmDevice device;device.ignore_stop=true;
+    for(auto& a:device.state.arms)a.current_state=1;
+    if(bad==0)device.off_ok=false;
+    if(bad==1)device.commit_ok=false;
+    if(bad==2)device.advance=false;
+    SdkCommandGate gate(device,ActiveArmConfiguration::kDualArm);
+    const auto r=gate.controlDrives(true,true,false,true);
+    check(r.command_issued && !r.feedback_confirmed && device.modes==0 && device.clears==0,
+      "failed or unconfirmed fallback claimed success");++cases;
   }
   {
     ArmDevice device; device.state.arms[0].current_state=100; device.state.arms[0].error_code=13;

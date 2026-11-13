@@ -2,6 +2,8 @@
 #include "motion_control_pkg/motion/tcp_level_plan.hpp"
 #include "com_interfaces/action/move_pose.hpp"
 #include "com_interfaces/rigid_grasp_goal.hpp"
+#include <jsoncpp/json/json.h>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 using namespace motion_control_pkg;
@@ -11,19 +13,15 @@ void require(bool ok,const std::string& e) {if(!ok) throw std::runtime_error(e);
 int main(int argc,char** argv) try {
   require(argc==2,"expected repository");std::string root=argv[1];
   MiracleMAlgo algo(root+"/src/onecube_robot_description/urdf/onecube_robot_description.urdf",root+"/src");
-  const auto& m=algo.getModel();
-  // Calibrated downward grasp, with contact points 0.50 m apart. Keep the
-  // motion regression independent of visualization tools and generated data.
-  const Q left_joints{1.7779331196597112,-1.2724396582521105,-1.001608629055811,
-    -.575803938937869,-1.6538275652205925,.2637903896770379,-1.420791587551045};
-  const Q right_joints{-1.778723785748662,-1.2775189549111559,1.0067136733379585,
-    -.5721654336238697,1.6531892920810893,.26169269371552184,1.4207999984788273};
+  const auto& m=algo.getModel();Json::Value f;
+  std::ifstream input(root+"/src/motion_control_pkg/tools/mujoco_validation/rigid_grasp_fixture.json");input>>f;
   Eigen::Isometry3d lt=Eigen::Isometry3d::Identity(),rt=lt;
   for(bool left:{true,false}) {
-    require(algo.updateChainJointsAngle(left?"left_arm":"right_arm",left?left_joints:right_joints)==0,"fixture joints");
-    auto& t=left?lt:rt;
-    t.translation()<<0.,0.,.167;
-    t.linear()=(left?Eigen::Quaterniond(.5,.5,-.5,.5):Eigen::Quaterniond(-.5,.5,.5,.5)).toRotationMatrix();
+    Q a;for(const auto& v:f[left?"left_joints":"right_joints"]) a.push_back(v.asDouble());
+    require(algo.updateChainJointsAngle(left?"left_arm":"right_arm",a)==0,"fixture joints");
+    const auto& p=f[left?"left_tool_tf":"right_tool_tf"];auto& t=left?lt:rt;
+    t.translation()<<p[0].asDouble(),p[1].asDouble(),p[2].asDouble();
+    t.linear()=Eigen::Quaterniond(p[6].asDouble(),p[3].asDouble(),p[4].asDouble(),p[5].asDouble()).toRotationMatrix();
   }
   Q start;require(algo.getFullJointState(start),"start state");
   const auto idx=[&](const std::string& n){return m.joints[m.getJointId(n)].idx_q();};

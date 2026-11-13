@@ -20,6 +20,9 @@ class StaticBalance {
 public:
   StaticBalance(const std::string& urdf_path, StaticBalanceOptions options,
                 const std::vector<std::string>& package_dirs = {});
+  StaticBalance(const std::string& urdf_path, StaticBalanceOptions options,
+                const std::vector<std::string>& package_dirs,
+                const PositionLimitOverrides& position_limits);
   const CentroidalModel& model() const { return model_; }
   const SupportResult& region() const { return region_; }
   const SteeringBounds& bounds() const { return bounds_; }

@@ -24,6 +24,7 @@ public:
   bool readServoError(ArmChannel channel, std::size_t joint, long& error) override;
   bool beginCommandBatch() override;
   bool clearServoError(ArmChannel channel) override;
+  bool setDragSpace(ArmChannel channel, int space) override;
   bool setServoOff(ArmChannel channel) override;
   bool setPositionMode(ArmChannel channel) override;
   bool setTorqueMode(ArmChannel channel) override;

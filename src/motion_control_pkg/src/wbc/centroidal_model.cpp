@@ -21,7 +21,10 @@ struct CentroidalModel::Impl {
   double total_mass{};
 };
 
-CentroidalModel::CentroidalModel(const std::string& path) : impl_(std::make_unique<Impl>()) {
+CentroidalModel::CentroidalModel(const std::string& path) : CentroidalModel(path, {}) {}
+
+CentroidalModel::CentroidalModel(const std::string& path,
+    const PositionLimitOverrides& position_limits) : impl_(std::make_unique<Impl>()) {
   const auto urdf = urdf::parseURDFFile(path);
   if (!urdf || !urdf->getRoot()) throw std::invalid_argument("cannot parse URDF: " + path);
   impl_->root = urdf->getRoot()->name;
@@ -59,10 +62,21 @@ CentroidalModel::CentroidalModel(const std::string& path) : impl_(std::make_uniq
     if (!std::isfinite(l.lower) || !std::isfinite(l.upper) || l.lower > l.upper ||
         !std::isfinite(l.velocity) || l.velocity < 0 || !std::isfinite(l.effort) || l.effort < 0)
       throw std::invalid_argument("invalid URDF limits: " + name);
-    impl_->joints.push_back({name, l.lower, l.upper, l.velocity, l.effort, l.lower == l.upper});
+    const auto override = position_limits.find(name);
+    const double lower = override == position_limits.end() ? l.lower : override->second.first;
+    const double upper = override == position_limits.end() ? l.upper : override->second.second;
+    if (!std::isfinite(lower) || !std::isfinite(upper) || lower > upper)
+      throw std::invalid_argument("invalid runtime position limits: " + name);
+    impl_->model.lowerPositionLimit[pj.idx_q()] = lower;
+    impl_->model.upperPositionLimit[pj.idx_q()] = upper;
+    impl_->joints.push_back({name, lower, upper, l.velocity, l.effort, lower == upper});
     impl_->qi.push_back(pj.idx_q());
     impl_->vi.push_back(pj.idx_v());
   }
+  for (const auto& entry : position_limits)
+    if (std::none_of(impl_->joints.begin(), impl_->joints.end(),
+        [&](const auto& joint) { return joint.name == entry.first; }))
+      throw std::invalid_argument("unknown position-limit joint: " + entry.first);
 }
 CentroidalModel::~CentroidalModel() = default;
 const std::vector<JointSpec>& CentroidalModel::joints() const { return impl_->joints; }

@@ -1,0 +1,13 @@
+# Runtime switch. Every controller start begins with teaching OFF.
+uint8 LEFT_ARM=0
+uint8 RIGHT_ARM=1
+uint8 BOTH_ARMS=2
+uint8 target 2
+bool enable false
+---
+# Success requires advancing feedback echoing the requested mode.
+bool success
+bool command_issued
+bool feedback_confirmed
+uint8 active_mask
+string message

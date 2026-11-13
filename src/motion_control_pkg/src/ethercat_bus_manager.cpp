@@ -216,6 +216,8 @@ EthercatBusManager::EthercatBusManager(char const *xmlFile)
     ready_ = startup_ok && !motion_control_pkg::execution::shutdownRequested();
     drive_maintenance_available_=std::all_of(kLowerBodyMotorIds.begin(),kLowerBodyMotorIds.end(),
         [&](int id){return std::find(active_motors_.begin(),active_motors_.end(),id)!=active_motors_.end();});
+    head_maintenance_available_=std::find(active_motors_.begin(),active_motors_.end(),31)!=active_motors_.end() &&
+        std::find(active_motors_.begin(),active_motors_.end(),30)!=active_motors_.end();
     worker_ = std::make_shared<std::thread>(&EthercatBusManager::run, this);
 }
 
@@ -393,7 +395,7 @@ void EthercatBusManager::run() {
                 actual_sequence_=oldest_sequence;
             }
         }
-        motion_control_pkg::sdk::EthercatDriveMaintenance::WriteTicket maintenance_ticket,shutdown_ticket;
+        motion_control_pkg::sdk::EthercatDriveMaintenance::WriteTicket maintenance_ticket,head_ticket,shutdown_ticket;
         {
             std::lock_guard<std::mutex> lock(target_mutex_);
             for (int motor_id : active_motors_) {
@@ -431,6 +433,8 @@ void EthercatBusManager::run() {
             // erase enabled=-1. No other thread writes the DriverSDK target.
             maintenance_ticket=drive_maintenance_.update(
                 device_frames,raw_frames_valid,motor_target_buffer_,motor_enable_ready_);
+            head_ticket=head_maintenance_.update(
+                device_frames,raw_frames_valid,motor_target_buffer_,motor_enable_ready_);
             // Shutdown has priority over clear/reset and includes head axes.
             shutdown_ticket=shutdown_maintenance_.update(
                 device_frames,raw_frames_valid,motor_target_buffer_,motor_enable_ready_);
@@ -440,6 +444,7 @@ void EthercatBusManager::run() {
         if (!target_data.empty()) {
             const bool written=controller_.setMotorTarget(target_data)==0;
             drive_maintenance_.written(maintenance_ticket,written);
+            head_maintenance_.written(head_ticket,written);
             shutdown_maintenance_.written(shutdown_ticket,written);
             if (!written) {
                 RCLCPP_ERROR(rclcpp::get_logger("ethercat_bus_manager"),
@@ -509,6 +514,67 @@ void EthercatBusManager::endHeadPitchStartupRecovery() noexcept {
     using End = void (*)();
     const auto end=reinterpret_cast<End>(dlsym(RTLD_DEFAULT,"onecube_end_head_pitch_recovery_v1"));
     if(end)end();
+}
+
+motion_control_pkg::sdk::DriveControlResult EthercatBusManager::recoverAllDrives(
+    const std::function<bool(const motion_control_pkg::sdk::EthercatEnableSample&,std::string&)>& check,
+    const std::function<bool()>& canceled) {
+    using namespace motion_control_pkg::sdk;
+    DriveControlResult result;
+    std::unique_lock<std::mutex> enable_lock(enable_mutex_,std::try_to_lock);
+    if (!enable_lock.owns_lock() || !ready_ || stop_ || !drive_maintenance_available_ ||
+        !head_maintenance_available_ || !check || canceled()) {
+        result.message="whole-body recovery unavailable or busy";return result;
+    }
+    const std::vector<std::uint16_t> ids{29,28,27,26,31,30};
+    const auto safe=[&](std::string& error) {
+        if (motion_control_pkg::execution::shutdownRequested() || canceled() || stop_ || !ready_) {
+            error="whole-body recovery canceled";return false;
+        }
+        EthercatEnableSample sample;
+        return getTimedMotorActualSnapshot(sample.motors,sample.acquired,sample.sequence) && check(sample,error);
+    };
+    if (!safe(result.message)) return result;
+    {
+        std::lock_guard<std::mutex> lock(target_mutex_);
+        if (canceled() || !drive_maintenance_.releaseAfterConfirmedClear() ||
+            !head_maintenance_.releaseAfterConfirmedClear()) {
+            drive_maintenance_.requestShutdownDisable();
+            head_maintenance_.requestShutdownDisable();
+            result.message="both body and head must have confirmed clears before enabling";return result;
+        }
+    }
+    // A fresh handshake instance is reserved for this explicit service call;
+    // the ordinary one-shot startup/automatic-enable policy stays unchanged.
+    EthercatInitialEnable recovery_enable;
+    result.feedback_confirmed=recovery_enable.run(ids,5.0,
+        [&](EthercatEnableSample& sample,std::string& error) {
+            return getTimedMotorActualSnapshot(sample.motors,sample.acquired,sample.sequence) && check(sample,error);
+        },
+        [&](const auto& targets,std::string& error) {
+            if (!safe(error)) return false;
+            std::lock_guard<std::mutex> lock(target_mutex_);
+            if (canceled() || motion_control_pkg::execution::shutdownRequested()) return false;
+            for (std::size_t i=0;i<ids.size();++i) motor_target_buffer_[ids[i]]=targets[i];
+            result.command_issued=true;return true;
+        },
+        [&] {
+            std::lock_guard<std::mutex> lock(target_mutex_);
+            for (auto id:ids) {motor_target_buffer_[id].enabled=0;motor_enable_ready_[id]=false;}
+            drive_maintenance_.requestShutdownDisable();head_maintenance_.requestShutdownDisable();
+        },safe,result.message);
+    if (result.feedback_confirmed) {
+        std::lock_guard<std::mutex> lock(target_mutex_);
+        if (canceled() || motion_control_pkg::execution::shutdownRequested()) {
+            result.feedback_confirmed=false;
+            drive_maintenance_.requestShutdownDisable();head_maintenance_.requestShutdownDisable();
+        } else {
+            for (auto id:ids) motor_enable_ready_[id]=true;
+        }
+    }
+    result.message=(result.feedback_confirmed?"head and waist/legs enabled at measured positions; ":
+        "body/head recovery enable unconfirmed; ")+result.message;
+    return result;
 }
 
 bool EthercatBusManager::enableMotors(const std::vector<uint16_t> &motor_ids,

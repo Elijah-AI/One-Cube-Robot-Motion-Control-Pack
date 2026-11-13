@@ -27,6 +27,8 @@ public:
   // Leaves endpoints and explicitly pinned via configurations unchanged.
   // Transactional: a failed projection never publishes a partial path.
   bool projectPath(Path& path, const Path& pinned, std::string& error);
+  // Algorithm-level comparison/initialization helper; transactional, arms only.
+  bool projectConfiguration(Configuration& q, std::string& error);
   bool checkMeasured(const std::vector<std::string>& names,
                      const Configuration& positions, std::string& error);
 private:

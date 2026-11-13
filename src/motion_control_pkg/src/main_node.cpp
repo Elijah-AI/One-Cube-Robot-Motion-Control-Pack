@@ -2,6 +2,7 @@
 #include "motion_control_pkg/execution/orderly_shutdown.hpp"
 #include "motion_control_pkg/execution/motion_safety.hpp"
 #include "motion_control_pkg/execution/ethercat_trajectory.hpp"
+#include "motion_control_pkg/execution/robot_recovery.hpp"
 #include <std_srvs/srv/trigger.hpp>
 #include <rcl_interfaces/srv/set_parameters_atomically.hpp>
 #include <rcl_interfaces/msg/parameter_type.hpp>
@@ -23,6 +24,8 @@
 #include "dual_arm_module.hpp"
 #include "ethercat_bus_manager.hpp"
 #include "com_interfaces/srv/drive_control.hpp"
+#include "com_interfaces/srv/set_teach_mode.hpp"
+#include "com_interfaces/srv/recover_robot.hpp"
 #include "miracle_head_module.hpp"
 #include "miracle_lower_body_module.hpp"
 #include "miracle_m_algo.hpp"
@@ -122,20 +125,6 @@ public:
             }
             if(recovery.cpus.empty())throw std::invalid_argument("ik_recovery_cpus must be auto or a CPU list");
         }
-        miracleAlgo_ptr_->configureIkRecovery(recovery, [] {
-            if (!rclcpp::ok()) return true;
-            const auto safety = motion_control_pkg::execution::motionSafety();
-            std::string error;
-            return safety && !safety->ready(error);
-        });
-        std::ostringstream selected_cpus;
-        for (const auto cpu : miracleAlgo_ptr_->ikRecoveryStats().cpus) {
-            if (selected_cpus.tellp() > 0) selected_cpus << ',';
-            selected_cpus << cpu;
-        }
-        RCLCPP_INFO(get_logger(), "IK failure recovery: enabled=%d seeds=%zu workers=%zu CPUs=%s seed_timeout=%.3fs request_timeout=%.3fs",
-            recovery.enabled, recovery.seeds, miracleAlgo_ptr_->ikRecoveryStats().cpus.size(),
-            selected_cpus.str().c_str(), recovery.seed_timeout_s, recovery.request_timeout_s);
 
         //创建头部模块
         head_module_ = std::make_shared<MiracleHeadModule>("head", shared_from_this());
@@ -229,6 +218,22 @@ public:
                 "Dual arm initialization failed: " +
                 dual_arm_initialization_error);
         }
+        // SDK position limits must be installed before spawning model-only recovery workers.
+        miracleAlgo_ptr_->configureIkRecovery(recovery, [] {
+            if (!rclcpp::ok()) return true;
+            const auto safety = motion_control_pkg::execution::motionSafety();
+            std::string error;
+            return safety && !safety->ready(error);
+        });
+        std::ostringstream selected_cpus;
+        for (const auto cpu : miracleAlgo_ptr_->ikRecoveryStats().cpus) {
+            if (selected_cpus.tellp() > 0) selected_cpus << ',';
+            selected_cpus << cpu;
+        }
+        RCLCPP_INFO(get_logger(), "IK failure recovery: enabled=%d seeds=%zu workers=%zu CPUs=%s seed_timeout=%.3fs request_timeout=%.3fs",
+            recovery.enabled, recovery.seeds, miracleAlgo_ptr_->ikRecoveryStats().cpus.size(),
+            selected_cpus.str().c_str(), recovery.seed_timeout_s, recovery.request_timeout_s);
+
         dual_arm_module_->attachMeasuredFeedbackBus(ethercat_bus_manager_ptr_);
         lower_body_module_->set_body_motion_callbacks(
             [arms = dual_arm_module_, head = head_module_](std::string& error) {
@@ -424,6 +429,164 @@ private:
     rclcpp::CallbackGroup::SharedPtr drive_control_group_;
     rclcpp::Service<com_interfaces::srv::DriveControl>::SharedPtr drive_control_service_;
     std::mutex drive_clear_mutex_;
+    std::atomic<bool> maintenance_active_{false};
+    std::atomic<unsigned> teaching_mask_{0};
+    std::atomic<std::uint64_t> maintenance_epoch_{0};
+    std::mutex maintenance_stop_mutex_;
+    bool teach_mode_available_{true};
+    std::atomic<bool> teaching_stop_issued_{false};
+    rclcpp::Service<com_interfaces::srv::SetTeachMode>::SharedPtr teach_mode_service_;
+    rclcpp::Service<com_interfaces::srv::RecoverRobot>::SharedPtr recover_robot_service_;
+    struct MaintenanceActiveReset {
+        std::atomic<bool>& value;
+        ~MaintenanceActiveReset() { value=false; }
+    };
+    void cancelMaintenance(const std::string& reason) {
+        std::lock_guard<std::mutex> lock(maintenance_stop_mutex_);
+        ++maintenance_epoch_;
+        motion_safety_->requestStop(reason);
+    }
+    bool startMaintenance(std::string& error) {
+        std::lock_guard<std::mutex> lock(admission_mutex_);
+        if (maintenance_active_ || !shutdownResourcesIdle() ||
+            motion_control_pkg::execution::shutdownRequested()) {
+            error="maintenance requires idle motion/tool resources and completed startup";return false;
+        }
+        maintenance_active_=true;return true;
+    }
+
+    void configureRobotMaintenance() {
+        using namespace motion_control_pkg;
+        rcl_interfaces::msg::ParameterDescriptor fixed;fixed.read_only=true;
+        teach_mode_available_=declare_parameter("teach_mode_available",true,fixed);
+        using Teach=com_interfaces::srv::SetTeachMode;
+        teach_mode_service_=create_service<Teach>("/Control/set_teach_mode",
+            [this](const std::shared_ptr<Teach::Request> request,std::shared_ptr<Teach::Response> response) {
+                response->active_mask=static_cast<uint8_t>(teaching_mask_.load());
+                struct LogResponse {std::function<void()> log;~LogResponse(){log();}};
+                LogResponse log_response{[&,this] {
+                    response->active_mask=static_cast<uint8_t>(teaching_mask_.load());
+                    RCLCPP_INFO(get_logger(),
+                        "Teach switch enable=%d target=%u active_mask=%u success=%d command_issued=%d feedback_confirmed=%d: %s",
+                        request->enable,static_cast<unsigned>(request->target),
+                        static_cast<unsigned>(response->active_mask),response->success,
+                        response->command_issued,response->feedback_confirmed,response->message.c_str());
+                }};
+                if(request->target>Teach::Request::BOTH_ARMS) {response->message="invalid teaching target";return;}
+                if(request->enable && !teach_mode_available_) {response->message="teach_mode_available is false";return;}
+                std::unique_lock<std::mutex> lock(drive_clear_mutex_,std::try_to_lock);
+                if(!lock.owns_lock()) {response->message="another maintenance request is active";return;}
+                if(!startMaintenance(response->message))return;
+                MaintenanceActiveReset active{maintenance_active_};
+                const unsigned mask=request->target==2?3U:1U<<request->target;
+                if(request->enable && (teaching_mask_ || !motion_safety_->ready(response->message))) {
+                    if(teaching_mask_) {
+                        response->message="switch teaching OFF before enabling another target; active_mask="+
+                            std::to_string(teaching_mask_.load());
+                        if(motion_safety_->latched())response->message+="; motion fault latched; explicit recovery required";
+                    }
+                    return;
+                }
+                const auto epoch=maintenance_epoch_.load();
+                const auto canceled=[&] {return epoch!=maintenance_epoch_.load() || execution::shutdownRequested();};
+                const auto result=dual_arm_module_->setTeachMode(mask,request->enable,canceled);
+                response->command_issued=result.command_issued;
+                response->feedback_confirmed=result.feedback_confirmed;
+                response->success=result.success() && !canceled();response->message=result.message;
+                if(response->success && !request->enable) teaching_mask_.fetch_and(~mask);
+                else if(response->success || result.command_issued) teaching_mask_.fetch_or(mask);
+                if(!response->success && result.command_issued) {
+                    motion_safety_->requestStop("teaching transition failed; explicit recovery required");
+                    const auto stopped=dual_arm_module_->controlDrives(mask&1U,mask&2U,false);
+                    response->message+="; protective disable: "+stopped.message;
+                }
+                teaching_stop_issued_=false;
+                response->active_mask=static_cast<uint8_t>(teaching_mask_.load());
+            },rmw_qos_profile_services_default,drive_control_group_);
+        using Recovery=com_interfaces::srv::RecoverRobot;
+        recover_robot_service_=create_service<Recovery>("/Control/recover_robot",
+            [this](const std::shared_ptr<Recovery::Request> request,std::shared_ptr<Recovery::Response> response) {
+                std::unique_lock<std::mutex> lock(drive_clear_mutex_,std::try_to_lock);
+                if(!lock.owns_lock()) {response->message="another maintenance request is active";return;}
+                if(!startMaintenance(response->message))return;
+                MaintenanceActiveReset active{maintenance_active_};
+                cancelMaintenance("explicit whole-robot fault recovery");
+                const auto epoch=maintenance_epoch_.load();
+                const auto canceled=[&] {return epoch!=maintenance_epoch_.load() || execution::shutdownRequested();};
+                execution::RobotRecoveryHooks hooks;
+                hooks.drives={{[&](bool clear){return dual_arm_module_->controlDrives(true,true,clear,!clear,canceled);},
+                    [&](bool clear){return ethercat_bus_manager_ptr_->controlLowerBodyDrives(clear,!clear,canceled);},
+                    [&](bool clear){return ethercat_bus_manager_ptr_->controlHeadDrives(clear,!clear,canceled);}}};
+                hooks.canceled=canceled;
+                const auto check_arm_recovery=[&](const sdk::DualArmDeviceState& state,std::string& error,
+                    bool require_stationary) {
+                    if(canceled()) {error="recovery canceled";return false;}
+                    for(unsigned i=0;i<2;++i) {
+                        const auto& arm=state.arms[i];
+                        if(arm.error_code || (arm.current_state!=0 && arm.current_state!=1 &&
+                            !dual_arm_module_->expectedModeTransition(i,arm))) {
+                            error="arm has a fault or an unexpected recovery mode";return false;
+                        }
+                        execution::SafetySample sample;sample.sequence=arm.feedback_sequence;sample.acquired=arm.acquired;
+                        for(unsigned j=0;j<7;++j) {
+                            sample.position.push_back(arm.joint_position[j]*0.017453292519943295);
+                            sample.velocity.push_back(arm.joint_velocity[j]*0.017453292519943295);
+                        }
+                        if(!motion_safety_->validateRecoverySample(1U<<i,sample,error,require_stationary))return false;
+                    }
+                    return true;
+                };
+                hooks.enable_arms=[&] {
+                    return dual_arm_module_->recoverPositionMode(
+                        [&](const auto& state,auto& error){return check_arm_recovery(state,error,true);},canceled,
+                        [&](const auto& state,auto& error){return check_arm_recovery(state,error,false);});
+                };
+                hooks.enable_body=[&] {
+                    return ethercat_bus_manager_ptr_->recoverAllDrives([&](const sdk::EthercatEnableSample& state,std::string& error) {
+                        if(canceled()) {error="recovery canceled";return false;}
+                        for(const auto& group:std::array<std::vector<std::uint16_t>,2>{{{29,28,27,26},{31,30}}}) {
+                            execution::SafetySample sample;sample.sequence=state.sequence;sample.acquired=state.acquired;
+                            for(auto id:group) {
+                                if(id>=state.motors.size() || !sdk::ethercatFeedbackValid(state.motors[id])) {
+                                    error="invalid/faulted recovery EtherCAT joint";return false;
+                                }
+                                sample.position.push_back(state.motors[id].pos);sample.velocity.push_back(state.motors[id].vel);
+                            }
+                            if(!motion_safety_->validateRecoverySample(group.size()==4?execution::kLegSafety:execution::kHeadSafety,sample,error))return false;
+                        }
+                        return true;
+                    },canceled);
+                };
+                hooks.reset_latch=[&](std::string& error) {
+                    if(canceled()) {error="recovery canceled";return false;}
+                    // All hardware enable hooks have confirmed. Keep the motion
+                    // fence while rebuilding history from newly acquired frames.
+                    if(!motion_safety_->beginRecoveryFeedbackQualification(error))return false;
+                    if(!dual_arm_module_->beginMeasuredFeedbackRecoveryEpoch()) {
+                        error="cannot establish measured feedback recovery epoch";return false;
+                    }
+                    const auto until=execution::SafetyClock::now()+std::chrono::seconds(2);
+                    while(!canceled() && execution::SafetyClock::now()<until) {
+                        {
+                            std::lock_guard<std::mutex> stop_lock(maintenance_stop_mutex_);
+                            if(!canceled() && motion_safety_->reset(error)) {
+                                teaching_mask_=0;teaching_stop_issued_=false;
+                                return motion_safety_->ready(error);
+                            }
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                    return false;
+                };
+                const auto result=execution::recoverRobot(hooks,request->enable_after_clear);
+                response->success=result.success;response->arms_cleared=result.arms_cleared;
+                response->lower_body_cleared=result.lower_body_cleared;response->head_cleared=result.head_cleared;
+                response->drives_enabled=result.drives_enabled;response->motion_ready=result.motion_ready;response->message=result.message;
+                if(!result.success) motion_safety_->requestStop("whole-robot recovery incomplete");
+                RCLCPP_INFO(get_logger(),"Whole-robot recovery success=%d ready=%d: %s",
+                    result.success,result.motion_ready,result.message.c_str());
+            },rmw_qos_profile_services_default,drive_control_group_);
+    }
 
     bool motionResourcesIdle() const {
         return whole_body_module_->is_idle() && head_module_->is_idle(ID_HEAD) &&
@@ -440,7 +603,7 @@ private:
                 if (motion_control_pkg::execution::shutdownRequested()) {
                     response->message="orderly shutdown in progress; drive maintenance refused"; return;
                 }
-                if (request->target>Service::Request::LOWER_BODY ||
+                if (request->target>Service::Request::HEAD ||
                     request->operation>Service::Request::CLEAR_FAULT) {
                     response->message="invalid target or operation"; return;
                 }
@@ -449,15 +612,20 @@ private:
                 if (clear && (!clear_lock.try_lock() || !motionResourcesIdle())) {
                     response->message="clear refused: maintenance or motion resources busy"; return;
                 }
+                if (clear && teaching_mask_) {response->message="switch teaching OFF before individual drive clear";return;}
+                if (clear && !startMaintenance(response->message))return;
+                struct ClearCleanup { std::atomic<bool>& active; bool clear; ~ClearCleanup(){if(clear)active=false;} } cleanup{maintenance_active_,clear};
                 // Fence every coupled trajectory before touching a selected drive.
                 // This includes WBC compensation and targets from other clients.
-                motion_safety_->requestStop(clear ? "explicit online drive clear" : "online drive emergency stop");
+                cancelMaintenance(clear ? "explicit online drive clear" : "online drive emergency stop");
                 if (clear && !motionResourcesIdle()) {
                     response->message="clear refused: motion worker still leaving execution"; return;
                 }
                 motion_control_pkg::sdk::DriveControlResult result;
                 if (request->target==Service::Request::LOWER_BODY) {
                     result=ethercat_bus_manager_ptr_->controlLowerBodyDrives(clear);
+                } else if(request->target==Service::Request::HEAD) {
+                    result=ethercat_bus_manager_ptr_->controlHeadDrives(clear);
                 } else {
                     result=dual_arm_module_->controlDrives(
                         request->target!=Service::Request::RIGHT_ARM,
@@ -499,7 +667,8 @@ private:
                     motion_control_pkg::sdk::DualArmDeviceState state;
                     if(!module || !module->read_preplanned_completion_feedback(state,error))return false;
                     const auto& a=state.arms[arm];
-                    if(a.feedback_sequence<0 || !motion_control_pkg::sdk::armFeedbackOperational(a)) {
+                    if(a.feedback_sequence<0 || (!motion_control_pkg::sdk::armFeedbackOperational(a) &&
+                        !module->expectedModeTransition(arm,a))) {
                         error="arm driver fault or invalid state: arm="+std::to_string(arm)+
                             " error="+std::to_string(a.error_code)+" state="+std::to_string(a.current_state);return false;
                     }
@@ -541,15 +710,29 @@ private:
         motion_safety_->start();
         motion_safety_pub_=create_publisher<std_msgs::msg::String>("/Control/motion_safety",rclcpp::QoS(1).transient_local());
         motion_safety_timer_=create_wall_timer(std::chrono::milliseconds(100),[this]{
-            std_msgs::msg::String status;status.data=motion_safety_->status()+"; "+shutdownStatus();motion_safety_pub_->publish(status);
+            std::string error;
+            const auto mask=teaching_mask_.load();
+            if(mask && !maintenance_active_ && !motion_control_pkg::execution::shutdownRequested() &&
+                !motion_safety_->ready(error) && !teaching_stop_issued_.exchange(true)) {
+                cancelMaintenance("teaching feedback/limit protection: "+error);
+                const auto result=dual_arm_module_->controlDrives(mask&1U,mask&2U,false);
+                RCLCPP_ERROR(get_logger(),"Teaching protective disable: %s",result.message.c_str());
+            }
+            std_msgs::msg::String status;status.data=motion_safety_->status()+"; teaching_mask="+
+                std::to_string(teaching_mask_.load())+" maintenance_active="+
+                std::to_string(maintenance_active_.load())+"; "+shutdownStatus();motion_safety_pub_->publish(status);
         });
         stop_motion_service_=create_service<std_srvs::srv::Trigger>("/Control/stop_motion",
             [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response){
-                motion_safety_->requestStop("explicit stop service request");
+                cancelMaintenance("explicit stop service request");
                 response->success=true;response->message="command fence installed; measured stop confirmation is asynchronous; "+motion_safety_->status();
             });
         reset_motion_fault_service_=create_service<std_srvs::srv::Trigger>("/Control/reset_motion_fault",
             [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+                std::lock_guard<std::mutex> admission_lock(admission_mutex_);
+                if(maintenance_active_ || teaching_mask_) {
+                    response->message="maintenance/teaching active; use the corresponding exit/recovery service";return;
+                }
                 // Resource reservations precede worker startup. Include workers
                 // that have been accepted but have not entered MotionSafetyScope
                 // yet (and head/leg workers that are still planning).
@@ -572,7 +755,7 @@ private:
                 if (motion_control_pkg::execution::shutdownRequested()) {
                     response->result.reason="orderly shutdown in progress";return;
                 }
-                if (!motionResourcesIdle()) {
+                if (maintenance_active_ || teaching_mask_ || !motionResourcesIdle()) {
                     response->result.reason="error tracking option requires idle motion resources";return;
                 }
                 bool enabled=false;double limit=0,hard=0;unsigned seen=0;
@@ -604,6 +787,7 @@ private:
         body_error_service_=error_service("body_error",kBodySafety);
         RCLCPP_INFO(get_logger(),"arm_error and body_error default OFF; enable: <command> <position_error_rad> <hard_error_rad>; body_error covers legs, waist and head");
         configureDriveControl();
+        configureRobotMaintenance();
     }
 
     // ================== 核心分发逻辑 ==================
@@ -613,7 +797,7 @@ private:
         std::shared_ptr<const MovePose::Goal> goal)
     {
         std::lock_guard<std::mutex> admission_lock(admission_mutex_);
-        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        if (motion_control_pkg::execution::shutdownRequested() || maintenance_active_ || teaching_mask_) return rclcpp_action::GoalResponse::REJECT;
         std::string safety_error;
         if (!motion_safety_ || !motion_safety_->ready(safety_error)) {
             RCLCPP_WARN(get_logger(),"Motion admission refused: %s",safety_error.c_str());
@@ -934,7 +1118,7 @@ private:
         std::shared_ptr<const MoveJoints::Goal> goal)
     {
         std::lock_guard<std::mutex> admission_lock(admission_mutex_);
-        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        if (motion_control_pkg::execution::shutdownRequested() || maintenance_active_ || teaching_mask_) return rclcpp_action::GoalResponse::REJECT;
         std::ostringstream names, positions; positions.precision(9);
         for(std::size_t j=0;j<goal->joint_name.size();++j)names << (j?",":"") << goal->joint_name[j];
         for(std::size_t j=0;j<goal->position.size();++j)positions << (j?",":"") << goal->position[j];
@@ -1193,7 +1377,7 @@ private:
         std::shared_ptr<const ControlGripper::Goal> goal)
     {
         std::lock_guard<std::mutex> admission_lock(admission_mutex_);
-        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        if (motion_control_pkg::execution::shutdownRequested() || maintenance_active_ || teaching_mask_) return rclcpp_action::GoalResponse::REJECT;
         if (head_startup_policy_.enabled) {
             std::string error;
             if (!motion_safety_->ready(error)) {
@@ -1283,7 +1467,7 @@ private:
         std::shared_ptr<const ControlSuck::Goal> goal)
     {
         std::lock_guard<std::mutex> admission_lock(admission_mutex_);
-        if (motion_control_pkg::execution::shutdownRequested()) return rclcpp_action::GoalResponse::REJECT;
+        if (motion_control_pkg::execution::shutdownRequested() || maintenance_active_ || teaching_mask_) return rclcpp_action::GoalResponse::REJECT;
         if (head_startup_policy_.enabled) {
             std::string error;
             if (!motion_safety_->ready(error)) {

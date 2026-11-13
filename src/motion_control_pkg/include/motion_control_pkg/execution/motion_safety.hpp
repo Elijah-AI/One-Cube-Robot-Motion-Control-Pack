@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "motion_control_pkg/execution/teach_standstill.hpp"
 
 namespace motion_control_pkg::execution {
 using SafetyClock = std::chrono::steady_clock;
@@ -73,7 +74,9 @@ public:
     void failed(const std::string& reason);
   private:
     friend class MotionSafety;
-    CommandPermit(MotionSafety&, SafetyMask, std::string&, bool configuration = false);
+    CommandPermit(MotionSafety&, SafetyMask, std::string&, bool configuration = false,
+        std::chrono::milliseconds wait = std::chrono::milliseconds(0),
+        const std::function<bool()>& canceled = {}, bool teaching = false);
     MotionSafety* owner_;
     std::unique_lock<std::mutex> lock_;
     SafetyMask channels_{};
@@ -82,6 +85,16 @@ public:
   };
   CommandPermit command(SafetyMask channels, std::string& error);
   CommandPermit configuration(SafetyMask channels, std::string& error);
+  // Wait for this monitor's own stationary window, then keep its lock through
+  // the transaction. Cancellation must not call back into MotionSafety.
+  CommandPermit configurationWhenStationary(SafetyMask channels, std::string& error,
+      const std::function<bool()>& canceled,
+      std::chrono::milliseconds timeout = std::chrono::milliseconds(2000));
+  // Arm teaching only: a new advancing-frame window with the teaching limits.
+  // Does not qualify ordinary motion, fault reset or shutdown standstill.
+  CommandPermit teachingConfigurationWhenStationary(SafetyMask channels, std::string& error,
+      const std::function<bool()>& canceled,
+      std::chrono::milliseconds timeout = kTeachStandstillTimeout);
   void requestStop(const std::string& reason);
   // Independent idle-only options for kArmSafety and kBodySafety (legs/waist/head).
   // Both default OFF. Position-error trips stop the
@@ -90,9 +103,18 @@ public:
   bool setErrorTrackingEnabled(SafetyMask group, bool enabled, double error_rad,
       double hard_error_rad, std::string& detail);
   bool reset(std::string& error);
+  // Explicit idle recovery only, after all drive groups confirm re-enable.
+  // Retain the fault fence and qualify a new window of post-recovery samples.
+  bool beginRecoveryFeedbackQualification(std::string& error);
   bool ready(std::string& error) const;
   bool latched() const;
   bool workersIdle() const;
+  // Validate explicit recovery holds without releasing the normal command fence.
+  // This is validation only; ordinary command/configuration permits stay blocked.
+  // During a bounded enable-settling wait, false checks URDF velocity limits;
+  // the caller must still independently confirm the full stationary window.
+  bool validateRecoverySample(SafetyMask channel, const SafetySample& sample,
+      std::string& error, bool require_stationary = true) const;
   std::string status() const;
   void enterExecution();
   void leaveExecution();

@@ -264,6 +264,10 @@ public:
     // Startup configuration: 1 preserves serial planning; 2/4 use persistent
     // workers with private mutable caches and the same read-only model/meshes.
     void configurePlanningWorkers(std::size_t count);
+    // Startup only, before recovery/balance state is created. All 14 arm
+    // limits must come from the active SDK configuration, in model radians.
+    void setSdkArmPositionLimits(
+        const motion_control_pkg::wbc::PositionLimitOverrides& limits);
     // Startup-only: prewarm isolated processes; submit only after primary IK fails.
     void configureIkRecovery(const motion_control_pkg::motion::IkRecoveryOptions& options,
                              const std::function<bool()>& stop = {});
@@ -911,6 +915,7 @@ private:
                                     const Eigen::Quaterniond& q1,
                                     double t);
     std::string urdf_path_;
+    motion_control_pkg::wbc::PositionLimitOverrides sdk_arm_position_limits_;
     std::unique_ptr<motion_control_pkg::wbc::StaticBalance> static_balance_;
     std::string mesh_dir_;
 

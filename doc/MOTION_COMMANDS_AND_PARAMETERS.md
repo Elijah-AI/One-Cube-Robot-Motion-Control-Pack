@@ -1,5 +1,20 @@
 # ylf_wbc 运控指令与参数完整说明
 
+2026-11-13 合并版：双臂位置限位统一使用 SDK 配置，并保留示教/清错恢复修补。
+SDK `LOADMvCfg` 读取的 PNVA 同步至规划模型、安全监控、WBC 状态模型和 IK 重解子进程；
+双臂位置范围不再被 URDF 的旧 ±170°收窄。按 Marvin M6-CCS 手册范围，J1/J3/J5 为 ±178°，
+J2 为 ±120°，J4 为 −145°～+60°，J6 为 ±60°，J7 为 ±90°。
+启动日志逐轴输出 `Arm position limit source=SDK`，IK worker 在接收相同限位后验证模型签名。
+URDF 几何、头部及腿腰范围、既有速度/加速度/jerk 和 J6/J7 耦合检查沿用原规则。
+
+示教切换每阶段最长 5 s，窗口位移上限 0.05 rad，反馈速度上限 0.03 rad/s；
+仍须至少 5 个递增设备帧跨越 100 ms，并满足 SDK 低速标志、按钮和状态等检查。
+这组容差只用于示教，清错恢复、普通运动和关机保留各自原有停稳条件。
+示教默认关闭，`set_teach_mode` 和 `recover_robot` 的命令与参数不变。
+详细操作、合并版范围和验证记录见
+[示教与整机恢复说明](../src/motion_control_pkg/doc/TEACH_AND_RECOVERY.md)
+及 [SDK 限位与示教合并版](../src/motion_control_pkg/doc/SDK_LIMITS_AND_TEACH_RELEASE.md)。
+
 
 
 ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'

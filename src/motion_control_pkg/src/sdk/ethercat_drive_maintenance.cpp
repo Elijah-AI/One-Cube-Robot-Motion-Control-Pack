@@ -44,7 +44,8 @@ bool EthercatDriveMaintenance::read(std::vector<DriveAxis>& axes,std::string& de
   detail=out.str(); return true;
 }
 
-DriveControlResult EthercatDriveMaintenance::control(bool clear_fault) {
+DriveControlResult EthercatDriveMaintenance::control(bool clear_fault, bool recovery_stop,
+    const std::function<bool()>& cancel_clear) {
   DriveControlResult result;
   if (execution::shutdownRequested()) { result.message="shutdown in progress"; return result; }
   std::unique_lock<std::mutex> clear_lock(clear_mutex_,std::defer_lock);
@@ -53,7 +54,8 @@ DriveControlResult EthercatDriveMaintenance::control(bool clear_fault) {
   }
   std::uint64_t epoch;
   { std::lock_guard<std::mutex> lock(mutex_); epoch=epoch_; }
-  const auto canceled=[&] { std::lock_guard<std::mutex> lock(mutex_); return epoch!=epoch_ || execution::shutdownRequested(); };
+  const auto canceled=[&] { std::lock_guard<std::mutex> lock(mutex_); return epoch!=epoch_ || execution::shutdownRequested() ||
+      (clear_fault && cancel_clear && cancel_clear()); };
   if (clear_fault && !waitDriveFeedback(
       [&](auto& axes,auto& detail){return read(axes,detail,true);},
       canceled,true,true,DriveClock::now(),result.message)) return result;
@@ -61,24 +63,30 @@ DriveControlResult EthercatDriveMaintenance::control(bool clear_fault) {
   auto receipt=std::make_shared<Receipt>();
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (execution::shutdownRequested() || (clear_fault && epoch!=epoch_)) {
+    if (execution::shutdownRequested() || (clear_fault && (epoch!=epoch_ || (cancel_clear && cancel_clear())))) {
       result.message="clear superseded by emergency stop"; return result;
     }
     epoch=++epoch_;
     active_=true; clearing_=clear_fault;
+    clear_confirmed_=false;
     receipt_=receipt; reset_failed_=false;
     reset_until_=requested+std::chrono::milliseconds(200);
     write_time_={};
   }
   result.feedback_confirmed=waitDriveFeedback(
       [&](auto& axes,auto& detail){return read(axes,detail,false);},
-      canceled,clear_fault,false,requested,result.message);
+      canceled,clear_fault,recovery_stop && !clear_fault,requested,result.message);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (epoch!=epoch_) result.feedback_confirmed=false;
+    if (clear_fault && cancel_clear && cancel_clear()) {
+      result.feedback_confirmed=false;
+      clearing_=false;reset_failed_=true; // Release a reset pulse immediately on cancellation.
+    }
     result.command_issued=clear_fault ? receipt->reset_issued : receipt->issued;
+    clear_confirmed_=clear_fault && result.success();
   }
-  result.message=(result.feedback_confirmed ? "confirmed disabled and stationary; " :
+  result.message=(result.feedback_confirmed ? (recovery_stop?"confirmed reset-eligible and stationary; ":"confirmed disabled and stationary; ") :
       "drive operation unconfirmed; ")+result.message+
       "; lower-body disable retained; no enable or trajectory resume";
   return result;
@@ -132,6 +140,14 @@ void EthercatDriveMaintenance::requestShutdownDisable() {
   std::lock_guard<std::mutex> lock(mutex_);
   ++epoch_;
   active_=true; clearing_=false; reset_failed_=false;
+  clear_confirmed_=false;
   receipt_=std::make_shared<Receipt>(); write_time_={};
+}
+
+bool EthercatDriveMaintenance::releaseAfterConfirmedClear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active_ || !clear_confirmed_ || reset_failed_ || execution::shutdownRequested()) return false;
+  ++epoch_; active_=false; clearing_=false; clear_confirmed_=false;
+  return true;
 }
 }  // namespace motion_control_pkg::sdk

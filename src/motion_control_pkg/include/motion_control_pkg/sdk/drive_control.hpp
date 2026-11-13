@@ -29,7 +29,9 @@ struct DriveAxis {
 class DriveFeedbackWindow {
 public:
   explicit DriveFeedbackWindow(DriveClock::time_point after,
-      std::chrono::milliseconds dwell=std::chrono::milliseconds(100)) : after_(after), dwell_(dwell) {}
+      std::chrono::milliseconds dwell=std::chrono::milliseconds(100),
+      double max_velocity=.01, double max_displacement=.001)
+      : after_(after), dwell_(dwell), max_velocity_(max_velocity), max_displacement_(max_displacement) {}
   bool update(const std::vector<DriveAxis>& axes, bool clearing, bool preflight,
               DriveClock::time_point now) {
     if (axes.empty()) { reset(); return false; }
@@ -37,7 +39,7 @@ public:
       if (!a.sequence || a.acquired < after_ || a.acquired > now ||
           now-a.acquired > std::chrono::milliseconds(100) ||
           !std::isfinite(a.position) || !std::isfinite(a.velocity) ||
-          std::abs(a.velocity) > .01 ||
+          std::abs(a.velocity) > max_velocity_ ||
           !(preflight ? a.reset_allowed : a.disabled) ||
           (clearing && !preflight && a.fault)) {
         reset(); return false;
@@ -51,7 +53,7 @@ public:
       const auto& a=axes[i]; const auto& b=last_[i];
       const bool wrapped=a.wraps_at_million && b.sequence>900000 && a.sequence<100000;
       if ((!wrapped && a.sequence<b.sequence) || a.acquired<b.acquired ||
-          std::abs(a.position-origin_[i].position)>.001) {
+          std::abs(a.position-origin_[i].position)>max_displacement_) {
         reset(); return false;
       }
       advancing=advancing && a.sequence!=b.sequence && a.acquired>b.acquired;
@@ -67,6 +69,7 @@ private:
   void reset() { last_.clear(); origin_.clear(); count_=0; }
   DriveClock::time_point after_;
   std::chrono::milliseconds dwell_;
+  double max_velocity_, max_displacement_;
   std::vector<DriveAxis> last_, origin_;
   unsigned count_{0};
 };

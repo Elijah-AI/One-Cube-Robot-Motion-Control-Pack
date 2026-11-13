@@ -45,6 +45,7 @@ std::vector<int> selectIkRecoveryCpus(std::size_t workers,const std::vector<int>
 
 struct IkRecoveryClient::Impl {
   IkRecoveryOptions options;std::string urdf,meshes,signature;
+  Json::Value arm_limits;
   mutable std::timed_mutex mutex;
   IkRecoveryStats stats;int fd{-1};pid_t pid{-1};std::uint64_t serial{0};
   ~Impl(){closeProcess();}
@@ -75,6 +76,7 @@ struct IkRecoveryClient::Impl {
     posix_spawnattr_setflags(&attr,POSIX_SPAWN_SETPGROUP);posix_spawnattr_setpgroup(&attr,0);
     std::ostringstream cpu;for(auto c:stats.cpus){if(cpu.tellp()>0)cpu<<',';cpu<<c;}
     std::vector<std::string> args{options.worker_executable,"--fd",std::to_string(child_fd),"--urdf",urdf,"--meshes",meshes,"--cpus",cpu.str()};
+    if (!arm_limits.isNull()) {args.push_back("--arm-limits");args.push_back(encode(arm_limits));}
     std::vector<char*> argv;for(auto& a:args)argv.push_back(a.data());argv.push_back(nullptr);
     const int error=posix_spawn(&pid,args[0].c_str(),&actions,&attr,argv.data(),environ);
     posix_spawn_file_actions_destroy(&actions);posix_spawnattr_destroy(&attr);close(pair[1]);
@@ -88,7 +90,7 @@ struct IkRecoveryClient::Impl {
   }
 };
 
-IkRecoveryClient::IkRecoveryClient(IkRecoveryOptions options,std::string urdf,std::string meshes,std::string signature)
+IkRecoveryClient::IkRecoveryClient(IkRecoveryOptions options,std::string urdf,std::string meshes,std::string signature,Json::Value arm_limits)
   :impl_(std::make_unique<Impl>()) {
   if(options.seeds<1||options.seeds>96||options.workers<1||options.workers>8||
      !std::isfinite(options.seed_timeout_s)||options.seed_timeout_s<=0||options.seed_timeout_s>.5||
@@ -96,6 +98,7 @@ IkRecoveryClient::IkRecoveryClient(IkRecoveryOptions options,std::string urdf,st
     throw std::invalid_argument("IK recovery options outside supported bounds");
   if(options.worker_executable.empty())options.worker_executable=(std::filesystem::read_symlink("/proc/self/exe").parent_path()/"ik_recovery_worker").string();
   impl_->options=std::move(options);impl_->urdf=std::move(urdf);impl_->meshes=std::move(meshes);impl_->signature=std::move(signature);
+  impl_->arm_limits=std::move(arm_limits);
   impl_->stats.cpus=selectIkRecoveryCpus(impl_->options.workers,impl_->options.cpus);
   impl_->start();
 }
