@@ -2,6 +2,7 @@
 #include "motion_control_pkg/motion/scoped_collision_scene.hpp"
 #include "motion_control_pkg/execution/stream_timing.hpp"
 #include "motion_control_pkg/execution/joint_completion.hpp"
+#include "motion_control_pkg/execution/dual_arm_completion.hpp"
 #include "dual_arm_module.hpp"
 #include "miracle_m_algo.hpp"
 #include "motion_control_pkg/execution/arm_action_utils.hpp"
@@ -1310,14 +1311,10 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
     publish_feedback(
         MoveJoints::Feedback::STATUS_WAITING_FOR_COMPLETION,
         95.0F, 95.0F, "waiting for both arms to report low speed");
-    using Completion = motion_control_pkg::execution::ArmCompletionGuard;
+    using Completion = motion_control_pkg::execution::DualArmCompletionGuard;
     const auto completion_started = Completion::Clock::now();
-    const auto completion_deadline = std::min(deadline.timePoint(), completion_started + std::chrono::seconds(3));
-    std::array<Completion, 2> completion_guards{{
-        Completion({left_target.begin(), left_target.end()}, completion_started, completion_deadline),
-        Completion({right_target.begin(), right_target.end()}, completion_started, completion_deadline)
-    }};
-    std::array<std::optional<std::chrono::steady_clock::time_point>, 2> completed_at;
+    Completion completion_guard({left_target.begin(), left_target.end()},
+        {right_target.begin(), right_target.end()}, completion_started, deadline.timePoint());
     while (true) {
         if (goal_handle->is_canceling()) {
             cancel_goal(
@@ -1326,7 +1323,7 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
             return;
         }
         if (deadline.expired()) {
-            abort_goal("MoveJoints completion wait timed out");
+            abort_goal(completion_guard.timeoutReason(Completion::Clock::now()));
             return;
         }
         motion_control_pkg::sdk::DualArmDeviceState completion;
@@ -1353,25 +1350,13 @@ void DualArmModule::execution_loop_move_dual_arm_joints(
         result->right_final_distance_error_rad =
             motion_control_pkg::motion::maximumJointErrorRadians(
             completion.arms[1].joint_position, right_target);
-        bool all_settled = true;
-        for (std::size_t arm = 0; arm < 2; ++arm) {
-            std::string error;
-            const auto status = completion_guards[arm].update(completion.arms[arm], now, error);
-            if (status == Completion::Status::Failed) { abort_goal(error); return; }
-            if (status == Completion::Status::Settled) {
-                if (!completed_at[arm]) completed_at[arm] = now;
-            } else { completed_at[arm].reset(); all_settled = false; }
-        }
-        if (all_settled) break;
-        if (!completed_at[0] || !completed_at[1]) {
-            std::this_thread::sleep_for(
-                motion_control_pkg::execution::kDualArmControlPeriod);
-        }
+        std::string error;
+        const auto status = completion_guard.update(completion, now, error);
+        if (status == Completion::Status::Failed) { abort_goal(error); return; }
+        if (status == Completion::Status::Settled) break;
+        std::this_thread::sleep_for(motion_control_pkg::execution::kDualArmControlPeriod);
     }
-    result->completion_time_skew_sec = std::chrono::duration<double>(
-        *completed_at[0] - *completed_at[1]).count();
-    result->completion_time_skew_sec =
-        std::abs(result->completion_time_skew_sec);
+    result->completion_time_skew_sec = completion_guard.completionSkewSeconds();
     result->final_distance_error = std::max(
         result->left_final_distance_error_rad,
         result->right_final_distance_error_rad);
@@ -1987,14 +1972,12 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
     const Eigen::Isometry3d right_target_tcp =
         motion_control_pkg::kinematics::poseToIsometry(
         effective_right.pose);
-    using Completion = motion_control_pkg::execution::ArmCompletionGuard;
+    using Completion = motion_control_pkg::execution::DualArmCompletionGuard;
     const auto completion_started = Completion::Clock::now();
-    const auto completion_deadline = std::min(deadline.timePoint(), completion_started + std::chrono::seconds(3));
-    std::array<Completion, 2> completion_guards{{
-        Completion({planned_positions.back().begin(), planned_positions.back().begin() + 7}, completion_started, completion_deadline),
-        Completion({planned_positions.back().begin() + 7, planned_positions.back().end()}, completion_started, completion_deadline)
-    }};
-    std::array<std::optional<std::chrono::steady_clock::time_point>, 2> completed_at;
+    Completion completion_guard(
+        {planned_positions.back().begin(), planned_positions.back().begin() + 7},
+        {planned_positions.back().begin() + 7, planned_positions.back().end()},
+        completion_started, deadline.timePoint());
     while (true) {
         if (goal_handle->is_canceling()) {
             cancel_goal(
@@ -2003,7 +1986,7 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
             return;
         }
         if (deadline.expired()) {
-            abort_goal("MovePose completion wait timed out");
+            abort_goal(completion_guard.timeoutReason(Completion::Clock::now()));
             return;
         }
         motion_control_pkg::sdk::DualArmDeviceState completion;
@@ -2060,29 +2043,21 @@ void DualArmModule::execution_loop_move_dual_arm_pose(
             motion_control_pkg::kinematics::poseToIsometry(left_tcp_pose),
             motion_control_pkg::kinematics::poseToIsometry(right_tcp_pose)}};
         const std::array<Eigen::Isometry3d, 2> target_tcp{{left_target_tcp, right_target_tcp}};
-        bool all_settled = true;
+        Completion::TcpErrors tcp_errors;
         for (std::size_t arm = 0; arm < 2; ++arm) {
-            std::string error;
-            const auto status = completion_guards[arm].update(completion.arms[arm], now, error,
-                (actual_tcp[arm].translation() - target_tcp[arm].translation()).norm() <=
-                    motion_control_pkg::execution::kGoalTranslationToleranceM &&
+            tcp_errors[arm] = {
+                (actual_tcp[arm].translation() - target_tcp[arm].translation()).norm(),
                 motion_control_pkg::motion::quaternionAngularDistance(
-                    Eigen::Quaterniond(actual_tcp[arm].rotation()), Eigen::Quaterniond(target_tcp[arm].rotation())) <=
-                    motion_control_pkg::execution::kGoalRotationToleranceRad);
-            if (status == Completion::Status::Failed) { abort_goal(error); return; }
-            if (status == Completion::Status::Settled) {
-                if (!completed_at[arm]) completed_at[arm] = now;
-            } else { completed_at[arm].reset(); all_settled = false; }
+                    Eigen::Quaterniond(actual_tcp[arm].rotation()),
+                    Eigen::Quaterniond(target_tcp[arm].rotation()))};
         }
-        if (all_settled) break;
-        if (!completed_at[0] || !completed_at[1]) {
-            std::this_thread::sleep_for(
-                motion_control_pkg::execution::kDualArmControlPeriod);
-        }
+        std::string error;
+        const auto status = completion_guard.update(completion, now, error, tcp_errors);
+        if (status == Completion::Status::Failed) { abort_goal(error); return; }
+        if (status == Completion::Status::Settled) break;
+        std::this_thread::sleep_for(motion_control_pkg::execution::kDualArmControlPeriod);
     }
-    result->completion_time_skew_sec = std::abs(
-        std::chrono::duration<double>(
-        *completed_at[0] - *completed_at[1]).count());
+    result->completion_time_skew_sec = completion_guard.completionSkewSeconds();
     result->success = true;
     result->error_message.clear();
     update_time();

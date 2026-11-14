@@ -46,7 +46,7 @@ public:
   Status update(std::uint64_t sequence, const std::vector<double>& q,
       const std::vector<double>& v, Time now, std::string& reason,
       bool stopped = true, bool task_reached = true) {
-    if (now >= deadline_) return fail("completion timed out: " + last_reason_, reason);
+    if (now >= deadline_) return fail("completion timed out: " + diagnostics(), reason);
     if (target_.empty() || q.size() != target_.size() || v.size() != q.size())
       return fail("invalid completion dimensions", reason);
     if ((!sdk_sequence_ && sequence == 0) || (sdk_sequence_ && sequence > 1000000) ||
@@ -113,6 +113,14 @@ public:
     return Status::Settled;
   }
   double positionError() const { return error_; }
+  std::string diagnostics() const {
+    const double stable_seconds = stable_since_ ?
+        std::chrono::duration<double>(last_fresh_ - *stable_since_).count() : 0.0;
+    return last_reason_ + ", velocity_tolerance_rad_s=" + std::to_string(options_.velocity_tolerance) +
+        ", stable_samples=" + std::to_string(stable_samples_) +
+        ", stable_seconds=" + std::to_string(stable_seconds) +
+        ", required_stable_seconds=" + std::to_string(options_.stable_seconds);
+  }
 
 private:
   static Status fail(const std::string& message, std::string& reason) {
@@ -154,6 +162,7 @@ public:
     return guard_.update(state.feedback_sequence, q, v, now, error, state.low_speed, task_reached);
   }
   double positionError() const { return guard_.positionError(); }
+  std::string diagnostics() const { return guard_.diagnostics(); }
 private:
   JointCompletionGuard guard_;
 };
