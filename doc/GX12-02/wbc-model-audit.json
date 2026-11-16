@@ -1,0 +1,343 @@
+{
+  "all_positions_measured" : true,
+  "assumed_joints" : [],
+  "com_m" : 
+  [
+    0.099490517989225355,
+    0.0015584193548054107,
+    0.60339160566081729
+  ],
+  "com_margin_after_inset_m" : 0.080085187383166737,
+  "com_projection_inside_inset" : true,
+  "com_velocity_mps" : 
+  [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "contact_candidates_m" : 
+  {
+    "base_front_wheel_1_pitch_link" : 
+    [
+      0.21056831715640612,
+      0.15251826997103041,
+      -0.050000096784678899
+    ],
+    "base_front_wheel_2_link" : 
+    [
+      0.18886999334438218,
+      -0.15247999928846956,
+      -0.050000002026557924
+    ],
+    "base_rear_wheel_1_pitch_link" : 
+    [
+      -0.2326315506047027,
+      -0.15248173005272381,
+      -0.050000096784679732
+    ],
+    "base_rear_wheel_2_link" : 
+    [
+      -0.25433000039041015,
+      0.15252000071153043,
+      -0.049999994575977327
+    ]
+  },
+  "contact_observed" : false,
+  "estimated_velocity_joints" : [],
+  "frame_id" : "base_link",
+  "geometry_valid" : true,
+  "jacobian_joint_names" : 
+  [
+    "base_front_wheel_1_yaw_joint",
+    "base_front_wheel_1_pitch_joint",
+    "base_rear_wheel_1_yaw_joint",
+    "base_rear_wheel_1_pitch_joint",
+    "leg_joint1",
+    "leg_joint2",
+    "leg_joint3",
+    "body_joint",
+    "Joint1_L",
+    "Joint2_L",
+    "Joint3_L",
+    "Joint4_L",
+    "Joint5_L",
+    "Joint6_L",
+    "Joint7_L",
+    "gripper_l_joint1",
+    "gripper_l_joint2",
+    "Joint1_R",
+    "Joint2_R",
+    "Joint3_R",
+    "Joint4_R",
+    "Joint5_R",
+    "Joint6_R",
+    "Joint7_R",
+    "gripper_r_joint1",
+    "gripper_r_joint2",
+    "head_yaw_joint",
+    "head_pitch_joint"
+  ],
+  "joints" : 
+  [
+    {
+      "effort_limit" : 6.0,
+      "locked_by_urdf" : false,
+      "lower" : -3.1400000000000001,
+      "name" : "base_front_wheel_1_yaw_joint",
+      "upper" : 3.1400000000000001,
+      "velocity_limit" : 29.300000000000001
+    },
+    {
+      "effort_limit" : 9.0,
+      "locked_by_urdf" : true,
+      "lower" : 0.0,
+      "name" : "base_front_wheel_1_pitch_joint",
+      "upper" : 0.0,
+      "velocity_limit" : 28.300000000000001
+    },
+    {
+      "effort_limit" : 6.0,
+      "locked_by_urdf" : false,
+      "lower" : -3.1400000000000001,
+      "name" : "base_rear_wheel_1_yaw_joint",
+      "upper" : 3.1400000000000001,
+      "velocity_limit" : 29.300000000000001
+    },
+    {
+      "effort_limit" : 9.0,
+      "locked_by_urdf" : true,
+      "lower" : 0.0,
+      "name" : "base_rear_wheel_1_pitch_joint",
+      "upper" : 0.0,
+      "velocity_limit" : 28.300000000000001
+    },
+    {
+      "effort_limit" : 557.0,
+      "locked_by_urdf" : false,
+      "lower" : -1.5700000000000001,
+      "name" : "leg_joint1",
+      "upper" : 1.5700000000000001,
+      "velocity_limit" : 1.3100000000000001
+    },
+    {
+      "effort_limit" : 557.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.7000000000000002,
+      "name" : "leg_joint2",
+      "upper" : 2.9900000000000002,
+      "velocity_limit" : 1.3100000000000001
+    },
+    {
+      "effort_limit" : 557.0,
+      "locked_by_urdf" : false,
+      "lower" : -1.8799999999999999,
+      "name" : "leg_joint3",
+      "upper" : 2.0899999999999999,
+      "velocity_limit" : 1.3100000000000001
+    },
+    {
+      "effort_limit" : 133.0,
+      "locked_by_urdf" : false,
+      "lower" : -3.1099999999999999,
+      "name" : "body_joint",
+      "upper" : 3.1099999999999999,
+      "velocity_limit" : 1.3100000000000001
+    },
+    {
+      "effort_limit" : 108.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.9670000000000001,
+      "name" : "Joint1_L",
+      "upper" : 2.9670000000000001,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 108.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.0943999999999998,
+      "name" : "Joint2_L",
+      "upper" : 2.0943999999999998,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 66.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.9670000000000001,
+      "name" : "Joint3_L",
+      "upper" : 2.9670000000000001,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 66.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.5306999999999999,
+      "name" : "Joint4_L",
+      "upper" : 1.0471999999999999,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 18.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.9670000000000001,
+      "name" : "Joint5_L",
+      "upper" : 2.9670000000000001,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 18.0,
+      "locked_by_urdf" : false,
+      "lower" : -1.0471999999999999,
+      "name" : "Joint6_L",
+      "upper" : 1.0471999999999999,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 18.0,
+      "locked_by_urdf" : false,
+      "lower" : -1.5708,
+      "name" : "Joint7_L",
+      "upper" : 1.5708,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 0.0,
+      "locked_by_urdf" : true,
+      "lower" : 0.0,
+      "name" : "gripper_l_joint1",
+      "upper" : 0.0,
+      "velocity_limit" : 0.0
+    },
+    {
+      "effort_limit" : 0.0,
+      "locked_by_urdf" : true,
+      "lower" : 0.0,
+      "name" : "gripper_l_joint2",
+      "upper" : 0.0,
+      "velocity_limit" : 0.0
+    },
+    {
+      "effort_limit" : 108.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.9670000000000001,
+      "name" : "Joint1_R",
+      "upper" : 2.9670000000000001,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 108.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.0943999999999998,
+      "name" : "Joint2_R",
+      "upper" : 2.0943999999999998,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 66.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.9670000000000001,
+      "name" : "Joint3_R",
+      "upper" : 2.9670000000000001,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 66.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.5306999999999999,
+      "name" : "Joint4_R",
+      "upper" : 1.0471999999999999,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 18.0,
+      "locked_by_urdf" : false,
+      "lower" : -2.9670000000000001,
+      "name" : "Joint5_R",
+      "upper" : 2.9670000000000001,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 18.0,
+      "locked_by_urdf" : false,
+      "lower" : -1.0471999999999999,
+      "name" : "Joint6_R",
+      "upper" : 1.0471999999999999,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 18.0,
+      "locked_by_urdf" : false,
+      "lower" : -1.5708,
+      "name" : "Joint7_R",
+      "upper" : 1.5708,
+      "velocity_limit" : 3.1415999999999999
+    },
+    {
+      "effort_limit" : 0.0,
+      "locked_by_urdf" : true,
+      "lower" : 0.0,
+      "name" : "gripper_r_joint1",
+      "upper" : 0.0,
+      "velocity_limit" : 0.0
+    },
+    {
+      "effort_limit" : 0.0,
+      "locked_by_urdf" : true,
+      "lower" : 0.0,
+      "name" : "gripper_r_joint2",
+      "upper" : 0.0,
+      "velocity_limit" : 0.0
+    },
+    {
+      "effort_limit" : 8.9000000000000004,
+      "locked_by_urdf" : false,
+      "lower" : -2.9199999999999999,
+      "name" : "head_yaw_joint",
+      "upper" : 2.9199999999999999,
+      "velocity_limit" : 0.60999999999999999
+    },
+    {
+      "effort_limit" : 8.9000000000000004,
+      "locked_by_urdf" : false,
+      "lower" : -0.62,
+      "name" : "head_pitch_joint",
+      "upper" : 0.40999999999999998,
+      "velocity_limit" : 0.60999999999999999
+    }
+  ],
+  "mass_kg" : 232.54639300000002,
+  "missing_joints" : [],
+  "newest_state_stamp_sec" : 0.0,
+  "oldest_state_stamp_sec" : 0.0,
+  "position_valid" : true,
+  "robot_properties_source" : "urdf",
+  "root_assumption" : "stationary_horizontal",
+  "schema_version" : 1,
+  "stale_joints" : [],
+  "support_error" : "",
+  "support_inset_m" : 0.02,
+  "support_plane_z_m" : -0.050000096784679732,
+  "support_polygon_xy_m" : 
+  [
+    [
+      -0.25433000039041015,
+      0.15252000071153043
+    ],
+    [
+      -0.2326315506047027,
+      -0.15248173005272381
+    ],
+    [
+      0.18886999334438218,
+      -0.15247999928846956
+    ],
+    [
+      0.21056831715640612,
+      0.15251826997103041
+    ]
+  ],
+  "support_source" : "urdf_collision_mesh_extrema_assuming_all_supports_contact",
+  "synthetic_state" : true,
+  "urdf_path" : "/home/it/robot18_new_tool_20261116/candidate/src/onecube_robot_description/urdf/onecube_robot_description.urdf",
+  "velocity_valid" : true,
+  "zmp_valid" : false
+}

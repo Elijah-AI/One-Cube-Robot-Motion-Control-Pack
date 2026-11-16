@@ -19,10 +19,12 @@ URDF 几何、头部及腿腰范围、既有速度/加速度/jerk 和 J6/J7 耦�
 
 ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
 
-更新日期：2026-11-04。范围：当前本地 `ylf_wbc/src/motion_control_pkg` 的实际 ROS 入口、`com_interfaces` 的运控 Action、对应的任务 YAML 适配和只读 WBC observer。运行机器必须使用同版本接口与二进制；本文区分本地源码默认值与 本次核对的 x86 `it@192.168.10.18:/home/it/ylf_wbc` 源码与配置；每次上传、编译、安装、重启和实机验收仍须分别核对，不能由文档日期推定运行版本。
+2026-11-04 历史记录。范围：当前本地 `ylf_wbc/src/motion_control_pkg` 的实际 ROS 入口、`com_interfaces` 的运控 Action、对应的任务 YAML 适配和只读 WBC observer。运行机器必须使用同版本接口与二进制；本文区分本地源码默认值与 本次核对的 x86 `it@192.168.10.18:/home/it/ylf_wbc` 源码与配置；每次上传、编译、安装、重启和实机验收仍须分别核对，不能由文档日期推定运行版本。
 
 本次更新重点：
 
+- [天机示教开关](#66-天机示教开关)：默认关闭，复用 `/opt` 工具参数，带物理末端按钮拖动和状态确认。
+- [整机清错恢复](#67-整机清错恢复)：覆盖双臂、腰腿和头部，可选仅清错或恢复使能。
 - [手臂与身体跟踪误差保护开关](#65-手臂与身体跟踪误差保护开关)：`arm_error`、`body_error` 独立配置，启动均默认关闭；单纯跟踪超限后等待静止及旧线程退出，再解除拦截。
 - [六轴开机清错与 x86 安装](#24-六轴开机清错与-x86-安装)：启动清错由 27–30 扩展为 27–32，补入两个头部从站；仅在 OP/PDO 稳定后复位，再保持去使能等待正常使能。
 - [身体运动的反馈快照](#111-身体运动反馈快照与采样前进)：身体倾角、升降读取仍新鲜的同一设备帧时，不再消耗 WBC 发布者的采样前进记录；设备采集时间与停止/到位的新帧要求保持有效。
@@ -66,7 +68,9 @@ ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
 | 手臂跟踪误差开关 | `/Control/arm_error` | `rcl_interfaces/srv/SetParametersAtomically` | 双臂共用，默认关闭；由 `arm_error` 原子配置 rad 限制，见第 6.5 节 |
 | 身体跟踪误差开关 | `/Control/body_error` | `rcl_interfaces/srv/SetParametersAtomically` | 腿、腰、头共用，默认关闭；由 `body_error` 原子配置 rad 限制，见第 6.5 节 |
 | 清除软件运动故障 | `/Control/reset_motion_fault` | `std_srvs/srv/Trigger` | 资源释放、反馈健康且静止确认后清除软件锁存，不清驱动故障、不使能或自动恢复运动 |
-| 在线驱动急停 / 清错 | `/Control/drive_control` | `com_interfaces/srv/DriveControl` | 天机左/右/双臂及 EtherCAT 腿/腰四轴；独立报告调用与反馈确认，保持停止、不自动使能 |
+| 在线驱动急停 / 清错 | `/Control/drive_control` | `com_interfaces/srv/DriveControl` | 天机左/右/双臂及 EtherCAT 腿/腰四轴或头部两轴；独立报告调用与反馈确认，保持停止、不自动使能 |
+| 示教开关（默认 OFF） | `/Control/set_teach_mode` | `com_interfaces/srv/SetTeachMode` | 左臂/右臂/双臂关节阻抗拖动；第 6.6 节 |
+| 整机清错恢复 | `/Control/recover_robot` | `com_interfaces/srv/RecoverRobot` | 双臂、腰腿和头部清错，可选在实测位置恢复使能；第 6.7 节 |
 | 只读观察 | `wbc_model_node` / `wbc_model.launch.py` | 话题 | 计算 COM、支撑区域、反馈有效性，不下发运动 |
 
 `MoveP`、`MoveL` 不是独立的 ROS Action 名。仓库存在 `HardwareCheck`、`HardwareReset`、`AdjustBasePose`、`PickAndPlace` 等接口文件，但它们不等于当前运控主节点提供相应服务；实际服务以 `ros2 action list -t` 和服务端实现为准。底盘行驶、硬件急停、通用清故障/复位不属于上述四个入口。
@@ -116,7 +120,7 @@ ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
 | 视觉位姿目标及偏移 | YAML `use_config_pose`、`vision_*` | 视觉缓存、基准系/视觉局部平移、旋转、目标向下、保持当前 TCP 高度 |
 | 动作编排与恢复 | YAML `parallel_actions`、`move_compound`、结果分支等 | 任务层功能，详见第 10 节；仍受底层资源和运动约束限制 |
 
-WBC 启用水平约束时，要求起点已水平、目标与水平兼容。独立 LEG MoveJ 可使用 `keep_grasp_rigid: true` 自动补偿双臂，保持双吸盘同高、朝下和固定相对位姿；普通 LEG 命令默认不补偿。`force_vertical_down` 仅生成目标姿态；全程约束需在 WBC 动作中显式设置 `keep_tcp_level: true`。
+WBC 启用水平约束时，要求起点已水平、目标与水平兼容。单独 LEG 动作不支持该约束，也不会自动扩成全身动作；需要手臂补偿时应使用 WBC。`force_vertical_down` 仅生成目标姿态；全程约束需在 WBC 动作中显式设置 `keep_tcp_level: true`。
 
 ## 2. 编译、启动与生效配置
 
@@ -263,38 +267,6 @@ ros2 param get /motion_control_ns/motion_control planning_worker_count
 
 实现依据：[启动参数](../src/motion_control_pkg/launch/bringup.launch.py)、[节点初始化](../src/motion_control_pkg/src/main_node.cpp)、[并行规划](../src/motion_control_pkg/src/parallel_planning.cpp)、[持久线程池](../src/motion_control_pkg/include/motion_control_pkg/motion/planning_worker_pool.hpp)、[离线回归](../src/motion_control_pkg/test/parallel_planning_test.cpp)。
 
-### 2.6 普通 IK 失败后的多 seed 重解
-
-2026-11-11 新增。原 IK（包括其已有回退）成功时直接返回；数值失败后追加最多 **24 个新初值**，默认由 **8 个持久求解进程**并行计算。该功能独立于 `planning_worker_count`。启动时预热模型与进程，正常请求不派发随机重解。
-
-| 启动参数 | 默认值 | 作用 |
-|---|---|---|
-| `ik_recovery_enabled` | `true` | 开启普通 IK 失败重解 |
-| `ik_recovery_seed_count` | `24` | 额外初值上限，范围 1–96；不重复已失败的参考初值 |
-| `ik_recovery_worker_count` | `8` | 工作进程上限，范围 1–8 |
-| `ik_recovery_cpus` | `auto` | 混合 SMT 拓扑优先单线程能效核；也可指定逗号分隔的 CPU 编号，数量须与进程数一致 |
-| `ik_recovery_seed_timeout_s` | `0.5` | 单 seed 求解预算，最大 0.5 秒 |
-| `ik_recovery_timeout_s` | `2.0` | 一轮重解总预算，含生成和当前场景传递；仍受 Action 自身剩余时限约束 |
-
-在已核验的 i7-1355U 上，`auto` 对应 CPU 4–11，保留两个 P 核的全部线程；其他机器根据允许的 CPU 集合和拓扑选择，不能把相同逻辑编号直接当作能效核。无混合 SMT 特征时退回可用物理核；可用核不足时缩减进程数。以 `IK failure recovery` 启动日志中的实际 CPUs 和 workers 为准。参数均为启动时只读。
-
-```bash
-# 下一次正常启动时可显式固定这台 x86 的 8 个 E 核。
-ros2 launch motion_control_pkg bringup.launch.py \
-  ik_recovery_enabled:=true ik_recovery_seed_count:=24 \
-  ik_recovery_worker_count:=8 ik_recovery_cpus:=4,5,6,7,8,9,10,11
-```
-
-接入普通单/双臂目标、通用头部/腰腿位姿内核及全身目标 IK。MoveL 续接、旧直线规划接口和全身直线插点保留原求解方式；竖直升降的专用 `LegBodyMotionPlanner::solveHeight` 不属于这次普通位姿 IK 接口。全身调用显式设置 `max_seed_attempts=0` 时保留禁止额外重试的语义。
-
-种子按近/中/远 2:1:1 交错生成，直接在限位和 J6/J7 耦合范围内采样，按关节范围归一化距离去重，保持冻结关节。每次传递当前碰撞模式、碰撞对、盒体/点云及静态 COM 配置；返回候选还在主规划上下文复核 FK、限位、冻结关节、J6/J7、自碰撞/环境及适用的静态 COM。完整轨迹的碰撞、水平/刚性约束、重定时和下发前反馈检查继续执行。
-
-协调进程通过 `posix_spawn` 启动独立 `ik_recovery_worker`，加载模型后在单线程状态创建工作进程，避免从 ROS/DDS 多线程进程直接 `fork`。首个合格候选获确认后停止派发并取消在途求解；请求编号隔离迟到结果。每 seed 的 0.5 秒在迭代边界检查，卡住的工作进程另由协调端隔离回收；总预算/取消后可能有短暂清理时间，不是精确到 0.500 秒的硬实时返回保证。
-
-取消、Action 超时、反馈失效或运动保护阻止重解，超预算结果不被采纳。单个工作进程异常由协调端回收；协调进程本身异常则当次重解失败并记录状态，原 IK 成功路径仍可使用，重新启动运控会重建进程池。`IK recovery` 日志记录实际生成/派发数、超时数、进程数和耗时。
-
-新增离线测试为 `ik_seed_sampler`、`ik_recovery`；求解工作程序不初始化 ROS、不连接电机 SDK。源码编译安装与运行实例是否重启生效须分别核对。
-
 ## 3. MoveJoints：手臂、头部、腰腿
 
 ### 3.1 Goal 全字段
@@ -392,7 +364,7 @@ ros2 action send_goal /Control/move_joints com_interfaces/action/MoveJoints \
 
 绝对身体高度不是 TCP 高度，也不是相机到地面距离。倾角 0°不等于 J3=0 rad。倾角模式不要给高度；升降模式不要给倾角。启用动态 ZMP 时当前身体专用模式拒绝执行，静态 COM 和碰撞检查仍可使用。
 
-这些独立腿部 MoveJoints 模式使用 `keep_grasp_rigid: true` 开启双臂自动补偿，不需指定手臂目标。仍不支持 `keep_tcp_level: true`。纯腰转支持单独指定 `body_joint`，四关节、两腿加第三关节补偿、俯仰和升降均可使用刚性约束。详见 [独立腰腿 MoveJ 刚性搬箱](RIGID_GRASP.md#独立腰腿-movej双臂自动补偿)。
+这些独立腿部 MoveJoints 模式不支持 `keep_tcp_level: true`；需要手臂补偿时使用 WBC MovePose。详见 [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)。
 
 ```bash
 # 身体竖直
@@ -563,9 +535,9 @@ ros2 action send_goal /Control/move_pose com_interfaces/action/MovePose \
   enable_collision_check: 1, timeout_ms: 60000}' --feedback
 ```
 
-改为 MoveL 时将 `enable_move_line` 设 true，并保持 `whole_body_waist_only=false`。任务 YAML 的完整动作片段见第 10.3 节。WBC 根据 TCP 目标解算腿腰与手臂，接口没有同时指定某个腰腿关节角的字段；独立 LEG MoveJ 使用 `keep_grasp_rigid: true` 在保持指定腰腿目标的同时自动补偿双臂，不支持开启 `keep_tcp_level`。
+改为 MoveL 时将 `enable_move_line` 设 true，并保持 `whole_body_waist_only=false`。任务 YAML 的完整动作片段见第 10.3 节。WBC 根据 TCP 目标解算腿腰与手臂，接口没有同时指定某个腰腿关节角的字段；独立 LEG MoveJ 不支持开启 `keep_tcp_level`；本次发布仅包含 WBC MovePose 的水平约束。
 
-全程约束使用实际 `left_arm_tool_tf/right_arm_tool_tf`，覆盖最终 4 ms 指令点、点间关节插值及执行/到位期间的实测 TCP 姿态。腿腰与手臂共用时间参数，不能只检查起终点水平。普通手臂 `arm_id=0/1/2`、头部、独立腿部 MovePose 均不支持启用；MoveJoints 的 `keep_tcp_level` 均不支持，`arm_id=4` 改用刚性抓取开关；阻抗模式也会被拒绝。水平补偿不可行、越限、碰撞或监控异常时动作失败，不转为关闭约束执行。
+全程约束使用实际 `left_arm_tool_tf/right_arm_tool_tf`，覆盖最终 4 ms 指令点、点间关节插值及执行/到位期间的实测 TCP 姿态。腿腰与手臂共用时间参数，不能只检查起终点水平。普通手臂 `arm_id=0/1/2`、头部、独立腿部 MovePose 均不支持启用；MoveJoints 仅 `arm_id=4` 支持；阻抗模式也会被拒绝。水平补偿不可行、越限、碰撞或监控异常时动作失败，不转为关闭约束执行。
 
 参考系为固定 `base_link`，底盘须固定且水平；当前没有 IMU 重力补偿。该约束也没有加入双臂刚性抓持的固定相对位姿或受力约束。`force_vertical_down` 只生成视觉目标姿态，不能代替全程水平约束。
 
@@ -677,14 +649,14 @@ MoveJ 改服务路径为 `/Control/move_joints/_action/cancel_goal`。取消请�
 
 | 字段 | 值与语义 |
 |---|---|
-| `target` | `0` 左臂 A；`1` 右臂 B；`2` 双臂；`3` 腿/腰四轴（J1/J2/J3/腰，EtherCAT 别名 30/29/28/27） |
+| `target` | `0` 左臂 A；`1` 右臂 B；`2` 双臂；`3` 腿/腰四轴（J1/J2/J3/腰，EtherCAT 别名 30/29/28/27）；`4` 头部两轴（别名 32/31） |
 | `operation` | `0` 在线急停；`1` 清除驱动故障 |
 | `command_issued`（响应） | SDK 已调用或总线已写入；不能单独证明硬件停止/清错 |
 | `feedback_confirmed`（响应） | 新鲜且前进的设备帧确认去使能和静止；清错另检查错误码 |
 | `success`（响应） | 只有调用和反馈均确认才为 true |
 | `message`（响应） | 原始驱动状态/错误码或拒绝、超时原因 |
 
-服务先锁存整机运动，阻断 WBC 等旧轨迹继续下发，再针对选中驱动操作。手臂使用 `EStop("A"/"B"/"AB")` 和 `OnClearErr_A/B()`；清错检查控制器状态与各关节 `SERVO*ERR*` 返回值。腿/腰在现有总线线程中使用 `enabled=0` 去使能、`enabled=-1` 清错 200 ms 后保持 `enabled=0`；不改变头部目标。清错要求资源空闲、部件已静止且处于去使能或故障状态，急停无需先满足这些条件。
+服务先锁存整机运动，阻断 WBC 等旧轨迹继续下发，再针对选中驱动操作。手臂使用 `EStop("A"/"B"/"AB")` 和 `OnClearErr_A/B()`；清错检查控制器状态与各关节 `SERVO*ERR*` 返回值。所选腿/腰或头部在现有总线线程中使用 `enabled=0` 去使能、`enabled=-1` 清错 200 ms 后保持 `enabled=0`；只操作所选部件，其他部件仍受整机软件封锁保护。清错要求资源空闲、部件已静止且处于去使能或故障状态，急停无需先满足这些条件。
 
 确认门限：反馈年龄 ≤100 ms，至少 5 组新帧连续稳定 ≥100 ms，速度 ≤0.01 rad/s，窗口位移 ≤0.001 rad。缺少真实 PDO 时间戳的旧腿部 SDK 不允许清错，也不能确认停止；不会将重复读缓存计作新帧。急停可中断同类驱动的清错等待。该网络操作不提供硬件急停/STO/抱闸确认，也不自动使能、软件复位或继续运动。调用后应分别检查请求返回值与实测反馈确认。
 
@@ -730,6 +702,101 @@ body_error off
 停止期间状态为 `ERROR_TRACKING_STOPPING`、`ERROR_TRACKING_STANDSTILL_CONFIRMED` 或 `ERROR_TRACKING_STOP_UNCONFIRMED`。未确认停止时继续阻止新任务。恢复后回到 `MONITORING`，`last_error_stop` 保留带 `arm_error` 或 `body_error` 标记的原因；状态还分别报告两组的 ON/OFF、`*_limit_rad` 与 `*_hard_limit_rad`。
 
 开关仅控制相对已发送指令的位置误差门槛及普通运动中的保持偏移检查。URDF 位置/速度限制、反馈有效性和年龄、驱动错误、最终到位要求（腿/腰/头默认 `0.02 rad`，开启精定位时默认 `0.002 rad`）、TCP/碰撞约束、显式停止及启动回零的专用约束继续执行。这些实际故障仍锁存；若跟踪停止期间出现这类故障，停止升级为普通故障，不能自动解除。软件停止不代表驱动 Quick Stop、STO 或抱闸确认。
+
+### 6.6 天机示教开关
+
+2026-11-13 新增，已安装到 `.18` 运控，配套接口也已安装到 `.23`。
+完整的参数、启动准备、返回值和故障处理见[天机示教与整机恢复使用说明](../src/motion_control_pkg/doc/TEACH_AND_RECOVERY.md)。
+交付时两个生产节点保持停止。当前禁止真机开启阻抗和下发关节角，下面命令仅作为以后允许操作时的使用说明。
+
+service `/Control/set_teach_mode` 的请求类型是 `com_interfaces/srv/SetTeachMode`：
+
+| 请求字段 | 默认值 | 说明 |
+|---|---|---|
+| `target` | 2 | 0 左臂 A，1 右臂 B，2 双臂 |
+| `enable` | false | true 开启关节阻抗拖动示教，false 退出 |
+
+进程启动时实际示教始终为 OFF。`teach_mode_available=true` 只表示允许响应开启请求，
+不会自动进入示教；设为 false 可禁止开启，见第 8.7 节。
+
+在 `.18` 命令终端准备环境；以下沿用本次停机前的域 43 / Fast DDS，必须与实际运控一致：
+
+```bash
+cd /home/it/ylf_wbc
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=43
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 service type /Control/set_teach_mode
+ros2 topic echo /Control/motion_safety std_msgs/msg/String --once
+```
+
+service 需要运控已经正常启动，**不需要启动 task_manager**。正常 bringup 会初始化驱动、
+可能执行头部回零，不能用启动运控替代只读检查。`.18/.23` 原 `.bashrc` 是域 42 / Cyclone DDS，
+本次未改写；启动终端与命令终端须显式对齐，不能直接混用本节与旧 42 域示例。
+
+实际步骤：停止继续提交任务，等待启动和运动/工具任务退出、全身反馈健康并停稳；
+松开末端按钮，调用开启；收到 `success: true` 且 `feedback_confirmed: true` 后，
+按住所选臂的物理末端按钮拖动。退出前松开按钮并停稳，再用同一 target 关闭。
+
+```bash
+# 双臂开启：会进入阻抗示教，本次禁止执行
+ros2 service call /Control/set_teach_mode com_interfaces/srv/SetTeachMode '{target: 2, enable: true}'
+
+# 双臂退出：正常退出会发送实测位置保持目标，本次禁止执行
+ros2 service call /Control/set_teach_mode com_interfaces/srv/SetTeachMode '{target: 2, enable: false}'
+```
+
+单臂将两条命令的 target 同时改为 0 或 1；更换选择前先退出已开启的示教臂。
+正常进入示教不需要先调用 `stop_motion`，它会锁存故障并导致开启被拒绝。
+开启期间拒绝 MoveJ/MovePose 和夹爪/吸盘 Action，SDK 发送层也拦截普通轨迹。
+
+响应 `active_mask` 为 0=关闭、1=左臂、2=右臂、3=双臂。失败时非零也可能表示切换结果
+不确定，不能仅凭该值认定成功；检查 `success`、`feedback_confirmed` 和 `message`。
+正常关闭保持拖动后的实测位置；故障锁存期间的关闭只退出拖动并下使能，需要整机恢复后
+才允许新运动。`/Control/motion_safety` 同时提供 `teaching_mask` 与 `maintenance_active`。
+
+### 6.7 整机清错恢复
+
+service `/Control/recover_robot`（`com_interfaces/srv/RecoverRobot`）统一处理双臂、
+腰腿四轴及头部两轴。先停止提交任务并等资源释放；服务会自行安装软件封锁。
+它与只清软件锁存的 `/Control/reset_motion_fault` 是不同入口。
+
+| 请求字段 | 默认值 | 说明 |
+|---|---|---|
+| `enable_after_clear` | true | false 仅清错并保持下使能/软件锁存；true 清错后在实测位置恢复使能并解除锁存 |
+
+建议显式填写该字段，两种命令择一使用，不要求连续执行：
+
+```bash
+# 只清错：仍会下使能和发送驱动复位命令，不是只读查询
+ros2 service call /Control/recover_robot com_interfaces/srv/RecoverRobot '{enable_after_clear: false}'
+
+# 清错并恢复：会发送实测位置保持目标，本次禁止执行
+ros2 service call /Control/recover_robot com_interfaces/srv/RecoverRobot '{enable_after_clear: true}'
+```
+
+流程为封锁动作入口 → 三组下使能并确认停稳 → 双臂/腰腿/头部清错 → 可选恢复使能
+→ 检查反馈 → 解除软件锁存。初始停稳未确认时不进入清错；清错阶段某组失败仍尝试
+其他组，但不进入使能。使能/软件恢复失败会请求全部组下使能，旧轨迹始终不自动续跑。
+
+| 响应字段 | 仅清错成功 | 清错并恢复成功 |
+|---|---|---|
+| `success` | true | true |
+| `arms_cleared` / `lower_body_cleared` / `head_cleared` | 均为 true | 均为 true |
+| `drives_enabled` | false | true |
+| `motion_ready` | false | true |
+
+完整恢复后读取新状态，应为 `state=MONITORING`、`teaching_mask=0`、
+`maintenance_active=0` 且反馈健康。只清错成功仍保留软件锁存，不能立即发运动；
+以后允许恢复使能时，重新显式调用 true。失败时保存 `message` 和各组结果，排查
+通讯、驱动错误、静止条件或 URDF 限位，不要用软件复位绕过，也不要自动重试旧任务。
+`drives_enabled=false` 不是所有电机均已确认下使能的证明，仍需看反馈。
+
+本 service 不执行系统重启或控制进程重启；task_manager 不自动调用它，也未新增对应
+YAML action_type / Modbus 自动恢复入口。完整操作与常见错误见[专题说明](../src/motion_control_pkg/doc/TEACH_AND_RECOVERY.md)。
+
 
 ## 7. 碰撞与环境点云
 
@@ -796,7 +863,11 @@ ros2 topic hz /fusion/synced_robot_vision
 
 ### 8.3 工具动力学
 
-`left_tool_dynamics`、`right_tool_dynamics` 各 10 个 double，顺序为 `[M,MCP_X,MCP_Y,MCP_Z,I_XX,I_XY,I_XZ,I_YY,I_YZ,I_ZZ]`。MCP 是相对法兰的质心，单位 **mm**；质量和惯量使用 SDK 对应单位，必须与实际负载一致。要求所有值有限、质量 >0、惯量张量物理有效。源码默认：
+`left_tool_dynamics`、`right_tool_dynamics` 各 10 个 double，顺序为 `[M,MCP_X,MCP_Y,MCP_Z,I_XX,I_XY,I_XZ,I_YY,I_YZ,I_ZZ]`。质量单位为 **kg**；MCP 是 SDK 法兰坐标系下的质心，单位 **mm**；惯量为**法兰原点、法兰坐标轴下的 kg·m²**，需要由部件质心惯量旋转并按平行轴定理合并。运控直接传入该数组，不会自动转换其坐标系或惯量参考点。
+
+2026-11-13，`.18` 已按用户选择，以当前安装 URDF 的完整夹爪（基体＋两手指）重新计算并更新 `/opt`：两侧均为 1.6 kg，法兰质心约为左 `[0,-0.225135,74.964878]`、右 `[0,-0.503136,74.964877]` mm。来源、完整数组、转换方法和离线复算命令见 [示教与恢复说明](../src/motion_control_pkg/doc/TEACH_AND_RECOVERY.md#当前-18-完整夹爪的动力学转换)。这是模型标称值，未做实机负载辨识。
+
+下列仍是源码/通用模板中的**历史默认值**，原始坐标系尚不明确，不应覆盖本机现用 `/opt`：
 
 ```yaml
 left_tool_dynamics: [1.7, -0.36326579, -174.45006830, -0.57521107,
@@ -884,6 +955,18 @@ ros2 param get /motion_control_ns/motion_control head_precision.goal_tolerance_r
 | `timeout_sec` | 180.0 | 包含启动等待、规划、执行和到位的总超时 |
 
 回零到位至少要求两轴误差 ≤0.002 rad、5 帧递增反馈、连续稳定 200 ms；若 `head_precision` 配置更严格则采用更严格条件。启动例外在回零成功或失败后收回，URDF 和正常 MoveJ 限位不变。恢复流程、失败处理与配置示例见 [HEAD_STARTUP_HOMING.md](HEAD_STARTUP_HOMING.md) 和 [head_startup_home.yaml](../src/motion_control_pkg/config/head_startup_home.yaml)。
+
+### 8.7 示教能力开关
+
+| 参数 | 类型 / 默认值 | 生效方式 |
+|---|---|---|
+| `teach_mode_available` | bool，true | 启动时只读；false 禁止开启示教，关闭请求仍可提交；实际示教每次启动都为 OFF |
+
+从 `/opt/onecube/motion_control/config/motion_control_config.yaml` 读取，合并到现有
+`/motion_control_ns/motion_control.ros__parameters` 下，不能用小片段覆盖整份配置。
+`ros2 param set` 不能热切换它；实际开关使用第 6.6 节的 service。
+示教复用现有左右 TCP、工具动力学和关节阻抗 K/D 参数；本次 `/opt` 配置未改写。
+
 
 ## 9. COM、ZMP 与 observer 参数
 
@@ -1201,6 +1284,45 @@ preplanned dispatch missed 4 ms deadline at sample 1300 phase=after_sample wake_
 ## 12. 接口原文与参数配置快照
 
 以下保留完整字段类型、枚举、Result 和 Feedback，便于客户端开发核对。`---` 分隔 Goal、Result、Feedback。接口注释若与执行差异冲突（特别是 bound_size），以正文及服务端代码为准。
+
+### SetTeachMode.srv
+
+来源：[SetTeachMode.srv](../src/com_interfaces/srv/SetTeachMode.srv)
+
+```text
+# Runtime switch. Every controller start begins with teaching OFF.
+uint8 LEFT_ARM=0
+uint8 RIGHT_ARM=1
+uint8 BOTH_ARMS=2
+uint8 target 2
+bool enable false
+---
+# Success requires advancing feedback echoing the requested mode.
+bool success
+bool command_issued
+bool feedback_confirmed
+uint8 active_mask
+string message
+```
+
+### RecoverRobot.srv
+
+来源：[RecoverRobot.srv](../src/com_interfaces/srv/RecoverRobot.srv)
+
+```text
+# Explicit whole-robot recovery: both arms, waist/legs and head.
+# false clears drives and retains disable/fault fence; true also enables at
+# measured positions and resets the software latch after feedback confirmation.
+bool enable_after_clear true
+---
+bool success
+bool arms_cleared
+bool lower_body_cleared
+bool head_cleared
+bool drives_enabled
+bool motion_ready
+string message
+```
 
 ### MoveJoints.action
 

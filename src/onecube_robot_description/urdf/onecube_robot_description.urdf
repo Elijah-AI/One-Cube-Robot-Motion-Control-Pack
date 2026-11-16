@@ -534,24 +534,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="leg_joint1"
-    type="revolute">
-    <origin
-      xyz="0.20607 2.3163E-05 0.37"
-      rpy="1.5708 0 -3.1416" />
-    <parent
-      link="base_link" />
-    <child
-      link="leg_link1" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-1.57"
-      upper="1.57"
-      effort="557"
-      velocity="1.31" />
-  </joint>
+  <joint name="leg_joint1" type="revolute">
+  <origin xyz="0.20607 2.41301e-05 0.37" rpy="1.5708 2.34308e-08 3.14159" />
+  <parent link="base_link" />
+  <child link="leg_link1" />
+  <axis xyz="0 0 1" />
+  <limit lower="-1.57" upper="1.57" effort="557" velocity="1.31" />
+</joint>
   <link
     name="leg_link2">
     <inertial>
@@ -592,24 +581,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="leg_joint2"
-    type="revolute">
-    <origin
-      xyz="0 0.395 0"
-      rpy="0 0 0" />
-    <parent
-      link="leg_link1" />
-    <child
-      link="leg_link2" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.70"
-      upper="2.99"
-      effort="557"
-      velocity="1.31" />
-  </joint>
+  <joint name="leg_joint2" type="revolute">
+  <origin xyz="-9.26868e-09 0.395568 2.95831e-11" rpy="9.6004e-05 0.00612092 0.0156646" />
+  <parent link="leg_link1" />
+  <child link="leg_link2" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.70" upper="2.99" effort="557" velocity="1.31" />
+</joint>
   <link
     name="leg_link3">
     <inertial>
@@ -650,24 +628,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="leg_joint3"
-    type="revolute">
-    <origin
-      xyz="0 0.56 0"
-      rpy="3.1416 0 3.1416" />
-    <parent
-      link="leg_link2" />
-    <child
-      link="leg_link3" />
-    <axis
-      xyz="0 0 -1" />
-    <limit
-      lower="-1.88"
-      upper="2.09"
-      effort="557"
-      velocity="1.31" />
-  </joint>
+  <joint name="leg_joint3" type="revolute">
+  <origin xyz="1.63563e-08 0.562935 -6.42013e-07" rpy="3.14148 0.00758591 3.12558" />
+  <parent link="leg_link2" />
+  <child link="leg_link3" />
+  <axis xyz="0 0 -1" />
+  <limit lower="-1.88" upper="2.09" effort="557" velocity="1.31" />
+</joint>
   <link
     name="body_link">
     <inertial>
@@ -708,24 +675,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="body_joint"
-    type="revolute">
-    <origin
-      xyz="0 0.16195 0"
-      rpy="-1.5708 0 0" />
-    <parent
-      link="leg_link3" />
-    <child
-      link="body_link" />
-    <axis
-      xyz="0 0 -1" />
-    <limit
-      lower="-3.11"
-      upper="3.11"
-      effort="133"
-      velocity="1.31" />
-  </joint>
+  <joint name="body_joint" type="revolute">
+  <origin xyz="4.84446e-08 0.167651 0.000245091" rpy="-1.56934 0.00684168 9.91849e-06" />
+  <parent link="leg_link3" />
+  <child link="body_link" />
+  <axis xyz="0 0 -1" />
+  <limit lower="-3.11" upper="3.11" effort="133" velocity="1.31" />
+</joint>
   <link
     name="body_camera_link">
     <inertial>
@@ -1097,17 +1053,11 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="arm-r-base_joint"
-    type="fixed">
-    <origin
-      xyz="4.1323E-05 -0.051083 0.39228"
-      rpy="1.3962 0 0" />
-    <parent
-      link="body_link" />
-    <child
-      link="arm-r-base_link" />
-  </joint>
+  <joint name="arm-r-base_joint" type="fixed">
+  <origin xyz="4.1323e-05 -0.0510829 0.39228" rpy="1.39619 1.00322e-11 -8.53993e-12" />
+  <parent link="body_link" />
+  <child link="arm-r-base_link" />
+</joint>
   <link
     name="Link1_R">
     <inertial>
@@ -1148,24 +1098,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint1_R"
-    type="revolute">
-    <origin
-      xyz="0 0 0.1745"
-      rpy="0 0 0" />
-    <parent
-      link="arm-r-base_link" />
-    <child
-      link="Link1_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.967"
-      upper="2.967"
-      effort="108"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint1_R" type="revolute">
+  <origin xyz="0.00214418 -4.22382e-05 0.178722" rpy="0.000236512 2.02035e-08 -8.68445e-05" />
+  <parent link="arm-r-base_link" />
+  <child link="Link1_R" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.967" upper="2.967" effort="108" velocity="3.1416" />
+</joint>
   <link
     name="Link2_R">
     <inertial>
@@ -1206,24 +1145,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint2_R"
-    type="revolute">
-    <origin
-      xyz="0 0 0"
-      rpy="1.5708 0 0" />
-    <parent
-      link="Link1_R" />
-    <child
-      link="Link2_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.0944"
-      upper="2.0944"
-      effort="108"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint2_R" type="revolute">
+  <origin xyz="-0.000365211 0.000443177 8.21731e-07" rpy="1.57262 0.0106793 1.94634e-05" />
+  <parent link="Link1_R" />
+  <child link="Link2_R" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.0944" upper="2.0944" effort="108" velocity="3.1416" />
+</joint>
   <link
     name="Link3_R">
     <inertial>
@@ -1264,24 +1192,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint3_R"
-    type="revolute">
-    <origin
-      xyz="0 0.287 0"
-      rpy="-1.5708 0 0" />
-    <parent
-      link="Link2_R" />
-    <child
-      link="Link3_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.967"
-      upper="2.967"
-      effort="66"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint3_R" type="revolute">
+  <origin xyz="0.0011236 0.287721 -0.000331272" rpy="-1.57195 -0.00331054 3.84928e-06" />
+  <parent link="Link2_R" />
+  <child link="Link3_R" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.967" upper="2.967" effort="66" velocity="3.1416" />
+</joint>
   <link
     name="Link4_R">
     <inertial>
@@ -1322,24 +1239,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint4_R"
-    type="revolute">
-    <origin
-      xyz="0.018 0 0"
-      rpy="-1.5708 0 3.1416" />
-    <parent
-      link="Link3_R" />
-    <child
-      link="Link4_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.5307"
-      upper="1.0472"
-      effort="66"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint4_R" type="revolute">
+  <origin xyz="0.0183502 0.00217536 1.65688e-06" rpy="-1.57156 -0.00112042 -3.14158" />
+  <parent link="Link3_R" />
+  <child link="Link4_R" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.5307" upper="1.0472" effort="66" velocity="3.1416" />
+</joint>
   <link
     name="Link5_R">
     <inertial>
@@ -1380,24 +1286,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint5_R"
-    type="revolute">
-    <origin
-      xyz="0.018 -0.314 0"
-      rpy="-1.5708 0 3.1416" />
-    <parent
-      link="Link4_R" />
-    <child
-      link="Link5_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.967"
-      upper="2.967"
-      effort="18"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint5_R" type="revolute">
+  <origin xyz="0.0185145 -0.314683 0.00051284" rpy="-1.56917 -0.00840747 3.14159" />
+  <parent link="Link4_R" />
+  <child link="Link5_R" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.967" upper="2.967" effort="18" velocity="3.1416" />
+</joint>
   <link
     name="Link6_R">
     <inertial>
@@ -1438,24 +1333,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint6_R"
-    type="revolute">
-    <origin
-      xyz="0 0 0"
-      rpy="1.5708 -1.5708 0" />
-    <parent
-      link="Link5_R" />
-    <child
-      link="Link6_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-1.0472"
-      upper="1.0472"
-      effort="18"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint6_R" type="revolute">
+  <origin xyz="-0.000357853 -0.000574698 3.59418e-06" rpy="0.0801403 -1.56462 1.49066" />
+  <parent link="Link5_R" />
+  <child link="Link6_R" />
+  <axis xyz="0 0 1" />
+  <limit lower="-1.0472" upper="1.0472" effort="18" velocity="3.1416" />
+</joint>
   <link
     name="Link7_R">
     <inertial>
@@ -1496,64 +1380,50 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint7_R"
-    type="revolute">
-    <origin
-      xyz="0 0 0"
-      rpy="1.5708 -1.5708 0" />
-    <parent
-      link="Link6_R" />
-    <child
-      link="Link7_R" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-1.5708"
-      upper="1.5708"
-      effort="18"
-      velocity="3.1416" />
-  </joint>
-  <link
-    name="gripper_base_r_link">
-    <inertial>
-      <origin
-        xyz="0 -0.000124 0.068615"
-        rpy="0 0 0" />
-      <mass
-        value="1.5" />
-      <inertia
-        ixx="0.003167"
-        ixy="1.4E-05"
-        ixz="0"
-        iyy="0.002868"
-        iyz="-1E-05"
-        izz="0.001198" />
-    </inertial>
-    <visual>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/gripper_base_r_link.STL" />
-      </geometry>
-      <material
-        name="">
-        <color
-          rgba="0.79216 0.81961 0.93333 1" />
-      </material>
-    </visual>
-    <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_base_r_link.dae" />
-      </geometry>
-    </collision>
-  </link>
+  <joint name="Joint7_R" type="revolute">
+  <origin xyz="-0.000950395 -2.04831e-08 2.53323e-08" rpy="-3.14046 -1.56773 -1.57193" />
+  <parent link="Link6_R" />
+  <child link="Link7_R" />
+  <axis xyz="0 0 1" />
+  <limit lower="-1.5708" upper="1.5708" effort="18" velocity="3.1416" />
+</joint>
+  <link name="gripper_base_r_link">
+  <inertial>
+    <origin xyz="0.00184353925094746 0.00976354652597161 0.23675720133264" rpy="0 0 0" />
+    <mass value="0.80742" />
+    <inertia ixx="0.0122473357465613" ixy="-2.66702496163295e-05" ixz="0.000134189202699625" iyy="0.0115609561272009" iyz="-0.000978258702974224" izz="0.000860403562181484" />
+  </inertial>
+  <visual>
+    <origin xyz="0 5.42101086242752e-20 0" rpy="3.93411421876294e-23 0 0" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/gripper_base_r_link.STL" />
+    </geometry>
+    <material name="">
+      <color rgba="0.79216 0.81961 0.93333 1" />
+    </material>
+  </visual>
+  <visual>
+    <origin xyz="-0.0015 0.037668 0.376" rpy="3.93411421876294e-23 0 0" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/Long_gripper_r_Link.STL" />
+    </geometry>
+    <material name="">
+      <color rgba="0.89804 0.91765 0.92941 1" />
+    </material>
+  </visual>
+  <collision>
+    <origin xyz="0 5.42101086242752e-20 0" rpy="3.93411421876294e-23 0 0" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/gripper_base_r_link.dae" />
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 5.42101086242752e-20 0" rpy="3.93411421876294e-23 0 0" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/Long_gripper_r_swept.dae" />
+    </geometry>
+  </collision>
+</link>
   <joint
     name="gripper_base_r_joint"
     type="fixed">
@@ -1572,46 +1442,7 @@
       effort="0"
       velocity="0" />
   </joint>
-  <link
-    name="gripper_r_link1">
-    <inertial>
-      <origin
-        xyz="-0.002593 0.008537 -0.011634"
-        rpy="0 0 0" />
-      <mass
-        value="0.05" />
-      <inertia
-        ixx="4E-05"
-        ixy="-5E-06"
-        ixz="-1E-06"
-        iyy="3.3E-05"
-        iyz="1E-06"
-        izz="6.8E-05" />
-    </inertial>
-    <visual>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/gripper_r_link1.STL" />
-      </geometry>
-      <material
-        name="">
-        <color
-          rgba="1 1 1 1" />
-      </material>
-    </visual>
-    <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_r_link1.dae" />
-      </geometry>
-    </collision>
-  </link>
+  <link name="gripper_r_link1" />
   <joint
     name="gripper_r_joint1"
     type="prismatic">
@@ -1630,46 +1461,7 @@
       effort="0"
       velocity="0" />
   </joint>
-  <link
-    name="gripper_r_link2">
-    <inertial>
-      <origin
-        xyz="-0.002593 0.008537 -0.011634"
-        rpy="0 0 0" />
-      <mass
-        value="0.05" />
-      <inertia
-        ixx="4E-05"
-        ixy="-5E-06"
-        ixz="-1E-06"
-        iyy="3.3E-05"
-        iyz="1E-06"
-        izz="6.8E-05" />
-    </inertial>
-    <visual>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/gripper_r_link2.STL" />
-      </geometry>
-      <material
-        name="">
-        <color
-          rgba="1 1 1 1" />
-      </material>
-    </visual>
-    <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_r_link2.dae" />
-      </geometry>
-    </collision>
-  </link>
+  <link name="gripper_r_link2" />
   <joint
     name="gripper_r_joint2"
     type="prismatic">
@@ -1733,17 +1525,11 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="arm-l-base_joint"
-    type="fixed">
-    <origin
-      xyz="4.1222E-05 0.051041 0.39228"
-      rpy="-1.3962 0 0" />
-    <parent
-      link="body_link" />
-    <child
-      link="arm-l-base_link" />
-  </joint>
+  <joint name="arm-l-base_joint" type="fixed">
+  <origin xyz="4.1222e-05 0.051041 0.39228" rpy="-1.39619 1.79194e-11 -4.11321e-13" />
+  <parent link="body_link" />
+  <child link="arm-l-base_link" />
+</joint>
   <link
     name="Link1_L">
     <inertial>
@@ -1784,24 +1570,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint1_L"
-    type="revolute">
-    <origin
-      xyz="0 0 0.1745"
-      rpy="0 0 0" />
-    <parent
-      link="arm-l-base_link" />
-    <child
-      link="Link1_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.967"
-      upper="2.967"
-      effort="108"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint1_L" type="revolute">
+  <origin xyz="0.00435715 -0.000217952 0.179004" rpy="0.00121788 -2.16979e-06 0.00179498" />
+  <parent link="arm-l-base_link" />
+  <child link="Link1_L" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.967" upper="2.967" effort="108" velocity="3.1416" />
+</joint>
   <link
     name="Link2_L">
     <inertial>
@@ -1842,24 +1617,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint2_L"
-    type="revolute">
-    <origin
-      xyz="0 0 0"
-      rpy="1.5708 0 0" />
-    <parent
-      link="Link1_L" />
-    <child
-      link="Link2_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.0944"
-      upper="2.0944"
-      effort="108"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint2_L" type="revolute">
+  <origin xyz="-0.00149816 -0.000184699 -2.04161e-07" rpy="1.57188 -0.00325395 -3.4851e-06" />
+  <parent link="Link1_L" />
+  <child link="Link2_L" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.0944" upper="2.0944" effort="108" velocity="3.1416" />
+</joint>
   <link
     name="Link3_L">
     <inertial>
@@ -1900,24 +1664,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint3_L"
-    type="revolute">
-    <origin
-      xyz="0 0.287 0"
-      rpy="-1.5708 0 0" />
-    <parent
-      link="Link2_L" />
-    <child
-      link="Link3_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.967"
-      upper="2.967"
-      effort="66"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint3_L" type="revolute">
+  <origin xyz="0.00129284 0.288543 0.000308589" rpy="-1.56973 -0.000620454 -6.5653e-07" />
+  <parent link="Link2_L" />
+  <child link="Link3_L" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.967" upper="2.967" effort="66" velocity="3.1416" />
+</joint>
   <link
     name="Link4_L">
     <inertial>
@@ -1958,24 +1711,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint4_L"
-    type="revolute">
-    <origin
-      xyz="0.018 0 0"
-      rpy="-1.5708 0 3.1416" />
-    <parent
-      link="Link3_L" />
-    <child
-      link="Link4_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.5307"
-      upper="1.0472"
-      effort="66"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint4_L" type="revolute">
+  <origin xyz="0.0183573 -0.000646056 1.28247e-06" rpy="-1.56883 -0.0054935 3.14159" />
+  <parent link="Link3_L" />
+  <child link="Link4_L" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.5307" upper="1.0472" effort="66" velocity="3.1416" />
+</joint>
   <link
     name="Link5_L">
     <inertial>
@@ -2016,24 +1758,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint5_L"
-    type="revolute">
-    <origin
-      xyz="0.018 -0.314 0"
-      rpy="-1.5708 0 3.1416" />
-    <parent
-      link="Link4_L" />
-    <child
-      link="Link5_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.967"
-      upper="2.967"
-      effort="18"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint5_L" type="revolute">
+  <origin xyz="0.0174232 -0.313984 -0.00170311" rpy="-1.57622 0.0125041 3.14153" />
+  <parent link="Link4_L" />
+  <child link="Link5_L" />
+  <axis xyz="0 0 1" />
+  <limit lower="-2.967" upper="2.967" effort="18" velocity="3.1416" />
+</joint>
   <link
     name="Link6_L">
     <inertial>
@@ -2074,24 +1805,13 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint6_L"
-    type="revolute">
-    <origin
-      xyz="0 0 0"
-      rpy="1.5708 -1.5708 0" />
-    <parent
-      link="Link5_L" />
-    <child
-      link="Link6_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-1.0472"
-      upper="1.0472"
-      effort="18"
-      velocity="3.1416" />
-  </joint>
+  <joint name="Joint6_L" type="revolute">
+  <origin xyz="-0.000932126 -0.00120731 -1.60734e-05" rpy="-3.12647 -1.55757 -1.58592" />
+  <parent link="Link5_L" />
+  <child link="Link6_L" />
+  <axis xyz="0 0 1" />
+  <limit lower="-1.0472" upper="1.0472" effort="18" velocity="3.1416" />
+</joint>
   <link
     name="Link7_L">
     <inertial>
@@ -2132,64 +1852,50 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="Joint7_L"
-    type="revolute">
-    <origin
-      xyz="0 0 0"
-      rpy="1.5708 -1.5708 0" />
-    <parent
-      link="Link6_L" />
-    <child
-      link="Link7_L" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-1.5708"
-      upper="1.5708"
-      effort="18"
-      velocity="3.1416" />
-  </joint>
-  <link
-    name="gripper_base_l_link">
-    <inertial>
-      <origin
-        xyz="0 0.000124 0.068615"
-        rpy="0 0 0" />
-      <mass
-        value="1.5" />
-      <inertia
-        ixx="0.003167"
-        ixy="1.4E-05"
-        ixz="0"
-        iyy="0.002868"
-        iyz="1E-05"
-        izz="0.001198" />
-    </inertial>
-    <visual>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/gripper_base_l_link.STL" />
-      </geometry>
-      <material
-        name="">
-        <color
-          rgba="0.79216 0.81961 0.93333 1" />
-      </material>
-    </visual>
-    <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_base_l_link.dae" />
-      </geometry>
-    </collision>
-  </link>
+  <joint name="Joint7_L" type="revolute">
+  <origin xyz="-0.000613153 1.17586e-07 3.47567e-08" rpy="-0.000261501 -1.55731 1.57106" />
+  <parent link="Link6_L" />
+  <child link="Link7_L" />
+  <axis xyz="0 0 1" />
+  <limit lower="-1.5708" upper="1.5708" effort="18" velocity="3.1416" />
+</joint>
+  <link name="gripper_base_l_link">
+  <inertial>
+    <origin xyz="0.00184353925094748 -0.0097618077322577 0.236686208427673" rpy="0 0 0" />
+    <mass value="0.80742" />
+    <inertia ixx="0.0122376641338547" ixy="2.66712353228487e-05" ixz="0.000134175164698429" iyy="0.0115512988771028" iyz="0.000977486365338877" izz="0.000860389199572877" />
+  </inertial>
+  <visual>
+    <origin xyz="0 5.42101086242752e-20 0" rpy="3.14158530717959 2.22044604925031e-16 -3.29124614482351e-22" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/gripper_base_l_link.STL" />
+    </geometry>
+    <material name="">
+      <color rgba="0.79216 0.81961 0.93333 1" />
+    </material>
+  </visual>
+  <visual>
+    <origin xyz="-0.00149999999999998 -0.0376660458538686 0.266000276717402" rpy="3.14158530717959 2.22044604925031e-16 -3.29124614482351e-22" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/Long_gripper_l_Link.STL" />
+    </geometry>
+    <material name="">
+      <color rgba="0.89804 0.91765 0.92941 1" />
+    </material>
+  </visual>
+  <collision>
+    <origin xyz="0 5.42101086242752e-20 0" rpy="3.14158530717959 2.22044604925031e-16 -3.29124614482351e-22" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/gripper_base_l_link.dae" />
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 5.42101086242752e-20 0" rpy="3.14158530717959 2.22044604925031e-16 -3.29124614482351e-22" />
+    <geometry>
+      <mesh filename="package://onecube_robot_description/meshes/material_tool_20261116/Long_gripper_l_swept.dae" />
+    </geometry>
+  </collision>
+</link>
   <joint
     name="gripper_base_l_joint"
     type="fixed">
@@ -2208,46 +1914,7 @@
       effort="0"
       velocity="0" />
   </joint>
-  <link
-    name="gripper_l_link1">
-    <inertial>
-      <origin
-        xyz="0.002593 -0.008537 -0.011634"
-        rpy="0 0 0" />
-      <mass
-        value="0.05" />
-      <inertia
-        ixx="4E-05"
-        ixy="-5E-06"
-        ixz="1E-06"
-        iyy="3.3E-05"
-        iyz="-1E-06"
-        izz="6.8E-05" />
-    </inertial>
-    <visual>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/gripper_l_link1.STL" />
-      </geometry>
-      <material
-        name="">
-        <color
-          rgba="1 1 1 1" />
-      </material>
-    </visual>
-    <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_l_link1.dae" />
-      </geometry>
-    </collision>
-  </link>
+  <link name="gripper_l_link1" />
   <joint
     name="gripper_l_joint1"
     type="prismatic">
@@ -2266,46 +1933,7 @@
       effort="0"
       velocity="0" />
   </joint>
-  <link
-    name="gripper_l_link2">
-    <inertial>
-      <origin
-        xyz="0.002593 -0.008537 -0.011634"
-        rpy="0 0 0" />
-      <mass
-        value="0.05" />
-      <inertia
-        ixx="4E-05"
-        ixy="-5E-06"
-        ixz="1E-06"
-        iyy="3.3E-05"
-        iyz="-1E-06"
-        izz="6.8E-05" />
-    </inertial>
-    <visual>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/gripper_l_link2.STL" />
-      </geometry>
-      <material
-        name="">
-        <color
-          rgba="1 1 1 1" />
-      </material>
-    </visual>
-    <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
-      <geometry>
-        <mesh
-          filename="package://onecube_robot_description/meshes/collision/gripper_l_link2.dae" />
-      </geometry>
-    </collision>
-  </link>
+  <link name="gripper_l_link2" />
   <joint
     name="gripper_l_joint2"
     type="prismatic">
@@ -2359,4 +1987,5 @@
       link="head_camera_optical" />
   </joint>
 
+  <!-- Robot18 material tool 2026-11-16: CAD visuals at jaw zero; collision envelopes cover full 0..1.57 rad jaw travel. Existing end frames and locked-joint indices retained. -->
 </robot>

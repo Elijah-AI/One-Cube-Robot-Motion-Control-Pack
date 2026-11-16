@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "robot_source_files_verified": 517,
+  "opt_config_verified": true,
+  "model_nq": 28,
+  "mesh_references_resolve": true,
+  "all_original_joint_limits_preserved": true,
+  "neutral_collision_free": true,
+  "geometry_collision_pairs": 130,
+  "both_tcp_axes_and_offsets_verified": true,
+  "tool_mass_kg_each": 0.80742,
+  "cmake_literal_test_sources_exist": true,
+  "release_document_links_resolve": true,
+  "full_controller_build_performed": false,
+  "workspace_consistency": {
+    "errors": 0,
+    "warnings": 82,
+    "info": 2
+  },
+  "raw_robot_and_audit_whitespace_preserved": true,
+  "raw_whitespace_findings": 228,
+  "git_index_manifest_entries_verified": 518
+}

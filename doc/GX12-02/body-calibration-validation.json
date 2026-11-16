@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "source": "user calibrated .18 URDF",
+  "nq": 28,
+  "fk_samples": 100,
+  "max_frame_error_against_calibrated_body": 0.0,
+  "all_limits_preserved_from_robot": true,
+  "neutral_collision_free": true,
+  "geometry_pairs": 130,
+  "existing_positive_collision_fixtures_passed": 7,
+  "tool_mass_kg_each": 0.80742,
+  "sdk_tool_dynamics_unchanged_due_identical_terminal_subtree": true
+}

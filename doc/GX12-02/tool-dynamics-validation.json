@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "method": "Pinocchio independently folds two original CAD inertials per arm; left CAD-base Z mirror correction included",
+  "errors": {
+    "left": {
+      "mass_kg": 0.0,
+      "com_mm": 8.526512829121202e-14,
+      "inertia_kg_m2": 6.938893903907228e-17
+    },
+    "right": {
+      "mass_kg": 0.0,
+      "com_mm": 2.5579538487363607e-13,
+      "inertia_kg_m2": 1.457167719820518e-16
+    }
+  }
+}

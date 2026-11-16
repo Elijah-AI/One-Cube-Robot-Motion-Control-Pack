@@ -1,0 +1,2079 @@
+{
+  "source_host": "192.168.10.18",
+  "source_workspace": "/home/it/ylf_wbc",
+  "date": "2026-11-16",
+  "source_file_count": 517,
+  "files": {
+    "doc/MEASURED_JOINT_FEEDBACK.md": {
+      "sha256": "8772bed0f3e9ab20be9ff65146b1839c09b3752550e4b6814a3a4b7209805a18",
+      "size": 3413
+    },
+    "doc/MOTION_COMMANDS_AND_PARAMETERS.md": {
+      "sha256": "39d1384fc60a1ed1f736080f6c53f7d2578a33daaede8087d79938b184b5e08f",
+      "size": 114615
+    },
+    "doc/PRECISION_ARRIVAL.md": {
+      "sha256": "e4253d165f065dc462f0b19079c1c24fe6ba7fa8c06f0e094287cf17632ba892",
+      "size": 8330
+    },
+    "doc/README.md": {
+      "sha256": "58521d1ec0ac61918a23a8e6b3a9eca88f56a86848e7e6eaec39c1c6b7529d07",
+      "size": 294
+    },
+    "src/com_interfaces/CMakeLists.txt": {
+      "sha256": "1f72d09c4bd69e1455e86ee553be9a245825570bf0eaa7487cb6b8cbad19e7f1",
+      "size": 2251
+    },
+    "src/com_interfaces/action/AddTask.action": {
+      "sha256": "938fbe5b4942cd9b6cec2626306810307e1c5d0b93142a17fbb81a6ed4c3289d",
+      "size": 1727
+    },
+    "src/com_interfaces/action/AdjustBasePose.action": {
+      "sha256": "c48b5bac5fbf19147d006061a401ea70b80d5da24afddfcafd538181df209e2f",
+      "size": 499
+    },
+    "src/com_interfaces/action/CalibrationControl.action": {
+      "sha256": "9d8a8999ca850fe9166bfc6924ca1e96c508699820fa65cbae48c8955778628a",
+      "size": 903
+    },
+    "src/com_interfaces/action/ControlGripper.action": {
+      "sha256": "9bc146b7d9471c44f271d059639b460d11059941a5f5cc6ca54ea2fab3dba78e",
+      "size": 615
+    },
+    "src/com_interfaces/action/ControlSuck.action": {
+      "sha256": "1338bb806a8b2fc05322c22a84413cbe6f9e6fa0803f8037856bdd9428c712bf",
+      "size": 418
+    },
+    "src/com_interfaces/action/DetectionPoseCloud.action": {
+      "sha256": "c645dfb4f014c8f2ffcef3142115abf96ca35772504dcaf1bf440d70f85672e3",
+      "size": 1953
+    },
+    "src/com_interfaces/action/HardwareCheck.action": {
+      "sha256": "3b68813160a1baa6f608b2a6cd80eef007ae91485ff923a04e33061ab8935be2",
+      "size": 825
+    },
+    "src/com_interfaces/action/HardwareReset.action": {
+      "sha256": "327826556c59557e4885f2007cb42536e23503f55e13264bf888bd9a7f8413eb",
+      "size": 198
+    },
+    "src/com_interfaces/action/MoveJoints.action": {
+      "sha256": "92d214fe1fed20dcdd60ee2f568936e84dd03ae11de6a6a1ab350fcc014e4a79",
+      "size": 4020
+    },
+    "src/com_interfaces/action/MovePose.action": {
+      "sha256": "4de35bef92a61dac920684603554409ab982bf649612aa66934e3c4600fb5bee",
+      "size": 4286
+    },
+    "src/com_interfaces/action/PickAndPlace.action": {
+      "sha256": "618ad18222fab9c512edf0438063669002db4da88e73d92e26dc334c8a952ac7",
+      "size": 334
+    },
+    "src/com_interfaces/action/RecognizePallet.action": {
+      "sha256": "002726c46be8df605116f42b8a27f34cc0360c23f339e0c3170aeb95e0c5cb80",
+      "size": 1857
+    },
+    "src/com_interfaces/action/VisionCheckSelf.action": {
+      "sha256": "4127e5916e2aa661c88dba35e55c87d39c0e33a486cb744c5515d14b8ad5c957",
+      "size": 714
+    },
+    "src/com_interfaces/action/VisionDetection.action": {
+      "sha256": "6b79a344905122716f49dddf4488e5cd63a4334831492823cbef541692551269",
+      "size": 586
+    },
+    "src/com_interfaces/include/com_interfaces/leg_body_motion_goal.hpp": {
+      "sha256": "2f9276d5a311fbc780ea081f22ca53d0023703ee53c46c7333a92c2d6d98d208",
+      "size": 1456
+    },
+    "src/com_interfaces/include/com_interfaces/leg_joint_goal.hpp": {
+      "sha256": "a2ccae1b881c2fa5f7a799182f671826d07743182496921ccb827592878900f1",
+      "size": 2191
+    },
+    "src/com_interfaces/include/com_interfaces/precision_arrival_goal.hpp": {
+      "sha256": "c0ca23797777146b49d5e48fcbca3b52df47b926f6107833adb850df5c19aebc",
+      "size": 649
+    },
+    "src/com_interfaces/include/com_interfaces/rigid_grasp_goal.hpp": {
+      "sha256": "c3475bb56547adb8ddc4465aebfbb7529438acef0ac16a46ca4ec706583ec676",
+      "size": 3087
+    },
+    "src/com_interfaces/include/com_interfaces/synced_vision_shm.hpp": {
+      "sha256": "482582dc575246ff63592740702fffbe39cb53114dbffda50c07d073d834ba1d",
+      "size": 13456
+    },
+    "src/com_interfaces/include/com_interfaces/tcp_level_goal.hpp": {
+      "sha256": "afd10430b96143e7e6f113ac3d9c40d8a6d6d615be1d9a3cb19ab02b3e908664",
+      "size": 991
+    },
+    "src/com_interfaces/msg/CameraDriver.msg": {
+      "sha256": "99a750759554efcd8b0ef304f700993dc8a3093133dba640eaed8a00ccb64577",
+      "size": 427
+    },
+    "src/com_interfaces/msg/HeartBeat.msg": {
+      "sha256": "dedac312c6a04041135dbe6a99646df98a17f19e024eae37818a131b8a324428",
+      "size": 37
+    },
+    "src/com_interfaces/msg/MotorInfo.msg": {
+      "sha256": "78018e132f259dc4a31e613f4baa25559fa82e1a12a4045911b08fb8c7d5dd61",
+      "size": 429
+    },
+    "src/com_interfaces/msg/MotorStatus.msg": {
+      "sha256": "f87d2ccb6e55b6931b8546bf5926a8b05f2fc5779128f9e43c246fe93283cd3b",
+      "size": 327
+    },
+    "src/com_interfaces/msg/NodeStatus.msg": {
+      "sha256": "b0d317494e71c6efa12da5ab6b1bf8f4331454ab5bf62b233e95d3a13aa806d1",
+      "size": 67
+    },
+    "src/com_interfaces/msg/SafetyState.msg": {
+      "sha256": "52fd4fa37b2c5bc30b9d0edb348f0bad9af6332fcad005de698597c1c033ed0a",
+      "size": 799
+    },
+    "src/com_interfaces/msg/SyncedRobotVision.msg": {
+      "sha256": "aa4456c705178641807ebdd573a7dc8863958882acb52a096cbf9fbabaa32d2c",
+      "size": 1018
+    },
+    "src/com_interfaces/msg/TargetDetection.msg": {
+      "sha256": "7fc63198883b5aafba7e119f20e84cd7597b2fe6dc9124f14ce42a42b491f723",
+      "size": 558
+    },
+    "src/com_interfaces/package.xml": {
+      "sha256": "37b385a9ec8ba2db269d9a4e620c812e704347b096f2ce2cd21eda518711f363",
+      "size": 865
+    },
+    "src/com_interfaces/srv/DriveControl.srv": {
+      "sha256": "b7447181cc1575015b64c2331ae235cb25e255d2e183a6ebc7cfbe9c5fa611b0",
+      "size": 444
+    },
+    "src/com_interfaces/srv/GetSystemStatus.srv": {
+      "sha256": "ea6482752f05b1e0b76f9fa0aaf71ce84accbb3df7266b130f3b3a6e0f705bfb",
+      "size": 331
+    },
+    "src/com_interfaces/srv/RecoverRobot.srv": {
+      "sha256": "7ddd070537f48fd6b04a4f23a917884428930cc4ef495a19d1d69d248d0d909c",
+      "size": 380
+    },
+    "src/com_interfaces/srv/SetTeachMode.srv": {
+      "sha256": "fd5308a5672ec0636cb28c8e7b846a6a99e06842d1cc56a2d946208ad0ecc388",
+      "size": 313
+    },
+    "src/com_interfaces/test/test_dual_arm_action_contract.cpp": {
+      "sha256": "61005e6f9b25fe4d4d756d133e333931cf33bce125f1f4bb62dc82a4682a290f",
+      "size": 4500
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/LICENSE.txt": {
+      "sha256": "b673293d21e887eaa9b971696b33f0f9141839900c65c83e560afa469d291ba6",
+      "size": 26435
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/libqpOASES_lin_arm64.a": {
+      "sha256": "8bb6fedbacc2e8c3885a22dac6d0e2737f97e883414878fff7086333764211dd",
+      "size": 4461032
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/libqpOASES_lin_x64.a": {
+      "sha256": "a46e556839d86d44bdb4ae527f08917e7528ecb4fde91a49131af3b39605ee6d",
+      "size": 4841328
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES.hpp": {
+      "sha256": "8675c7475aa410be6a44c7813021be13b720038eb92525e96b1a5ed2a3aada85",
+      "size": 2155
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Bounds.hpp": {
+      "sha256": "1f44588e1244cf30204526b40d5226368d77c5d184e9465826787ece877a459c",
+      "size": 7896
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Bounds.ipp": {
+      "sha256": "6413e9dc76b694f58f19e32f57753b206ff6f35d65f6d1c22ebc4c1d34102034",
+      "size": 2303
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Constants.hpp": {
+      "sha256": "cda198076891045ba37df7e62db03f69452385d688852f346616cee575f10eef",
+      "size": 2134
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/ConstraintProduct.hpp": {
+      "sha256": "6e35f81785d665e02cdad4812b5909510ff7e25b87e942b32d204916169d53f2",
+      "size": 2987
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Constraints.hpp": {
+      "sha256": "b0892acce17a3e10e83e088c947a684a2287694ef793317fb8823b3d5127b4be",
+      "size": 8196
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Constraints.ipp": {
+      "sha256": "7ee54c33995fd7059dafd422beaa4773314befd34df53fc4c5cfd5a9fd585f08",
+      "size": 2383
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Flipper.hpp": {
+      "sha256": "7d5df5e79d505f0ba89b3a7b47289fe8a09dfcad04d70a70d04126360e2a22f1",
+      "size": 4494
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Indexlist.hpp": {
+      "sha256": "9307d50d78e832873283da10a3354f7d853a3503e256bf965943275f87fa6eda",
+      "size": 5773
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Indexlist.ipp": {
+      "sha256": "d8fc57fbc2f14fcf2acd123e05dac36c000f6e362f8db02c77b93a13dd33d65f",
+      "size": 2227
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/LapackBlasReplacement.hpp": {
+      "sha256": "4253bcdc65b044f2cc6422f8a898ae762a9916360df4865fe75d4fd11f95f48f",
+      "size": 7029
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Matrices.hpp": {
+      "sha256": "11600f9bd3bd350feb6002964093efea0c111a1d54171593d64d1eef647cc5bb",
+      "size": 41090
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/MessageHandling.hpp": {
+      "sha256": "a58942215768a7f7c9136cb435c7917fc2bf97d92990dc63600aa506df15b67b",
+      "size": 24627
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/MessageHandling.ipp": {
+      "sha256": "218bff0af75a300f18543e8052cf2badfd26fce7974f96dfec56fc08e5562805",
+      "size": 3201
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Options.hpp": {
+      "sha256": "83624249aa97b205960a41fdbca714df1f45125149c25c46bd03fcd37ab80b93",
+      "size": 6528
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/QProblem.hpp": {
+      "sha256": "88b9131cb1ecf6676baa7ee1578fb02f17932d205c5faf286699093f53fcd2be",
+      "size": 59379
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/QProblem.ipp": {
+      "sha256": "eeb4e83335711a99088971d94278e985e1c1882108411c6ae67980ca3be4ae65",
+      "size": 5576
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/QProblemB.hpp": {
+      "sha256": "24e66e94352ebe8dbca9179888089863fd7324ce0700d5c56eaf019ab7dbcba4",
+      "size": 49652
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/QProblemB.ipp": {
+      "sha256": "c92a171113d5287ba586190c07ce452033420d8d5601d083b8d6b2d9e85834b5",
+      "size": 8419
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/SQProblem.hpp": {
+      "sha256": "958a1aee692d99345494bfd7b97c61724f36270688d2b801a14c7a38c6117619",
+      "size": 19663
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/SQProblem.ipp": {
+      "sha256": "e69483461fc922df9baff04253549d124f6c25c15c62948bbd2d0400c150620e",
+      "size": 1634
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/SQProblemSchur.hpp": {
+      "sha256": "fd4164a3c14447c548ed4054ad91c09e362244381cf5c72658fc65a0c989b28b",
+      "size": 20971
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/SQProblemSchur.ipp": {
+      "sha256": "a25ef055f4fa7be2381c90c010427ca318b9f1cd00b00788a56d098c50adef89",
+      "size": 1734
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/SparseSolver.hpp": {
+      "sha256": "ee888973812b5dd9a3810c9d87efa75f948a88fe2abe4cb4526459eaadf3c08d",
+      "size": 12036
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/SubjectTo.hpp": {
+      "sha256": "0e7a8fd88080f3cfa8e8559dd2291c5987efe0dfed54321780e262f01a44cf3f",
+      "size": 7583
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/SubjectTo.ipp": {
+      "sha256": "13514d2e1ff411cb84008367c69f4ce8b9ffa8ecc226e80fd307c28d0e7bd7de",
+      "size": 3101
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Types.hpp": {
+      "sha256": "c31622b03ea112516c544a8089717af416829d9a0ecacd6ab3c9313551139e75",
+      "size": 11578
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Utils.hpp": {
+      "sha256": "b71774bc2ca3028a754cd702313c8159f4844701a0d4c6186091acac9ac7529d",
+      "size": 15081
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/Utils.ipp": {
+      "sha256": "4c0301ca5b49d95e91194cbc02c93cd2b4b1b9e0ccdac1e5004125dcd1355cee",
+      "size": 2766
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/extras/OQPinterface.hpp": {
+      "sha256": "5ce2cddb2fcd48b9be6a641fc138aa5e9c77d284e0108dc68a85eeb0e05d3be9",
+      "size": 13741
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/extras/SolutionAnalysis.hpp": {
+      "sha256": "9fe6bc6d388d919d6af0c4a4f72dfb68520d6b70fa3606bf025605290d17dea0",
+      "size": 6538
+    },
+    "src/motion_control_pkg/3rdparty/qpOASES/qpOASES/extras/SolutionAnalysis.ipp": {
+      "sha256": "50e58777a048e23481d8b9a9e2f5c091d7ce8b6ce066f2dfca5d3dd149614c2c",
+      "size": 1588
+    },
+    "src/motion_control_pkg/3rdparty/quill/LICENSE.txt": {
+      "sha256": "12e9bec945430d98b20939e3115284e80965f56d73348e5688cd8b7452aac146",
+      "size": 1087
+    },
+    "src/motion_control_pkg/3rdparty/quill/libquill_lin_arm64.a": {
+      "sha256": "a300e10d971b798225a77125809a661fa8d5556b836356fd6d5fdd380bc64216",
+      "size": 1220356
+    },
+    "src/motion_control_pkg/3rdparty/quill/libquill_lin_x64.a": {
+      "sha256": "0fa85655af8c063cc297ed3b4f12e7a0b972c26128e7675d5cadd5c19b5f509f",
+      "size": 1244852
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/Fmt.h": {
+      "sha256": "5d8e6197647504022d7d52ac7b9e2eb7edfaac003f4223f0ef37d33bd6dfb9ce",
+      "size": 917
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/LogLevel.h": {
+      "sha256": "15f22d3b8bf39035bcc4eb997fa88f3c5c3fb4f27e63876ab89aa109647a180d",
+      "size": 1060
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/LogMacroMetadata.h": {
+      "sha256": "18216876a400350e34001bd79ce02cdaafed4288e45221ad07dbf0c9b60dcbe7",
+      "size": 4894
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/Logger.h": {
+      "sha256": "dbefa6e849e5d819d11cc6ae3c4466bd35800ecef41d74a9894f4c68d645e68f",
+      "size": 12046
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/PatternFormatter.h": {
+      "sha256": "78eace9997a40fe2bf894226e54fc1fff308787712a9ad45218755ca3cec5dc2",
+      "size": 25085
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/Quill.h": {
+      "sha256": "8cc7e4963b8c9aa8fa39d56edaec38d60a1dd9cabede63cc2903a098b0ef9b8a",
+      "size": 19107
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/QuillError.h": {
+      "sha256": "2816adfcb7f25f545d79c7bd9aa5aedee3976c6925537b70a7ca1e90b0b64dad",
+      "size": 960
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/TweakMe.h": {
+      "sha256": "fc4b0fdd8cb7b2c62a079e69b05ac06806076fb2d72ef09f7038dcca7a8e240f",
+      "size": 12458
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/Utility.h": {
+      "sha256": "c9e9d7179285a33564ca4b609da04a092b3f327da88cd1bb8d5babd690674a29",
+      "size": 2406
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/Version.h": {
+      "sha256": "397fe22a18a52ff5a457ce5a5fbf872ec6d0fbeccdab40885f0d525e564bc39c",
+      "size": 443
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/args.h": {
+      "sha256": "ce29f1e7f2e261369952f57fa6ae86113ad531cb9cf68941c8a10eb722de6e58",
+      "size": 7518
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/chrono.h": {
+      "sha256": "90beef23e29b132e45b0aa3a96806536af11977b83a723b7f1c0d81f85c6709c",
+      "size": 67575
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/color.h": {
+      "sha256": "fae647995ba5f9ebd7d03460245678d0d37489a0ee9441b122131a6c92b27ab3",
+      "size": 24610
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/compile.h": {
+      "sha256": "58cd871306b61ffd8771dbeb9c9426530fea374d4e0dab8611f3523cf5d4530b",
+      "size": 21753
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/core.h": {
+      "sha256": "6ea0d62bc6723d7709ed41e184fcc71d7143779f62a5f8b60f167eeb7209cb76",
+      "size": 107187
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/format-inl.h": {
+      "sha256": "494d1651e6c13e018b55648791a6de312fff7a8bd9e56bb603e47413e9c4155b",
+      "size": 104940
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/format.h": {
+      "sha256": "6fd10a3e3f316452fd9c81f8aa7135faa165d14b5fd12f40b71233ba35fc5a4c",
+      "size": 113399
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/locale.h": {
+      "sha256": "db88ca5e9b9a24abd92179241926af533b0bb71cf7b56e8677b3617e4015f2af",
+      "size": 100
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/os.h": {
+      "sha256": "27cf72f7177a315e0dda017466dcf81a4abd548ed39701beebada0441d4f1b3d",
+      "size": 15566
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/ostream.h": {
+      "sha256": "c5fa7ef07f22525e634172a910cdc99277e7743d61d1c40a4f95069ec57c028b",
+      "size": 4378
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/printf.h": {
+      "sha256": "debe39d8c0fe1aac8f578f9a0c68f063b7fff9163ad4cceedff3850a2d6499a2",
+      "size": 20707
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/ranges.h": {
+      "sha256": "90546f0fdaa50ef415063330554f03ff88350bba18214566103a637b94c77375",
+      "size": 29699
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/fmt/xchar.h": {
+      "sha256": "1e3138a18426b0db524064503358d3a9e06b08db01836052e208ebf78d4c0396",
+      "size": 9241
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/bundled/invoke/invoke.h": {
+      "sha256": "e6f36d8367a0f350db970f85bd4fa4b0ca8b6667b1ef81078d6aa6a46066683f",
+      "size": 7104
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/Config.h": {
+      "sha256": "f7d116354cc19e948e2dc8b8521c69de293805a7a82f5bc07840bea6e9d7c38a",
+      "size": 2200
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/HandlerCollection.h": {
+      "sha256": "bbac4eee5b23947516a6527f4f1db3b460622065fe6afb7d98e72a7dfddc9c8c",
+      "size": 6267
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/LogMacros.h": {
+      "sha256": "cc6967c56a4bdc16876e97b6cba46dafcbffe7d93c46143bc4716f1f09c8321f",
+      "size": 13034
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/LogManager.h": {
+      "sha256": "dfcf1814354aff876a5d769756835d525cc957220accad007874f34514c8e656",
+      "size": 6760
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/LogManagerSingleton.h": {
+      "sha256": "1f602b051368ed45118fa2d2ed76869eaad9cac3d1e1c67b25af5c6b89f5483e",
+      "size": 1008
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/LoggerCollection.h": {
+      "sha256": "252ed8e95b3fb927e3a405683cb3420087b043d2e1836d9299ab378ad83f987f",
+      "size": 4486
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/LoggerDetails.h": {
+      "sha256": "b68f6b452d690117929dd84a703a868969b798ba189ca0c22a6bac3bd85c6f8c",
+      "size": 2558
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/SignalHandler.h": {
+      "sha256": "67d2d03ee83fff5088e9f9e0751c74f80c9c492c61d164849908a6da3ab2d2aa",
+      "size": 729
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/ThreadContext.h": {
+      "sha256": "4c9b5d91aafdc10607dca36cfdb2e8cb6ad1053342d5c3de0b85d0b649008062",
+      "size": 5352
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/ThreadContextCollection.h": {
+      "sha256": "800948f977dfc84dd75e76eb2f3f9bfd8f04d15164e1352eda9c1363c57b7b9c",
+      "size": 7832
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/backend/BackendWorker.h": {
+      "sha256": "c65c8710a07a284d117b05181a7c0e9fc13d8c692d560145bd27f17a92a0da45",
+      "size": 26184
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/backend/BacktraceLogRecordStorage.h": {
+      "sha256": "c1419b66d5b099090e8fb2b0b3412165de7d565584b6ad2ff89c8480dc403970",
+      "size": 3862
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/backend/FreeListAllocator.h": {
+      "sha256": "3ed571a3c9aea6c593783c3295ba5d1c7db4102b700febd9e8b293dc7eba7c78",
+      "size": 8535
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/backend/StringFromTime.h": {
+      "sha256": "c6ba71ea639ccfb84264e7557397e560fc0ec1ee9c3a89504637c489fbec5108",
+      "size": 4089
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/backend/TimestampFormatter.h": {
+      "sha256": "173bc31cc47c687e853a0048fc675ccd9334850d4a33c21f34fdb7d340c6a452",
+      "size": 2628
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/events/BacktraceEvent.h": {
+      "sha256": "120e04624b9a3156384d169aaecb2f2c56880b95348cc4dbd41b1dce9aab2166",
+      "size": 3737
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/events/BaseEvent.h": {
+      "sha256": "083f1f7cde29ebcd6b256f4c475eb2ffff4e165069c63ca060f5b7fec682693c",
+      "size": 3681
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/events/FlushEvent.h": {
+      "sha256": "6ffa8016ead3f59c268dc09620320907da0086b3b0e1cd222c1e5a26cd83d097",
+      "size": 2297
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/events/LogEvent.h": {
+      "sha256": "6d5762c25d1684f386f8ba2bfe6aa4039597cd077b6a7aee9f6701a818225266",
+      "size": 9699
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/AlignedAllocator.h": {
+      "sha256": "64a6ad64e2186ff252a3b3810155f265eaab9422b5a76dad121bbd6080bca2fe",
+      "size": 1290
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/Attributes.h": {
+      "sha256": "75be35e739585a6a3d1f32d31b54fde32b3a2e9b349b8637388810d92a23fac1",
+      "size": 2796
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/Common.h": {
+      "sha256": "745d26bfb3e83937bb62a1e77736ec5def1cbadc6f6a3ac2d480c0ecbd42719b",
+      "size": 1273
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/FileUtilities.h": {
+      "sha256": "641fa45826c47e70fceb62d97d209836cdc8eecec5a3ff9526d8351161e0307a",
+      "size": 3147
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/Macros.h": {
+      "sha256": "8daa2fc33cf17acbcfb27c3e72e7dedae8cfa39cb39ac2b9472c7242c8e9fddd",
+      "size": 1385
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/Os.h": {
+      "sha256": "128e6a1313448bc8e3e9b5feabde287515783d18c429c97da0af1b86fffe6987",
+      "size": 4989
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/Rdtsc.h": {
+      "sha256": "e78263ba65aff59ebcbcb86a582c79b0da129da26acf82392aac9d579b0dbf6b",
+      "size": 2277
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/RdtscClock.h": {
+      "sha256": "ddb7ab6020925b0a913a77c69fb14b194aac62e1eaa0ecbc54fb06bff65fbca4",
+      "size": 2203
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/RecursiveSpinlock.h": {
+      "sha256": "6531617097768da159bfe98ed44d2eaf1968ef6068881a5b3207242b5d097669",
+      "size": 860
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/Spinlock.h": {
+      "sha256": "f9eef33d2bb0f3d6b1bbc114105b07f5b52a0095fcbad326a0f8cc1d343a7ddd",
+      "size": 1108
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/StringView.h": {
+      "sha256": "4ecedd6b3cd3770571cab1af380c10af5a29d28389c7708488d382f6f81cdf9c",
+      "size": 660
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/TypeTraits.h": {
+      "sha256": "8faab6e6fe7f06a7df633841d4729237bf64604893449ba41652cc98adb4a0fd",
+      "size": 2832
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/TypeTraitsCopyable.h": {
+      "sha256": "8615b9e76cac6a48d9225a70fcd1b6b061719dbb8efbb193d976ebd6df9fd242",
+      "size": 9686
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/TypeTraitsSerializable.h": {
+      "sha256": "830944bbfa9e3a9eeb34e9b6168482da5be2671c45e1ff6261a3587df941b70f",
+      "size": 2750
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/misc/Utilities.h": {
+      "sha256": "e4c19058f8ddaf0d1530ae7f6792b615a24e6f9007130cca5cb6986eff5bf151",
+      "size": 4913
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/serialize/Deserialize.h": {
+      "sha256": "2efd04feb47b86f76278f838770ce4c7e6ea0a13a7755c430b5bd4c1756e23bf",
+      "size": 1120
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/serialize/SerializationMetadata.h": {
+      "sha256": "93b3a0d0090ba30e0e3b026c34fe4bb2569711b312f165f046ec438e6f638bda",
+      "size": 1915
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/serialize/Serialize.h": {
+      "sha256": "5114fc4e79f19de21d5a5beac62ca2da861a1ed7e8d3750e2735a24a14c446c0",
+      "size": 3970
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/serialize/TypeDescriptor.h": {
+      "sha256": "022637afdb375ee6b5766149ec06b6268f70ce8546777605be39ad1a754a743e",
+      "size": 4089
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/spsc_queue/BoundedSPSCEventQueue.h": {
+      "sha256": "e39ddf4ae43c65bf37007938085ead1f958452c17b4ba461afe4a96ca89d5dc4",
+      "size": 8610
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/spsc_queue/BoundedSPSCRawQueue.h": {
+      "sha256": "34e603e73ea2bacd7f42d035d2d95ace5515eceea281e307bb532ffba710f991",
+      "size": 6673
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/detail/spsc_queue/UnboundedSPSCEventQueue.h": {
+      "sha256": "ee58887d26765a889a13197e0f4a018ea560ce688c3db171e842f7fae718e379",
+      "size": 5897
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/filters/FilterBase.h": {
+      "sha256": "94a83ea9840240a434b21cc5e8e6fa80b349d273f6cc98960669ee1f98055038",
+      "size": 1421
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/handlers/ConsoleHandler.h": {
+      "sha256": "79ed512aab0ff1c19e63d6f527560ff0d7553ba56fd0f9e7e91c3240ab619b6d",
+      "size": 5621
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/handlers/FileHandler.h": {
+      "sha256": "1a2eabdec649ccfdd0b7ba9ffe27b5da368d971c7fda8e6092cfba97684d10c2",
+      "size": 1736
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/handlers/Handler.h": {
+      "sha256": "c650d251dcb8353ad49e3111426f2c8a265807d10e9a109cf445ce908c00d6dd",
+      "size": 4709
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/handlers/RotatingFileHandler.h": {
+      "sha256": "7b5182528b2997cd2d16cf5d3d53938eabe7284e1e50ff0e668bf1b8397d1ede",
+      "size": 2171
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/handlers/StreamHandler.h": {
+      "sha256": "5502a363b9dab0ddcbf82b57922c76c4453f3cc111ae4e5433ff6c41d677a5a3",
+      "size": 1776
+    },
+    "src/motion_control_pkg/3rdparty/quill/quill/handlers/TimeRotatingFileHandler.h": {
+      "sha256": "dd14ff40858948efdde03497a9ba994d9dde0fee398e1e6e540cf05f8fcbb75a",
+      "size": 2870
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/algorithm.hpp": {
+      "sha256": "ad7d3a34c506a506bc5b52f27e8a3d0c56098f8555976e9d24966e9847d25706",
+      "size": 4550
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/algorithm/toppra.hpp": {
+      "sha256": "4c6b0618a79242024bdadce34aaf8f481740a2af3cfaff3d0ebc6cc3f1a8c975",
+      "size": 510
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/constraint.hpp": {
+      "sha256": "ded5c8bb8b9f678279c1731c82df4f007a707699721cc4073d65bd1667b3f2d9",
+      "size": 5301
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/constraint/cartesian_velocity_norm.hpp": {
+      "sha256": "186292967debafb17d7d01e7c740cc76153e134ee9d6fa612403f9f9fefdb55a",
+      "size": 2624
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/constraint/cartesian_velocity_norm/pinocchio.hpp": {
+      "sha256": "01efa9d62653ab8cafa935e352516fe721935789e6535ea1ffaf921216f244f3",
+      "size": 2469
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/constraint/joint_torque.hpp": {
+      "sha256": "82080edcca3c74d69f6e9fbe3d38d2e480424b064390742dc42fb79cdd915340",
+      "size": 3211
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/constraint/joint_torque/pinocchio.hpp": {
+      "sha256": "51f5a9ece1723f41a44493812af81346e83b16762e1c70bb1f3211ba24a2777c",
+      "size": 2398
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/constraint/linear_joint_acceleration.hpp": {
+      "sha256": "a3f07afd35db9bf3dd49b40d6c025928d068df2638267d90d605a1c916c4a218",
+      "size": 979
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/constraint/linear_joint_velocity.hpp": {
+      "sha256": "1461c4241f3baa43e39c26282caaa28e803dbc0ceca2fbeefeb5f0b5813d8957",
+      "size": 2129
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/export.hpp": {
+      "sha256": "010642dd23c5756dbb1b82927fbc93e571507af5a59b1d1e600b3658e5a4cce6",
+      "size": 1007
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/geometric_path.hpp": {
+      "sha256": "674968a473168a720a78da8500f91676752507f0637f2b4f032cf5447458375f",
+      "size": 3207
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/geometric_path/piecewise_poly_path.hpp": {
+      "sha256": "f59a1ae1938010cd8e1147d7e9451cdac5c58233961b97d9cfe058e10a96b29e",
+      "size": 5118
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/parametrizer.hpp": {
+      "sha256": "b990dda3079c507cfbbe201da32136d3846021f89d38143be79fac30a287771c",
+      "size": 2253
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/parametrizer/const_accel.hpp": {
+      "sha256": "176a502a5ee99df30ee84f610f591530581632f78b8fcc7f56ce7ef4565f9391",
+      "size": 1744
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/parametrizer/spline.hpp": {
+      "sha256": "d7782a4d32ff8e157ab85f6af5fcb3b496ac7c864a00d7fec1059f70ecb85496",
+      "size": 1351
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/solver.hpp": {
+      "sha256": "66ba7e2ba8a447964411dceaa202e90c2a5a9bdea3eda4a644b7a1e2401633dd",
+      "size": 4227
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/solver/glpk-wrapper.hpp": {
+      "sha256": "92d28bfaa6a1b151a952cc6ce633c1670c0d2b0c0def2dfebf6cc38ebe5d9ed3",
+      "size": 1179
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/solver/qpOASES-wrapper.hpp": {
+      "sha256": "544ef510852ad20d06f0b5935404e5dcee3e175c81c393ffc9a24df50e299471",
+      "size": 1524
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/solver/seidel.hpp": {
+      "sha256": "1860112299671694bba30de9c5da60a6abba2d12fcfe6701f8d389814766de57",
+      "size": 1054
+    },
+    "src/motion_control_pkg/3rdparty/toppra/include/toppra/toppra.hpp": {
+      "sha256": "7ae19f619651a3e97ac82676f1fe28a46556da6bb73f1354ef75e5aefd747e8d",
+      "size": 2401
+    },
+    "src/motion_control_pkg/3rdparty/toppra/lib/aarch64/libtoppra.so": {
+      "sha256": "47064c71348e80bafbec009e20e5764485d9b3df377e345cd48e02806677a858",
+      "size": 6576336
+    },
+    "src/motion_control_pkg/3rdparty/toppra/lib/cmake/toppra/toppraConfig.cmake": {
+      "sha256": "7038bb619e7f82adc17af81a15a0b07392e26df92a162edd628bf7639619e9b8",
+      "size": 342
+    },
+    "src/motion_control_pkg/3rdparty/toppra/lib/cmake/toppra/toppraConfigVersion.cmake": {
+      "sha256": "0bda71cbff8c4535f05cb8079e30ad86e4bc226b303dbe8a58d276d2c69fef2e",
+      "size": 2878
+    },
+    "src/motion_control_pkg/3rdparty/toppra/lib/cmake/toppra/toppraTargets-noconfig.cmake": {
+      "sha256": "2daf271e92706f6a20efa3a316ff352ac0428e8e271e2beb87a56e883f6c2d22",
+      "size": 792
+    },
+    "src/motion_control_pkg/3rdparty/toppra/lib/cmake/toppra/toppraTargets.cmake": {
+      "sha256": "0a2cddfa0c626542396cc9fead2eb0e682ffdc5558d4c013dae5d6be0695897e",
+      "size": 3434
+    },
+    "src/motion_control_pkg/3rdparty/toppra/lib/x64/libtoppra.so": {
+      "sha256": "6c85952f1da5cadffe3aca46ca491afafc865239e197b22dce0cb483c1fe1426",
+      "size": 6527008
+    },
+    "src/motion_control_pkg/3rdparty/toppra/local/lib/python3.10/dist-packages/toppra_int-0.6.8-py..egg-info/PKG-INFO": {
+      "sha256": "f69a9adaef4c894826d2e5b957f07241b5d2727a6105ae1f4a6e71478d5c8b8e",
+      "size": 135
+    },
+    "src/motion_control_pkg/3rdparty/toppra/local/lib/python3.10/dist-packages/toppra_int-0.6.8-py..egg-info/SOURCES.txt": {
+      "sha256": "c26cbdc0d76a6cefcd2b9cb682a2cdff575c838d503833dea6cd20681a759e8d",
+      "size": 167
+    },
+    "src/motion_control_pkg/3rdparty/toppra/local/lib/python3.10/dist-packages/toppra_int-0.6.8-py..egg-info/dependency_links.txt": {
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size": 1
+    },
+    "src/motion_control_pkg/3rdparty/toppra/local/lib/python3.10/dist-packages/toppra_int-0.6.8-py..egg-info/top_level.txt": {
+      "sha256": "9df05bc8c7d80a69ed76f3d2629bad71190097f7227295e903fa899740e027b6",
+      "size": 11
+    },
+    "src/motion_control_pkg/3rdparty/toppra/local/lib/python3.10/dist-packages/toppra_int/__init__.py": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    "src/motion_control_pkg/3rdparty/toppra/local/lib/python3.10/dist-packages/toppra_int/toppra_int.cpython-310-x86_64-linux-gnu.so": {
+      "sha256": "79eae5e7aa8a74523a9cc8c0f833fc00381655a024dcc9d0a6f591e2c4f32698",
+      "size": 1820272
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/ament_index/resource_index/package_run_dependencies/toppra": {
+      "sha256": "628ae718b163378303765ef134b9b761333f3e63dc7474f62008b671bbe2d270",
+      "size": 23
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/ament_index/resource_index/packages/toppra": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/ament_index/resource_index/parent_prefix_path/toppra": {
+      "sha256": "31b25e79cafc2b5656cbfe93ee42e027c8f9e86020e164c73b547964553efb43",
+      "size": 144
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/cmake/toppraConfig-version.cmake": {
+      "sha256": "1af9a59b3b38ee128b6f18a7c68748bcacc24a5ac42e5f688461afebef352763",
+      "size": 432
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/cmake/toppraConfig.cmake": {
+      "sha256": "69f5e007a1c04d7f18e130212946294e669d7348135eb8f7a3067b49463ff943",
+      "size": 1203
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/environment/ament_prefix_path.dsv": {
+      "sha256": "c4797d0a0670c70b4d3bcb5b7d47563635c7950595603f3af66f70af546ad57e",
+      "size": 41
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/environment/ament_prefix_path.sh": {
+      "sha256": "6658f14efe913e291c0bf2c74059a9e14fb8abdb5a31628bef61d3b41e206679",
+      "size": 160
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/environment/path.dsv": {
+      "sha256": "3f2cdf6234ea2525c1670c140b6a03700d98a2408e7a232107791fa96c08b58b",
+      "size": 41
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/environment/path.sh": {
+      "sha256": "abe10a0452bc4b93f665fc343a7e6d32fe3f3a2b6beb90d338044a71d2583f18",
+      "size": 185
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/environment/pythonpath.dsv": {
+      "sha256": "780d0e12b09c94b2580e6330171daffa565f20e00f918321b306ad7e91ca1422",
+      "size": 68
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/environment/pythonpath.sh": {
+      "sha256": "4d08a80ef02d135f153568876f1b48e847147aaf68734e71cb92f00f79a5aec7",
+      "size": 172
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/local_setup.bash": {
+      "sha256": "41b30b6c107da94a2478e43953b8cbd0d920f5e8fc1ea847c61a213623d623b0",
+      "size": 1594
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/local_setup.dsv": {
+      "sha256": "b8429bcf7e2422e34023673481b8b3b3b911a9c4709329c474396cf0ea13fdaa",
+      "size": 93
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/local_setup.sh": {
+      "sha256": "3e494cbb74b25b34951b5ec588620e644449041ba6f6b294fb5d04e29d15c518",
+      "size": 4985
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/local_setup.zsh": {
+      "sha256": "56942873096201f4e7fe5e7b9bd87e56cc42ced33fadb53fbc25766fd9149c81",
+      "size": 1957
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/package.dsv": {
+      "sha256": "a059dc3fd31d6ccb5157a92efa1248147f362feadcb1a671d74b630b1831a56f",
+      "size": 144
+    },
+    "src/motion_control_pkg/3rdparty/toppra/share/toppra/package.xml": {
+      "sha256": "dca251cb52ceb175c8053ee58eb7cd7b2163e05e14c9c6f33edc7903f0bc3ee2",
+      "size": 691
+    },
+    "src/motion_control_pkg/3rdparty/trac_ik/include/dual_quaternion.h": {
+      "sha256": "54fe7b0db4e751e8f6d95fadf9eaa2198c2ceec65d42a10fd6f6d0c30c834394",
+      "size": 6966
+    },
+    "src/motion_control_pkg/3rdparty/trac_ik/include/kdl_tl.hpp": {
+      "sha256": "b0c8859dacaa153034e066baa5b1b91a66348271a0eead6f98bba13916356463",
+      "size": 3912
+    },
+    "src/motion_control_pkg/3rdparty/trac_ik/include/math3d.h": {
+      "sha256": "f842a57a90a2ced5f1cf6ce379740b6ad5e926949901b94dbfccc2c67e14a213",
+      "size": 28252
+    },
+    "src/motion_control_pkg/3rdparty/trac_ik/include/nlopt_ik.hpp": {
+      "sha256": "5605f5c994d9845b6c83dfff662e269265995eafd8b9d7e6c83582035636ab13",
+      "size": 3649
+    },
+    "src/motion_control_pkg/3rdparty/trac_ik/include/trac_ik.hpp": {
+      "sha256": "0da47a66e11cec29c7448588149f394ba91c2397caff32de0631aba9c4a0bbc3",
+      "size": 6030
+    },
+    "src/motion_control_pkg/3rdparty/trac_ik/lib/aarch64/libtrac_ik.so": {
+      "sha256": "ea27f8d784f27957dbda15f2a70c842525166b880a8d9cba9612e1e136dbb8c6",
+      "size": 3518072
+    },
+    "src/motion_control_pkg/CMakeLists.txt": {
+      "sha256": "f91aba29117f7adf0fe536b70c76dd0f456bf371c4f315195bf102edd6cf196a",
+      "size": 28465
+    },
+    "src/motion_control_pkg/cmake/wbc_model.cmake": {
+      "sha256": "4025d4f3e196e262ce4826d8708ec50d45627c794a3883c00938cba81faebe4b",
+      "size": 2146
+    },
+    "src/motion_control_pkg/config/ccs_m6_40.MvKDCfg": {
+      "sha256": "19040f3bdd549a6eb49ac9810bb946d7e1d773047a32711b20f06ee5ef0eea2b",
+      "size": 2891
+    },
+    "src/motion_control_pkg/config/head_startup_home.yaml": {
+      "sha256": "acf1330712ea9f07c7b74b178994ff8d7c6e59cd1f0526fb8ae429565074b2e1",
+      "size": 475
+    },
+    "src/motion_control_pkg/config/precision_arrival.yaml": {
+      "sha256": "a87990322545f9f3d0c4a415edb093a5300f36a6a09bc700cf6be7973e97fbd0",
+      "size": 1082
+    },
+    "src/motion_control_pkg/config/wbc_full_support_motion.yaml": {
+      "sha256": "01681a016b7ceee360cfb75f377b708a6c16c8226d293745ee28a7faba55fd57",
+      "size": 291
+    },
+    "src/motion_control_pkg/config/wbc_full_support_observer.yaml": {
+      "sha256": "b48198a940b8bed49e474af6ef5e8ad02c31db1d70ba3b348ef5862df7bc8233",
+      "size": 757
+    },
+    "src/motion_control_pkg/config/wbc_model.yaml": {
+      "sha256": "3bedd9f689bf93a059515e041760a4534c0e9db7816eae348f34758704142c70",
+      "size": 527
+    },
+    "src/motion_control_pkg/config/wbc_stage2_observer.yaml": {
+      "sha256": "4a10593a5031d39401ef9f99ed4182a1bf3d6baa3aaa18a64d1067f333d9aacd",
+      "size": 556
+    },
+    "src/motion_control_pkg/dependency.txt": {
+      "sha256": "1e535f3178892f35527d45a9201571ac3e503d9b9d3bf2621d7135062a4a51a8",
+      "size": 1995
+    },
+    "src/motion_control_pkg/doc/ORDERLY_SHUTDOWN.txt": {
+      "sha256": "d79ecf181e6a5adf282116c88f44bbba05681db1b067cd1f59be3fe0bc6216a7",
+      "size": 3307
+    },
+    "src/motion_control_pkg/doc/ROBOT_TF.md": {
+      "sha256": "404916a6482b809ca833e1e3a5065f34e3069cc28197e2011ffc576dfbb394c9",
+      "size": 5967
+    },
+    "src/motion_control_pkg/doc/SDK_LIMITS_AND_TEACH_RELEASE.md": {
+      "sha256": "890950ed1d1f5fc2a77c04aade180a0b21608fb8f6aef27f6c138f447cfbe687",
+      "size": 3529
+    },
+    "src/motion_control_pkg/doc/TEACH_AND_RECOVERY.md": {
+      "sha256": "bcb1d85f9977d713ee1a76350113e1ff342c1b70d0d485efa38d82b06eaab7d8",
+      "size": 25077
+    },
+    "src/motion_control_pkg/docs/WBC_ROBOT_DELIVERY.md": {
+      "sha256": "39d31d10b952614e948b8dce0953ed630a76b61e8be8ddaa30235c763554c7c2",
+      "size": 3173
+    },
+    "src/motion_control_pkg/docs/software_architecture.md": {
+      "sha256": "e2c512efb17cce3d91141e67c60847bdd9dd236d238f5a438570ed55b8b43812",
+      "size": 25228
+    },
+    "src/motion_control_pkg/docs/solveWholeBodyIKOnce.md": {
+      "sha256": "8ced57ca19e7b63e13e8f60c94e5e002f9117449a25ec154cbe4bfaa002c858d",
+      "size": 14468
+    },
+    "src/motion_control_pkg/env-hooks/error_options_path.dsv": {
+      "sha256": "0407354ecdf2f7f6bdec81d33932821893892a387663ddacc53876e48fd74db8",
+      "size": 31
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/MarvinSDK/FXDG.h": {
+      "sha256": "3e9b91f62b36c2157e04f18573bac2e955292c1b570d616248e8d0e144465a49",
+      "size": 469
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/MarvinSDK/FXKineCommon.h": {
+      "sha256": "c13908c0bccd4755aeee207d06e10b530f2ff0ca3eb398bb7b037083632791e6",
+      "size": 5429
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/MarvinSDK/FxRobot.h": {
+      "sha256": "454218c05544cbc7628c305c4678fe528bb8e91446421d3bac6c639481405766",
+      "size": 4785
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/MarvinSDK/FxRtCSDef.h": {
+      "sha256": "bced85e4532d353990478a2cd140dac6ce9fab2cbcd0de90af78b368e7d834af",
+      "size": 8266
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/MarvinSDK/FxType.h": {
+      "sha256": "d2b347030f18162af436d5b43a4315eea1b87e5475ee695a3f70d7dc73400224",
+      "size": 570
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/MarvinSDK/MarvinSDK.h": {
+      "sha256": "3da9b7adb68f34c6904aba5f55ffd7ba92e4e07924971322760e29e623c54915",
+      "size": 19591
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/MarvinSDK/PointSet.h": {
+      "sha256": "6f7406c69413a96f20ee5a3fe864088056934e84bc75f1d0d10cd0908237256a",
+      "size": 3322
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/ctrl/PVT_ctrl.h": {
+      "sha256": "14078f5fb88fed1be7fac9732fc863686f4953f587f6e2c35370a7354184e55c",
+      "size": 2826
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/data_bus.h": {
+      "sha256": "94f0e01883acbcf25ef54ac4fb15e75ff005144a8f2cd1c4b99ec882fc4533a8",
+      "size": 9162
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/dual_arm_module.hpp": {
+      "sha256": "b8d2cb96388ba5961e4b9afeb5573eb2c531c2517438a82e3fd7878f41cfa6df",
+      "size": 20684
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/ethercat_bus_manager.hpp": {
+      "sha256": "13b0e194c163a7d4d3f44c212abdd67203c2c883fce5bf3c52b06e3eb05662fb",
+      "size": 4567
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/action_terminal_guard.hpp": {
+      "sha256": "e6bfa2c60e7b6a76640c8a51802e58796a635d12ad212990d2a8d2f9e1a23881",
+      "size": 1939
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/arm_action_utils.hpp": {
+      "sha256": "4536c2961a2bdbf5453e5f91e8ea82605c40aec32b73eeaa590eafe26530907b",
+      "size": 3410
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/control_period.hpp": {
+      "sha256": "704dcfd050cfe5dadd089eab049dd1ce0f549480c7d67ce1fbf12aeec5adb62d",
+      "size": 989
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/ethercat_command_safety.hpp": {
+      "sha256": "caa2139409370b990263ba18add6d6787122975f868b8ad14db162e7f0d98ff8",
+      "size": 2680
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/ethercat_trajectory.hpp": {
+      "sha256": "3c75d481567792c7f5c816f977df8144c3c9af0581f66fe1e13fd2f442dedcc9",
+      "size": 9445
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/execution_control.hpp": {
+      "sha256": "64eaa3debf89fa75f4d84c5fcbd5476ef0a9007a62f9743f62c19bb3d660a97a",
+      "size": 2614
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/gripper_command_validation.hpp": {
+      "sha256": "f9d3d4063145860ac2b8587cf33858dbb7bc4211aab384cc423ccf9caa3d7e61",
+      "size": 2592
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/gripper_worker_threads.hpp": {
+      "sha256": "c34a2b7adee9e0d352d489edb67405da91efef8b3c0ccb66b24ad73819a6e74e",
+      "size": 1570
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/head_startup_home.hpp": {
+      "sha256": "fedbf140846f78e0223d9bcf33516f9e67f2362df6f0edc1f70b971407682a1e",
+      "size": 2922
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/impedance_configuration.hpp": {
+      "sha256": "a956a1f55a9eda4cec80a9a2f2c26777752d1deb08972283b16a9a0f2e0af779",
+      "size": 4473
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/joint_command.hpp": {
+      "sha256": "62e80fb0ced62ab99c85754cc98f15a7c234ae5d626d6033ce445db57ff8b81a",
+      "size": 423
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/joint_completion.hpp": {
+      "sha256": "5e434c1c414b5a086580755e4f7276ea6db8b9866f6159f97e43a91ca3259542",
+      "size": 7157
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/latest_progress.hpp": {
+      "sha256": "589a3c408364c0e4c1863925fd2c5a217085527564d04e14f2e11c6905c7c98c",
+      "size": 3413
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/motion_safety.hpp": {
+      "sha256": "fc7d915e4a8c2b0529973cc1a6af501363ded8b612ea0d916bce1efa13818d5b",
+      "size": 6773
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/orderly_shutdown.hpp": {
+      "sha256": "2f9bd1f2445f72e1101642e6ab12b6e4998c5615e7ed4124e58405d8bc095b7a",
+      "size": 4129
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/precision_parameters.hpp": {
+      "sha256": "1a4948c22ca507fce3750c572ae36791c3f9be6e7580700dfd03a5fb6be3a54e",
+      "size": 1840
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/precision_policy.hpp": {
+      "sha256": "bfd16013d7881731222009e47f907254af3a0182662d50dec6723f3189c6fd95",
+      "size": 2609
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/preplanned_dispatch.hpp": {
+      "sha256": "a36a549777511135158bc706fceb1512e57db4a91d32c7f9f2aebffff26d9d73",
+      "size": 4302
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/robot_recovery.hpp": {
+      "sha256": "7f566c44a8b0364eb41600927d5e1d5ebff98c618ead6711143b5af5af582a4e",
+      "size": 2425
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/shutdown_request.hpp": {
+      "sha256": "839162cb8cc142458cb32430c11b9b36acf11d7ca776292dcfb5aeec745c039d",
+      "size": 1007
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/stream_timing.hpp": {
+      "sha256": "22e7d59c5b205b3d7fb5cd657e4e71b1a7fea1ecd9e02e4e0c4c2dbb17bc2e57",
+      "size": 1203
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/suck_command_validation.hpp": {
+      "sha256": "976fa32dd664fa8bfdf7edb587025c3764df2985d1e037adb0955748ff7180b0",
+      "size": 1293
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/teach_standstill.hpp": {
+      "sha256": "33c555853ffb843f8950035a22d6379f7327c9abe1695d4abc3cbde7de978e3d",
+      "size": 519
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/trajectory_sampling.hpp": {
+      "sha256": "a26ecfa46850917d35112b3aa23cf78679fd0904ecb07ef3a08dfe73dbc61b1f",
+      "size": 1225
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/whole_body_backend.hpp": {
+      "sha256": "40f87fee59fc729febe003a813fb17f4d0b13dc57a52586ca87e24ea5afab25c",
+      "size": 2485
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/execution/whole_body_completion.hpp": {
+      "sha256": "6843d420236a99343737339c797327e3a14062382bb366c4a7834a4ddbcc3afc",
+      "size": 2280
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/gripper/Ds485_Gripper.h": {
+      "sha256": "f6c089ae1eb5af22d64db86142469b72d797ff8f85fa318fe492b1e65573ac9b",
+      "size": 14796
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/gripper/Ds485_Marvin_Transport.h": {
+      "sha256": "99ab626f7491060d69e731a15cd4fb2361240cefbcc8ac1ad21b318a45f09c3a",
+      "size": 832
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/gripper/Modbus_Jodell.h": {
+      "sha256": "92b914bf265fc111fc13c014001c376368bbc14a76e8034d56cd895aafa92391",
+      "size": 5032
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/kinematics/transform_utils.hpp": {
+      "sha256": "cd437208ff2e72d82438e6259a36b5c3046a25faf3cf8cd9ab958ed6866e3089",
+      "size": 8902
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/loong_driver_sdk.h": {
+      "sha256": "90ddaf956c5c0785f72ac4b121459822f4d60b1255a241733175399b844145f1",
+      "size": 4015
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/main_node.hpp": {
+      "sha256": "8c0695edbae26e1d2ef54e789ab9fb77757a116d444d6d7680a5a076ba04f9d5",
+      "size": 4289
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/math/LPF_fst.h": {
+      "sha256": "28d0396d257138233ec8b197dc987ec351e5f6febc96c77c6b0d6aaa7c80f71f",
+      "size": 633
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/math/bezier_1D.h": {
+      "sha256": "0c74d23080228fdee1b598b4534248e1a8d0743bd8a5cc2b8cd9f9b02c7cf97b",
+      "size": 576
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/math/ramp_trajectory.h": {
+      "sha256": "3c2fe95acdce8d668096cbac52b609ece573cfabc468032e2d1e1e82176f3705",
+      "size": 854
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/math/useful_math.h": {
+      "sha256": "9f852b13f5788dc91a2dae6e73cc229e9a8da06ac3204ef1d561801907f98c60",
+      "size": 1735
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/miracle_head_module.hpp": {
+      "sha256": "e6a914d04bc33295119977237eae31897d4b740a4772b6e94a651088a1710bb1",
+      "size": 6017
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/miracle_lower_body_module.hpp": {
+      "sha256": "9da8cc54ff1825d84ffc8e831264b81eb2f24f329987cc67ecb49f78a93ef7b7",
+      "size": 11472
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/miracle_m_algo.hpp": {
+      "sha256": "6a9b263d7d178879883b68a827f59557c9c78549f69d7ebaf35ede4e7751f5d2",
+      "size": 43189
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/miracle_module.hpp": {
+      "sha256": "5826f9e38de1b6c458ad5ad017abe4b74ea215ec34b2187b5e62d83f0073101e",
+      "size": 12325
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/cartesian_line_sampling.hpp": {
+      "sha256": "fcd39495f9e1083c155c6f9c98165bacd3bbe6a9877681f0e691cdce223310b7",
+      "size": 6378
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/fcl_wrapper.h": {
+      "sha256": "175a65d2d6ea564cd35b015a15927a036766bb7915b45a41cb94453699f46598",
+      "size": 2553
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/head_startup_plan.hpp": {
+      "sha256": "d521ef9d6c7213c360860d07ce8d2dd72f730e2dd7744f324205ab91f9704ae7",
+      "size": 2538
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/ik_recovery.hpp": {
+      "sha256": "35ebe9cd05898630495fd893796bdd8f9f04bce5e6de1cfea4391de6df3c5660",
+      "size": 3386
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/ik_recovery_transport.hpp": {
+      "sha256": "afc8e576f6a24c13c4309a2dd3203f7099aa8d8941ab10a2782cbe75ce6e8592",
+      "size": 2685
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/ik_seed_sampler.hpp": {
+      "sha256": "a73549d960e627281ef02662c1e1cd73245f8c8e92c0a1fa9240f2558ca07b7a",
+      "size": 9573
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/jerk_limited_retiming.hpp": {
+      "sha256": "161b8f3c01e8f3dd2238020d0c7720a7f2a9c568dc87476371229ec39831875a",
+      "size": 8339
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/joint_space_control.hpp": {
+      "sha256": "9109c0301b3948ab6bf124864263291c01947d2707d23f84feb0677616b7a419",
+      "size": 12247
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/leg_body_motion.hpp": {
+      "sha256": "2a06eed65cb6b4b91a02846c69d5b220373e2b334b189f7e9ead1bde7c9adefb",
+      "size": 1355
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/leg_body_orientation.hpp": {
+      "sha256": "0c1ded0fe0068392e9a476cc876bd7acc2886926114f4eb6495cb7b72f984554",
+      "size": 1705
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/ompl_wrapper.h": {
+      "sha256": "e728d8c851caf86349e67b2926e9e03541e03cb490885d0b689398d1d252dcfe",
+      "size": 1622
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/planning_worker_pool.hpp": {
+      "sha256": "bebff409934cca0c28eb599bf03d0eda1ed8a57ad01ef64e7c207d13e8e2d206",
+      "size": 3332
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/pose_space_control.hpp": {
+      "sha256": "b92c77a22b1918914d08928ae7c67b8885729830b36dfaef5e352ecc0363fa3e",
+      "size": 2889
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/precision_approach.hpp": {
+      "sha256": "faccf800c85ef6b1d801609efc4ff02b73cce535d5d3ed17c7f66ac0457fffbd",
+      "size": 3589
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/rigid_grasp_constraint.hpp": {
+      "sha256": "cb36cad6d2d6752d376dcee10ea1653f4184934f694c880eb8413f6ce2255824",
+      "size": 1448
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/scoped_collision_scene.hpp": {
+      "sha256": "5d52136e95f35ddcecc42dcd7f2c555b03b9315d7b25c6054cf9bce7928e9377",
+      "size": 2966
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/tcp_level_constraint.hpp": {
+      "sha256": "95211fcce092bfc4d0ffd8a9ab29d56f00035df2dd8d32a3587f438efe5ac597",
+      "size": 1702
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/tcp_level_plan.hpp": {
+      "sha256": "df6687c16d4cd2982caf39f652c3526b86475e220c6d3c74dfbcfbc3d9459a62",
+      "size": 4595
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/toppra_path_preparation.hpp": {
+      "sha256": "8c1091889f50e8fc878dfe0f01a80e7c47d4db42be61c679c10959f05b68bb0c",
+      "size": 4595
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/traj_common_util.h": {
+      "sha256": "2d39e73c637f9397af9a79f3777cd1413169caf294d49e13a46eb2cdd8b18102",
+      "size": 260
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/motion/trajectory_derivative_limits.hpp": {
+      "sha256": "d2207652429951a939dae1f48f9b3df2b776c457b2fcc61516d4191a662b1fcc",
+      "size": 2607
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/mpc/mpc.h": {
+      "sha256": "5b01fd91f43c146f8ccc5da72e9a2dc2cb94f43bf5c77c98ca3022afefb047b4",
+      "size": 3549
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/pino/pino_kin_dyn.h": {
+      "sha256": "7a246280e3d900f18d592ef81c65a0212e77f4460b81bf1f688b4e8748b4a592",
+      "size": 4549
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/drive_control.hpp": {
+      "sha256": "f36bf6923512cbabccca6be34a67637e0e663a131f20908de508858c029fa6b9",
+      "size": 3646
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/dual_arm_device_interface.hpp": {
+      "sha256": "e4f23c27b265fde5eb6e8748aae805484ce12006b230ca0aba378afa58c522d6",
+      "size": 6724
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/ethercat_bus_state_api.hpp": {
+      "sha256": "6de7e277c19054cebf44d40caca56a2ea5ede9d6e33b4bbec1db9600cb90483c",
+      "size": 918
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/ethercat_drive_maintenance.hpp": {
+      "sha256": "dc114b0752269dbb822e66716ccd4eb925c2675979ed87eaba47f22ad37f8f0d",
+      "size": 2021
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/ethercat_feedback_api.hpp": {
+      "sha256": "92699c2460b08b1e07363f869235004b408e1faf56906ac2f10de0121fa125c7",
+      "size": 715
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/ethercat_feedback_validity.hpp": {
+      "sha256": "f177759610623ffefe4ccc4f3199e4ff8f65506db6c699221f861dafaffbabb0",
+      "size": 895
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/ethercat_initial_enable.hpp": {
+      "sha256": "1063240b977c393fd70fd5246d0062c81250f727f23e41ba52d53809063f8368",
+      "size": 4989
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/ethercat_startup_readiness.hpp": {
+      "sha256": "b3d198f0f586cad90270f2d3638655613cb4eb1d478b67bde70ea990a9c051ce",
+      "size": 1403
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/marvin_dual_arm_sdk_adapter.hpp": {
+      "sha256": "8cfb15c56a2d840243182d0545fd3a57cf5892fc4e339f3fbf77ff7eaad02020",
+      "size": 2074
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/sdk/sdk_command_gate.hpp": {
+      "sha256": "2c6e3effdb9e98e02f307f697f1203c8c753935dbe106b3a55a80c201f2ddf38",
+      "size": 5760
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/suck/neardi47_gpio.h": {
+      "sha256": "19590793746eb5131141a49a9a15c4323230572560ab7d8d24e688162d084bee",
+      "size": 924
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/feedback_channel.hpp": {
+      "sha256": "2b43360b65f851f7eb8579edac9916285ed849b8ce9d2811a055c6e2cacf11e9",
+      "size": 1774
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/measured_feedback.hpp": {
+      "sha256": "a3e24327087e8f39cc1c5fa9a4c6dcff9430290bdc68e685cd5fdd3cbc17d815",
+      "size": 5807
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/model.hpp": {
+      "sha256": "8b77693b99c05dd88fc59ed2ce3279a2cfc5dc45a3f632448e3bb1330083e490",
+      "size": 5180
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/priority_tasks.h": {
+      "sha256": "76e4cba73286743f2c2b900914c16e15250fe7da1a35d47d867813dac9835d84",
+      "size": 1586
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/static_balance.hpp": {
+      "sha256": "ee4cedf5d7d5c001b52f128d59c1d60c459873848efd199b607123592812938a",
+      "size": 1607
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/tracking.hpp": {
+      "sha256": "f2e105bad72dbbd791f2d8a006c447a652e75ec950179923a1f40339d62791b6",
+      "size": 5820
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/trajectory.hpp": {
+      "sha256": "e0d2e40bc38800193244e18f40c52507c67288afe65018b86ca37e0498e3d634",
+      "size": 1973
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/wbc_priority.h": {
+      "sha256": "d7721f4eae072a923ee0a4beb226c9ae9c2f3a34a2f2d9b97382dd7ea5821f4f",
+      "size": 4007
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/wbc/zmp.hpp": {
+      "sha256": "9035d0281fc2891d8f8274befb0b7cb5170a6f82a46abf743439b5f6965ab73f",
+      "size": 864
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/whole_body_module.hpp": {
+      "sha256": "9d95be64956aaa02bdc69c60665d5375b653cb7ee5476b36b9bffc3d801faac8",
+      "size": 4679
+    },
+    "src/motion_control_pkg/launch/bringup.launch.py": {
+      "sha256": "1f2b11970fbc6825bbecfe1194a9478504a8c60f6c100a90e91c20bf8e6ba545",
+      "size": 6637
+    },
+    "src/motion_control_pkg/launch/config/motion_control_config.yaml": {
+      "sha256": "d70637e8e4fc57a0b1788f7bd05a18590ec389469dc493dbed3b0daabdf1da48",
+      "size": 3106
+    },
+    "src/motion_control_pkg/launch/robot_tf.launch.py": {
+      "sha256": "6f04a9c328b830c81f3bf0d1556bae31db961185ae71661a88d917bb8c9ea575",
+      "size": 5291
+    },
+    "src/motion_control_pkg/launch/wbc_model.launch.py": {
+      "sha256": "50f8565c9a6028e9cceb1aac9407a105e18ca4eda6c2c74d3062dbe7c8d009ae",
+      "size": 1052
+    },
+    "src/motion_control_pkg/lib/aarch64/libKine.so": {
+      "sha256": "282680753d560f618075782fafc22f2aac0882619fb0a19888a12e241578282c",
+      "size": 270104
+    },
+    "src/motion_control_pkg/lib/aarch64/libMarvinSDK.so": {
+      "sha256": "f742fddd969ac22e0c77a0325fe366104d4dfa0b4982959c85cbeb94157a8770",
+      "size": 221032
+    },
+    "src/motion_control_pkg/lib/x64/libKine.so": {
+      "sha256": "8609b6550a7a8f5de03854a3645dd516360d3697b707bb7af4be734c1f45b8f3",
+      "size": 314448
+    },
+    "src/motion_control_pkg/lib/x64/libMarvinSDK.so": {
+      "sha256": "2428c07662ee791c89f248673da1b100802f14bda1d32e6e0c33eac0a1f65b7c",
+      "size": 223336
+    },
+    "src/motion_control_pkg/msg/DeviceStatus.msg": {
+      "sha256": "021f6081e3c7f2c97af2e0d9648f495a1a6f025ed137acd9b24fb98f956fdace",
+      "size": 127
+    },
+    "src/motion_control_pkg/msg/HeartBeat.msg": {
+      "sha256": "218b30dfb093e821f841ba9fb8243b52c03320bad77c68de340e28fcae2c0b9a",
+      "size": 59
+    },
+    "src/motion_control_pkg/msg/MotorStatus.msg": {
+      "sha256": "3d10994078bf99ad9c6bfb9c9a30a241fd7987acc48fb7f7571cfc7dbb6a4bba",
+      "size": 197
+    },
+    "src/motion_control_pkg/package.xml": {
+      "sha256": "9c8c06e4959a4ded7b76dfb743266bc1ef4db412b137d56423fad21eeffd7d05",
+      "size": 1724
+    },
+    "src/motion_control_pkg/python/alternating_action_client.py": {
+      "sha256": "d42bad9ed77706f0377acb0658aaac874e4d6351031ed0c92ac4faf56d7993f5",
+      "size": 6953
+    },
+    "src/motion_control_pkg/python/carry_left_battery.txt": {
+      "sha256": "dcaaaa06f1ed77b9717a8be39fb73183f9313c2b2d218cd0d45685c3b1b157bb",
+      "size": 6519
+    },
+    "src/motion_control_pkg/python/joint_state_merger.py": {
+      "sha256": "5b9a6dd2323488f5369afe91d9511abbc7ab3cfb1a7e18987e9e4d708ad373a5",
+      "size": 37551
+    },
+    "src/motion_control_pkg/python/use_method.txt": {
+      "sha256": "1eaf1379b19b9b8b4b5906bf80d1387a0912d3819dd39b8e5df72a13336f9c2d",
+      "size": 7847
+    },
+    "src/motion_control_pkg/scripts/error_option": {
+      "sha256": "670748f9f90865c22d69a964b0a977e247f9787de59025c125727f7fb45b4ab4",
+      "size": 4235
+    },
+    "src/motion_control_pkg/scripts/joint_tf_pair": {
+      "sha256": "27abdfe7f8e8c603315fc0b1274a48faa62bb9a4804e414561aba6a6773401fb",
+      "size": 3208
+    },
+    "src/motion_control_pkg/src/common/ctrl/PVT_ctrl.cpp": {
+      "sha256": "357e3815ed85ea6b12c6ca5d87543190d5816685e0505c5dfa0210ac3dd013af",
+      "size": 4174
+    },
+    "src/motion_control_pkg/src/common/gripper/Ds485_Gripper.cpp": {
+      "sha256": "120bc5e7f25a69a5e07073e3b68214c91900ddc333363dbc40e6d0fa4dabcb3f",
+      "size": 28432
+    },
+    "src/motion_control_pkg/src/common/gripper/Ds485_Marvin_Transport.cpp": {
+      "sha256": "2ac24b766158715b73f8d1c1ed1ab4537a4d6a8187ca5b0b739c6ba26b65e7a5",
+      "size": 1905
+    },
+    "src/motion_control_pkg/src/common/gripper/Modbus_Jodell.cpp": {
+      "sha256": "2f435cb8347616744cb00c49f17d9a0182a6f80ea706726bcc6ad9f4bb8174f9",
+      "size": 12699
+    },
+    "src/motion_control_pkg/src/common/motion/fcl_wrapper.cpp": {
+      "sha256": "627ad65907c1c6549b67e95cd07d0fecb41ee3da082075b55e738640dbd71830",
+      "size": 4227
+    },
+    "src/motion_control_pkg/src/common/motion/ompl_wrapper.cpp": {
+      "sha256": "d88e904966e45970cd63964336abaa9249f54cbbce611c26fa70dc911fde7c38",
+      "size": 5121
+    },
+    "src/motion_control_pkg/src/common/mpc/mpc.cpp": {
+      "sha256": "c87daa65b12890eceaece5e6dafecbd292b21f9198815e97bad045f0fbffca2d",
+      "size": 18400
+    },
+    "src/motion_control_pkg/src/common/pino/pino_kin_dyn.cpp": {
+      "sha256": "e5756e82c24092992e496aa44e714dda4a0ed32ba7d0acf1432849917d481290",
+      "size": 21043
+    },
+    "src/motion_control_pkg/src/common/suck/neardi47_gpio.c": {
+      "sha256": "ef010ee2560a9f51ab954580906b75af607a896e676c1803282b17c6f4554630",
+      "size": 3156
+    },
+    "src/motion_control_pkg/src/common/suck/neardi47_gpio_fake.c": {
+      "sha256": "b325fc08468a6703a02d8d7e67b69ab665fac0c12b007cc1a10059bba0a20656",
+      "size": 1188
+    },
+    "src/motion_control_pkg/src/common/suck/neardi47_gpio_unavailable.c": {
+      "sha256": "c8d3222f2385fed5b69a233a6e6bcfa7f5b8b00df985bbb7f68a0fe3737cb15c",
+      "size": 543
+    },
+    "src/motion_control_pkg/src/common/wbc/priority_tasks.cpp": {
+      "sha256": "935af5644875cbdfeca5993656f643c669db42b1946cc4414aefd21ec2ac8705",
+      "size": 4758
+    },
+    "src/motion_control_pkg/src/common/wbc/wbc_priority.cpp": {
+      "sha256": "4f1d378e8028a54b1586f590079991bdb2d733218edee752f8ce04531c4c4bfe",
+      "size": 39339
+    },
+    "src/motion_control_pkg/src/dual_arm_module.cpp": {
+      "sha256": "eed07347f8492319c46261554fc7d347099de3db9d5dcdecd8717c3be7c6ff55",
+      "size": 193038
+    },
+    "src/motion_control_pkg/src/ethercat_bus_manager.cpp": {
+      "sha256": "14dc6e5b599bd3e464cd922dd0347b91cd1c22c2969602d1bc04dab4a334caa2",
+      "size": 36700
+    },
+    "src/motion_control_pkg/src/ethercat_bus_manager_fake.cpp": {
+      "sha256": "e8c930a1cdadfa61230150b15c54c8ea683f9581e25ec8950512ed27dbc2cf8b",
+      "size": 8477
+    },
+    "src/motion_control_pkg/src/execution/motion_safety.cpp": {
+      "sha256": "e2a36967f3dd72adc0d042bd6d9f68db28d0a26f01a9eb66d3dc91a16d9b2b6b",
+      "size": 36137
+    },
+    "src/motion_control_pkg/src/head_startup_execution.cpp": {
+      "sha256": "2076e3d87338459c9bedafa41c8eceb78fef02fdc64596c6106cc120f1e91272",
+      "size": 4971
+    },
+    "src/motion_control_pkg/src/ik_recovery_client.cpp": {
+      "sha256": "5a37404107b9f660fc740d552af161147ad012c9deaf5aa395710de07994bfad",
+      "size": 9431
+    },
+    "src/motion_control_pkg/src/ik_recovery_solver.cpp": {
+      "sha256": "c6e796b1da4d519f26850c5f92ce4e9474f74be41d5ab2d6990d7303b306ac63",
+      "size": 16635
+    },
+    "src/motion_control_pkg/src/ik_recovery_worker.cpp": {
+      "sha256": "6c0c6c31f16b485795ce6ede3981ae9b8b709f2467a7b0a7dd42127cc29d6900",
+      "size": 9621
+    },
+    "src/motion_control_pkg/src/leg_body_motion_execution.cpp": {
+      "sha256": "514d41b3677b838e2c2c75b465633f0d2e5c5826bcfd798d63bc15442dc05d7a",
+      "size": 16912
+    },
+    "src/motion_control_pkg/src/leg_body_orientation_execution.cpp": {
+      "sha256": "ae56bea5b93517782309f65508d4a93c1a396fc430c9aae1c2650ff153b156b0",
+      "size": 12254
+    },
+    "src/motion_control_pkg/src/loong_driver_sdk_stub.cpp": {
+      "sha256": "d308af00d78452d0a91fe670b4d85d988803327593bd399a966519ab69d863a7",
+      "size": 8357
+    },
+    "src/motion_control_pkg/src/main_node.cpp": {
+      "sha256": "7c6b57b1afa076b77bcdefd2e8f1aa15f2a71d5ef73d634bc8b439a808e2b02b",
+      "size": 86785
+    },
+    "src/motion_control_pkg/src/miracle_head_module.cpp": {
+      "sha256": "571c6821a7f9c55d2255c8263b320ec4e3e5ba1ddb49856d4d35df5ebc9bfe91",
+      "size": 45947
+    },
+    "src/motion_control_pkg/src/miracle_lower_body_module.cpp": {
+      "sha256": "2c4a6d782eedc66297e6f8b8e5af898871863b9126a4ff485974f03a85c527ba",
+      "size": 46741
+    },
+    "src/motion_control_pkg/src/miracle_m_algo.cpp": {
+      "sha256": "82a51a9787bfc33b779053b4c4bee21997d0fd0adfbf8fbcecd087c11c311481",
+      "size": 183457
+    },
+    "src/motion_control_pkg/src/miracle_module.cpp": {
+      "sha256": "3366b16cf906f2664969f50cc0337f7ec9ff24997ba3941cbd6bf357bbf321eb",
+      "size": 4799
+    },
+    "src/motion_control_pkg/src/motion/leg_body_motion.cpp": {
+      "sha256": "fe4c2d3ff1262c9e8ed83ee32d415cd8e572d16e33b2d90d6fffeed1378a3c2e",
+      "size": 13706
+    },
+    "src/motion_control_pkg/src/motion/leg_body_orientation.cpp": {
+      "sha256": "df97960de02fc0807f0b1892e47b02aae2b57c425c1be0ff0f52e7be623689a9",
+      "size": 9683
+    },
+    "src/motion_control_pkg/src/motion/rigid_grasp_constraint.cpp": {
+      "sha256": "d3a8c0bc4546d03014405ab246403c8a2e0e46fed016328381f0babfe7a8c5df",
+      "size": 13468
+    },
+    "src/motion_control_pkg/src/motion/tcp_level_constraint.cpp": {
+      "sha256": "0e3f03de553db3bfc137d6a27e91b65c4e1aa0286071feebd39eecac7f22639e",
+      "size": 12006
+    },
+    "src/motion_control_pkg/src/parallel_planning.cpp": {
+      "sha256": "a2af184044ef207fa5959855a0cb0eca25e88f129b31799536db25815d6a618d",
+      "size": 8077
+    },
+    "src/motion_control_pkg/src/sdk/arm_drive_control.cpp": {
+      "sha256": "ad7d4cbd25973a22578d730d350d0e8c966b7c5b24b9761c075894f35b82161c",
+      "size": 7713
+    },
+    "src/motion_control_pkg/src/sdk/arm_teach_recovery.cpp": {
+      "sha256": "17cd56de9037e6b70bc3dbd42e365608337053d8488c8270fcadc91746f820c6",
+      "size": 18169
+    },
+    "src/motion_control_pkg/src/sdk/ethercat_drive_maintenance.cpp": {
+      "sha256": "fa6fe11c9b41fa3b076bd03c07b428463bb29690f03fdf86765b15e0dcb05a6d",
+      "size": 7137
+    },
+    "src/motion_control_pkg/src/sdk/marvin_dual_arm_sdk_adapter.cpp": {
+      "sha256": "cdbd65c9a3807f9f733b2ef558a8d88bca982181316e25872c49adac959df534",
+      "size": 13514
+    },
+    "src/motion_control_pkg/src/sdk/sdk_command_gate.cpp": {
+      "sha256": "38f33c916ce5b699e9eecc947953089070ee068cded0d67831831db57349d30f",
+      "size": 21586
+    },
+    "src/motion_control_pkg/src/utils/math/LPF_fst.cpp": {
+      "sha256": "d6845caaf027918e0021bcebaf56f388bb5a40ed8c9ad487024fdf77b4d92b9e",
+      "size": 881
+    },
+    "src/motion_control_pkg/src/utils/math/bezier_1D.cpp": {
+      "sha256": "c1e73c0eac06b50e7f3a9ab492abd0389dfe1fa1726a58714da63fd9ac269f17",
+      "size": 990
+    },
+    "src/motion_control_pkg/src/utils/math/ramp_trajectory.cpp": {
+      "sha256": "3d70c82460d648f1de24c7e3bc50388cd9cebb0d46851286f3414f4151c6c0c9",
+      "size": 1047
+    },
+    "src/motion_control_pkg/src/utils/math/useful_math.cpp": {
+      "sha256": "d1d4bb84cad61b362b25c8c3a2eb49581c24210b830aa98c721f08aa23e33bb7",
+      "size": 7841
+    },
+    "src/motion_control_pkg/src/wbc/centroidal_model.cpp": {
+      "sha256": "f2d1904ac9ac0d499136ced13fd53ae87af7b782a5d30fd8a3f23f38e05c42e5",
+      "size": 9069
+    },
+    "src/motion_control_pkg/src/wbc/model_audit.cpp": {
+      "sha256": "de8a901caeaad117e33c36d2bb2ff975ee11df1e71abfce03ba5894544303989",
+      "size": 1644
+    },
+    "src/motion_control_pkg/src/wbc/model_node.cpp": {
+      "sha256": "35e85ea59637f91260d064a9b1b4a605764e63bdfbb52d9aa353e9752656a35e",
+      "size": 7908
+    },
+    "src/motion_control_pkg/src/wbc/model_report.hpp": {
+      "sha256": "da5366098cf80ece2bc5fb606345fa79839bfcc5da5d1d69e98ec615a89e94b7",
+      "size": 2556
+    },
+    "src/motion_control_pkg/src/wbc/static_balance.cpp": {
+      "sha256": "73e223399d0c54637ac2e07dd64509b009d09c9edd05fd85156a220add46d2a0",
+      "size": 2534
+    },
+    "src/motion_control_pkg/src/wbc/support_model.cpp": {
+      "sha256": "e1bc5fd5edaab61fe2f31c9c0460348f3430de3ae461ad64fb6b0e2334924f25",
+      "size": 14608
+    },
+    "src/motion_control_pkg/src/wbc/trajectory.cpp": {
+      "sha256": "f3db271fa50c4b09c8c1375a5c7d3813b2f3d88542e0f059c8f5421fcf5fe9b5",
+      "size": 7663
+    },
+    "src/motion_control_pkg/src/wbc/whole_body_state.cpp": {
+      "sha256": "c350d18eb3dfdc0acd645985671eb8d60c1abcfe4a42407f135371030ec2057d",
+      "size": 6708
+    },
+    "src/motion_control_pkg/src/wbc/zmp.cpp": {
+      "sha256": "6f6064bbc81448728f10bcbe21e51f6c705cc77b6a66a97334b54fa3efe13d17",
+      "size": 1656
+    },
+    "src/motion_control_pkg/src/wbc/zmp_audit.cpp": {
+      "sha256": "fc752e17d495989b93df87d514531f5a2b7a3c9e0be91598b8a26efc4cfc4338",
+      "size": 4522
+    },
+    "src/motion_control_pkg/src/whole_body_module.cpp": {
+      "sha256": "e4709a4697718834dd0c1372a3f7c4961c7e1d77b0f6c9ff277079ae2c146fcb",
+      "size": 96287
+    },
+    "src/motion_control_pkg/test/drive_control_test.cpp": {
+      "sha256": "c351da1eaf67b587d4c0c84646358746761a5c0d954b168a20ad600f8bc0ef04",
+      "size": 13129
+    },
+    "src/motion_control_pkg/test/error_option_cli_test.py": {
+      "sha256": "57d0cd1d56bfc3f9fe9005bd6d37f554355f7dc71dee7b6356854e9af8249ee0",
+      "size": 3302
+    },
+    "src/motion_control_pkg/test/error_tracking_option_test.cpp": {
+      "sha256": "232fd0bbcbd656997cdda3ec720dce73cdf6abb2692946cd7f359f9fb0ea6e3d",
+      "size": 15050
+    },
+    "src/motion_control_pkg/test/ethercat_feedback_validity_test.cpp": {
+      "sha256": "993742a91585135dfa63a960cb080d5e083a6656d5f46b1af8307fbd9b90cb23",
+      "size": 1273
+    },
+    "src/motion_control_pkg/test/ethercat_initial_enable_test.cpp": {
+      "sha256": "a070254a5d44786d72bf014f8864e714b1571abe77b62215a978bf9ea5a791a3",
+      "size": 4871
+    },
+    "src/motion_control_pkg/test/ethercat_startup_readiness_test.cpp": {
+      "sha256": "d6bd4ca2a25612c86089cf9a5860fa143c700416f3e316887ebe9235fb800155",
+      "size": 2564
+    },
+    "src/motion_control_pkg/test/fixtures/ik_recovery_failures.json": {
+      "sha256": "494f6597fcb89e91d5c191161e86b42612545153856c97ba410d9592e05ea416",
+      "size": 9855
+    },
+    "src/motion_control_pkg/test/head_startup_geometry_test.cpp": {
+      "sha256": "1167c804ca67b4299ded802dca7646eae6001bdc76d89aa5fe32e12601d74ccf",
+      "size": 2296
+    },
+    "src/motion_control_pkg/test/head_startup_home_test.cpp": {
+      "sha256": "fdf7bcbe580d586ffe45c75636e1fe0d5689d7cb13a66eacab7ebb90e9a0d65f",
+      "size": 8957
+    },
+    "src/motion_control_pkg/test/ik_recovery_test.cpp": {
+      "sha256": "4648fa13cf605e80910237a36c80c99f83cc8d2d67347b96d4163333a59523f2",
+      "size": 10482
+    },
+    "src/motion_control_pkg/test/ik_seed_sampler_test.cpp": {
+      "sha256": "bf4e421d0e7481a0ad557e3b6c5d9ddac87c3e0a52a213e048ecd6bd7e1ba733",
+      "size": 4375
+    },
+    "src/motion_control_pkg/test/latest_progress_test.cpp": {
+      "sha256": "88aa7144d93781a281860ec922ff857dac979b48cdb576517abeb95fae2082ee",
+      "size": 6431
+    },
+    "src/motion_control_pkg/test/leg_rigid_execution_test.cpp": {
+      "sha256": "f8b26a49f01f43b72ff02460a4b3836a6fe5b5c3993274b0972bf6be65952eb9",
+      "size": 10880
+    },
+    "src/motion_control_pkg/test/leg_rigid_grasp_test.cpp": {
+      "sha256": "2a4f41e77f86a13b9ccaca179af5353329d486394b4adc1784d6f12eee6a69c7",
+      "size": 7842
+    },
+    "src/motion_control_pkg/test/measured_feedback_test.cpp": {
+      "sha256": "790e998c26d6e8efe7568e005009b2e55e234088d09209df240f4a53c0bbdeb6",
+      "size": 12078
+    },
+    "src/motion_control_pkg/test/orderly_shutdown_test.cpp": {
+      "sha256": "9bbf8f9fe9047303f708d7fcf7a8af529c47c7d6685e266f593a3a90e29cef86",
+      "size": 4257
+    },
+    "src/motion_control_pkg/test/parallel_planning_test.cpp": {
+      "sha256": "38df1e495bd88a8c5989c2ea583906047b246f216a3adee0b98f07703ae9b996",
+      "size": 16447
+    },
+    "src/motion_control_pkg/test/precision_arrival_test.cpp": {
+      "sha256": "a70b8648afcc14488eebd7085d0923d055af4158e4704156f116e0a2dbf4db75",
+      "size": 16158
+    },
+    "src/motion_control_pkg/test/rigid_grasp_fixture.hpp": {
+      "sha256": "36449f441bd38d06929a6b9bc8c3de4183fcdf1e6f9999241d698f3fd580d2a4",
+      "size": 1110
+    },
+    "src/motion_control_pkg/test/rigid_grasp_test.cpp": {
+      "sha256": "b23a749895db2a15e68ee0a8938d5f074798988813d626bec20882db3e877d3c",
+      "size": 6824
+    },
+    "src/motion_control_pkg/test/robot_tf_test.py": {
+      "sha256": "7dcd7c5113807c3b0b1d8dd6eab9f4fcbabc39dc2a8eb8ba9f44999dbe65ec50",
+      "size": 12625
+    },
+    "src/motion_control_pkg/test/sdk_arm_position_limits_test.cpp": {
+      "sha256": "b69a1f5f6d29821c6a0b9316b8b526d416cbb612105fcc0b18bf1214b54c75cf",
+      "size": 5160
+    },
+    "src/motion_control_pkg/test/shutdown_gate_test.cpp": {
+      "sha256": "044cd18d1b43e7721a53b892025c9311fb720c5942508e2781b425c140d031f8",
+      "size": 5006
+    },
+    "src/motion_control_pkg/test/shutdown_launch_test.py": {
+      "sha256": "cb936aa76dd162ff5cfa9d6d41a09de261ec9a8b1a2e7326d67ce4f21336448c",
+      "size": 1542
+    },
+    "src/motion_control_pkg/test/shutdown_signal_test.cpp": {
+      "sha256": "c8122a530c10e0cafe3f8034f2e66afc0c5c4d05ce38267c7ad434b5f5ac40bb",
+      "size": 1668
+    },
+    "src/motion_control_pkg/test/tcp_level_constraint_test.cpp": {
+      "sha256": "ddebee7284920f1ee201c33754be582ae6f70eced6b667c85d915f4136669aa5",
+      "size": 9503
+    },
+    "src/motion_control_pkg/test/tcp_level_planning_test.cpp": {
+      "sha256": "28327d1f9a5c9a14c14f716fd3317971a99f92793fbd133f1e8dc88793f73225",
+      "size": 8487
+    },
+    "src/motion_control_pkg/test/teach_recovery_test.cpp": {
+      "sha256": "9d456fe5403b5b69a82f1de444c6ad03e39ef32f443252dcf85f4806cadc522d",
+      "size": 37869
+    },
+    "src/motion_control_pkg/test/tracking_diagnostics_test.cpp": {
+      "sha256": "c169ef5d24f66fd18a970ff47653fc498f29755980527fe809ecd40f1ec673dd",
+      "size": 3647
+    },
+    "src/motion_control_pkg/test/waist_leg_trajectory_test.cpp": {
+      "sha256": "7eb1d80525b6388ba8641e338e1d768bdb9b33497156ba67348990ce65d16d29",
+      "size": 4790
+    },
+    "src/motion_control_pkg/test/whole_body_hardware_traps.hpp": {
+      "sha256": "7d7619794f99fca49123cf7dc89fc2cff5f795fa9c953b147b6b2e43e2115701",
+      "size": 1909
+    },
+    "src/motion_control_pkg/test/x86_driver_ros_init_test.cpp": {
+      "sha256": "f2b4053d16c8d4b6e8068b5449b56e9ef5999fbedb93e808311329f5e0a9f445",
+      "size": 573
+    },
+    "src/motion_control_pkg/tools/convert_gripper_dynamics.py": {
+      "sha256": "3f9466f001116477e37f9a08b86b48a82b417b87fa421bd3b1b66fa07f823d3b",
+      "size": 9537
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/export_manifest.py": {
+      "sha256": "aed0215acfb0cde2598d8be9499a468f42610044d400134ad828258954fd054a",
+      "size": 1587
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/export_trajectories.cpp": {
+      "sha256": "c4ce31f42671dbea1e54d3aa8b529013d5a34506227a7cf29538197c1d5d3275",
+      "size": 10876
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/hardware_traps.cpp": {
+      "sha256": "e8bc3c514165be5d63c1c27dbdc5d871a98d8f5450865b50f30b7be408cd3daf",
+      "size": 1928
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/model.py": {
+      "sha256": "79cb8c0b1f0e824e497bbcd8cf04c952b933a99857f695ce033b4130ac814492",
+      "size": 10699
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/regression.py": {
+      "sha256": "454674fa7a48953e3158843b121646e593c18702e3281e97d84989882ee1e06c",
+      "size": 2389
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/requirements.txt": {
+      "sha256": "c3ff938edbb81df858d68acd09029986f4ede4e723673512ff95a7b62f77ba76",
+      "size": 106
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/rigid_grasp_fixture.json": {
+      "sha256": "904dfc53607e57b274fed42660eafd581feee76450fe420c4a200bca99d42721",
+      "size": 588
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/validate.py": {
+      "sha256": "ce11ae0b4a2373591f2aee2e0483e2a0e1900d215d6d6e8414daea344ad7cc0b",
+      "size": 20059
+    },
+    "src/motion_control_pkg/tools/mujoco_validation/video_clips.py": {
+      "sha256": "5bcddaa0246bbba0ba090327d18cd6a20e97844b6cfd94ca9b9d9ed66e279337",
+      "size": 2187
+    },
+    "src/onecube_robot_description/CMakeLists.txt": {
+      "sha256": "e41162ab122a0805d0974738d84143d5f04024b29336b1e478c3db0bae53c9d7",
+      "size": 210
+    },
+    "src/onecube_robot_description/launch/display.launch.py": {
+      "sha256": "cfadd2ee6e613c303a156a2bbb92f4998a834381f9d28189e2dce6b6e847752a",
+      "size": 1467
+    },
+    "src/onecube_robot_description/launch/display.rviz": {
+      "sha256": "914a1ac691036f5897f74c3ffc0f6069c391a74093cb8255365095129505de12",
+      "size": 10777
+    },
+    "src/onecube_robot_description/meshes/Link1_L.STL": {
+      "sha256": "d00097eec49600a4111ee5a124d6636f50ea09a7a1dc8486d98f4370dde7a932",
+      "size": 563584
+    },
+    "src/onecube_robot_description/meshes/Link1_R.STL": {
+      "sha256": "fdb1075fe0b41e5c2cb7c2fe13c9d2e62ff4dd6eb540ea841b8603db28369dd0",
+      "size": 563584
+    },
+    "src/onecube_robot_description/meshes/Link2_L.STL": {
+      "sha256": "4776a6a2086ddc61b1643aff93386e545baccef2751db29d863fe027a76f325e",
+      "size": 1278784
+    },
+    "src/onecube_robot_description/meshes/Link2_R.STL": {
+      "sha256": "53eb9fc69c939d2ebd4f32c1df341c1c42bc3d9d0911db0c9fcee70aa2701b34",
+      "size": 1278784
+    },
+    "src/onecube_robot_description/meshes/Link3_L.STL": {
+      "sha256": "d58f1039bd3eb2ccc1a1959b89d2de7ae714344ad8cb8b78ef97b92dcd317d26",
+      "size": 635484
+    },
+    "src/onecube_robot_description/meshes/Link3_R.STL": {
+      "sha256": "122456d8fc3e81694f352fc1f29d0bc19066f7f3d7572857a1be1e7c030dec9c",
+      "size": 635484
+    },
+    "src/onecube_robot_description/meshes/Link4_L.STL": {
+      "sha256": "77f18566339f38acac1785fae517b05ff1e5247b95404ce26536d215bbed9cd7",
+      "size": 1263484
+    },
+    "src/onecube_robot_description/meshes/Link4_R.STL": {
+      "sha256": "77f18566339f38acac1785fae517b05ff1e5247b95404ce26536d215bbed9cd7",
+      "size": 1263484
+    },
+    "src/onecube_robot_description/meshes/Link5_L.STL": {
+      "sha256": "573f15ee62b0a9b2d62aceeb756800fd86969a685535e91416b73d51f1c57613",
+      "size": 1176084
+    },
+    "src/onecube_robot_description/meshes/Link5_R.STL": {
+      "sha256": "2de51a340695c89b2fd58b1171dfacc4d85aa4e6cd50879e021a2d0bde8599a8",
+      "size": 1196684
+    },
+    "src/onecube_robot_description/meshes/Link6_L.STL": {
+      "sha256": "b6b7570d8ebf1d2acb01baf8941b892f5a5f72aaa05503ab8340da8a2a7b2c13",
+      "size": 310884
+    },
+    "src/onecube_robot_description/meshes/Link6_R.STL": {
+      "sha256": "49722d14b9ac34a84a41c95f49bd0b2a8859d4a05f66b247822bf36b0a703cd5",
+      "size": 310884
+    },
+    "src/onecube_robot_description/meshes/Link7_L.STL": {
+      "sha256": "126cc7d41c37049ce34d2636bfe2d460c21e3429ed080877d1c5e983109ef798",
+      "size": 2557184
+    },
+    "src/onecube_robot_description/meshes/Link7_R.STL": {
+      "sha256": "6eb75b059ff383e90a153be840bcce84b23d8f8afd074b1bc9dfec1b18c2351f",
+      "size": 2577384
+    },
+    "src/onecube_robot_description/meshes/arm-l-base_link.STL": {
+      "sha256": "f22c309ed8cacd2fc776e2f72a2fc5618d9da84315267377edd3205e91ebbcb5",
+      "size": 204584
+    },
+    "src/onecube_robot_description/meshes/arm-r-base_link.STL": {
+      "sha256": "f22c309ed8cacd2fc776e2f72a2fc5618d9da84315267377edd3205e91ebbcb5",
+      "size": 204584
+    },
+    "src/onecube_robot_description/meshes/base_front_camera_link.STL": {
+      "sha256": "428c189c5996c172c9f1a4ef12f9f7195f4eacee9684046fc32dcb6735fae7ad",
+      "size": 9407184
+    },
+    "src/onecube_robot_description/meshes/base_front_wheel_1_pitch_link.STL": {
+      "sha256": "16d1dc071576bb7ab10bb0e49fcb7091f05cefedf7351e5a402f6cea2a390c23",
+      "size": 8437984
+    },
+    "src/onecube_robot_description/meshes/base_front_wheel_1_yaw_link.STL": {
+      "sha256": "e807d67dedd5fedac66241f796c1598401115f4e009c41e2d58209e3ba64e48b",
+      "size": 88984
+    },
+    "src/onecube_robot_description/meshes/base_front_wheel_2_link.STL": {
+      "sha256": "d7200634b08498f6e8db8f8057ffd4769b1fb211b5ad648c4d80db68bda29a09",
+      "size": 1253684
+    },
+    "src/onecube_robot_description/meshes/base_link.STL": {
+      "sha256": "d8246bd5bc8c787a89199f115cb12c203844ce70285ed8dea17958e8821a1d92",
+      "size": 3634884
+    },
+    "src/onecube_robot_description/meshes/base_rear_camera_link.STL": {
+      "sha256": "46f020a5facdc17bf2ad4e7336e047c52767312d4950cf0e44854039f414ce50",
+      "size": 9407184
+    },
+    "src/onecube_robot_description/meshes/base_rear_wheel_1_pitch_link.STL": {
+      "sha256": "c480d39e56204678804ea808a51cd03887225309fdce57ee08dec05217f496e3",
+      "size": 8437984
+    },
+    "src/onecube_robot_description/meshes/base_rear_wheel_1_yaw_link.STL": {
+      "sha256": "05fc14b0989cf3ffd48590b9d7e3ffee4aa2984b6f4acca8335265c1471f4121",
+      "size": 88984
+    },
+    "src/onecube_robot_description/meshes/base_rear_wheel_2_link.STL": {
+      "sha256": "dd5b56ff71df4ad357e6832946d8bff6afda557dcd6fb3a99a0e21da6c429bf5",
+      "size": 1253684
+    },
+    "src/onecube_robot_description/meshes/body_camera_link.STL": {
+      "sha256": "7ff85ab6d48aae71449846f0e501cf7beb90eb1faf2385069fe083e028dd19e6",
+      "size": 2800984
+    },
+    "src/onecube_robot_description/meshes/body_imu_link.STL": {
+      "sha256": "fcab190dba0e83d09716e3d3786948de490d8cdd5bc728aa080d8ca650afd2a1",
+      "size": 307984
+    },
+    "src/onecube_robot_description/meshes/body_link.STL": {
+      "sha256": "985eaddd99df5e1acbd705e1f417daa6e682d05360dd5ffc36b07a74b73287e1",
+      "size": 6670284
+    },
+    "src/onecube_robot_description/meshes/collision/Link1.dae": {
+      "sha256": "086001f3a8cef857e0592c15468b63ebca439168cf7349cb4c2299856cc2b1f2",
+      "size": 5627
+    },
+    "src/onecube_robot_description/meshes/collision/Link2.dae": {
+      "sha256": "ef99f1dc4764d86d7ea3a96a9f61c80c53ff5bfc35368446a896c7f354fd7236",
+      "size": 4363
+    },
+    "src/onecube_robot_description/meshes/collision/Link3.dae": {
+      "sha256": "6df38fe8527baad131d8edeff90fcce25e3d48bf03b388dcbc836084088c2cd2",
+      "size": 5665
+    },
+    "src/onecube_robot_description/meshes/collision/Link4.dae": {
+      "sha256": "5763311d6981d06cf03ca56367b9f1bc0e3c08546d93b008fdfe301210f0f673",
+      "size": 5657
+    },
+    "src/onecube_robot_description/meshes/collision/Link5.dae": {
+      "sha256": "0de1e85495a7e3ce9ad09ee7dc3802efc98dd2ec69344c90f8df505761c4a1be",
+      "size": 5632
+    },
+    "src/onecube_robot_description/meshes/collision/Link6.dae": {
+      "sha256": "269971ff6ea21f41f3ad85d8c536ee07fcb98d14a584076b60aa8ce412afa70a",
+      "size": 4400
+    },
+    "src/onecube_robot_description/meshes/collision/Link7.dae": {
+      "sha256": "b665209764859122c4cad197ec23f9e1e45f0947e7ffb6f487cd9b5d5b9198ad",
+      "size": 5659
+    },
+    "src/onecube_robot_description/meshes/collision/base_link.dae": {
+      "sha256": "ab653d10e6c10d8b1330521e911841b7f65f8148a7ed6f2590dda0664b176d4f",
+      "size": 5606
+    },
+    "src/onecube_robot_description/meshes/collision/body_link.dae": {
+      "sha256": "5ed7043d6d99133f48d6034899f171679322364ea2cfc8d5a51eaf4bd570a7d5",
+      "size": 5565
+    },
+    "src/onecube_robot_description/meshes/collision/gripper_base_l_link.dae": {
+      "sha256": "2e9676b7f0374684e70d2b35c3c83488cdd59d3dd863edfb2eb1bfd5996bd30d",
+      "size": 5648
+    },
+    "src/onecube_robot_description/meshes/collision/gripper_base_r_link.dae": {
+      "sha256": "889bee666a0a72d026084809b67c154cbc6e8e47a48d6cf6858c90bb26858ce0",
+      "size": 5638
+    },
+    "src/onecube_robot_description/meshes/collision/gripper_l_link1.dae": {
+      "sha256": "85033fe0b74da1d021f753f3bcae5c3702e78f5158fdd3146517e2f6ea53e9ba",
+      "size": 4429
+    },
+    "src/onecube_robot_description/meshes/collision/gripper_l_link2.dae": {
+      "sha256": "e1a5704c4e71aa44efb0a5d77c406efe09988554f3ac5acfad480e821514e86d",
+      "size": 4416
+    },
+    "src/onecube_robot_description/meshes/collision/gripper_r_link1.dae": {
+      "sha256": "83f7923719a9b3eeb847c40f49e95394c1855daabf5f9631bf753e09f23ec037",
+      "size": 4410
+    },
+    "src/onecube_robot_description/meshes/collision/gripper_r_link2.dae": {
+      "sha256": "4fc4addf330e38e65f7b86815da2eb158a63365f32b9a0df56193ebaeb55536f",
+      "size": 4429
+    },
+    "src/onecube_robot_description/meshes/collision/head_pitch_link.dae": {
+      "sha256": "06088ef3b8201feabf2393517798bdd7d3d7908bc658d14a462739b54a1e2057",
+      "size": 5594
+    },
+    "src/onecube_robot_description/meshes/collision/head_yaw_link.dae": {
+      "sha256": "843af8efad42752a964bd0d7fb7d49bccf9b57b06aea7e39847fe1e3dd09cae0",
+      "size": 5592
+    },
+    "src/onecube_robot_description/meshes/collision/leg_link1.dae": {
+      "sha256": "4e894d5a2c1b2128ffd4603cba8c79727118dd73f60f52aa87e48510ac98a327",
+      "size": 4390
+    },
+    "src/onecube_robot_description/meshes/collision/leg_link2.dae": {
+      "sha256": "753215c78399f427e0be68e395a21f3e9da7b89d91bf8ee7ac8a0eea0764267a",
+      "size": 4384
+    },
+    "src/onecube_robot_description/meshes/collision/leg_link3.dae": {
+      "sha256": "9630550c22380b2e8fb5a54fdd95090ffa7ee80d07a9c763fc781a6cd9ca542d",
+      "size": 5604
+    },
+    "src/onecube_robot_description/meshes/gripper_base_l_link.STL": {
+      "sha256": "1e10d0fa8889a2a8ffe27682fbec28228367a7936566e141917ff6765256e8d6",
+      "size": 2079384
+    },
+    "src/onecube_robot_description/meshes/gripper_base_r_link.STL": {
+      "sha256": "4cd34727533a60229326e20e7be1d50eb4200743282c37d1dc23e2a47466fdd0",
+      "size": 2079384
+    },
+    "src/onecube_robot_description/meshes/gripper_l_link1.STL": {
+      "sha256": "9a32fa434c2b62a1aef084890c2f4552aba5942d2e534683f460fdd62486fb27",
+      "size": 247984
+    },
+    "src/onecube_robot_description/meshes/gripper_l_link2.STL": {
+      "sha256": "7b6e0ea279596bcc3f076e9a0cb78d8da5de31e7c35a1cb07af1e9467202c64f",
+      "size": 247984
+    },
+    "src/onecube_robot_description/meshes/gripper_r_link1.STL": {
+      "sha256": "56d0b64aed98a16f3f7f9ae3ffae8ff1a56d3fd3aca9f24a5088d12096d1f457",
+      "size": 247984
+    },
+    "src/onecube_robot_description/meshes/gripper_r_link2.STL": {
+      "sha256": "3b1c0521c5ae1d2a3cfe1652d1a81f4f8c23c90d0309a01bc438ab2fae732b6c",
+      "size": 247984
+    },
+    "src/onecube_robot_description/meshes/head_camera_link.STL": {
+      "sha256": "bc66cc41246b230a59108fd274360d9b9f4fbb725307b707526259cdff634db7",
+      "size": 2800984
+    },
+    "src/onecube_robot_description/meshes/head_imu_link.STL": {
+      "sha256": "fbcbf3e21e31cc9348e213f8e2e849276ce4681450a1e251ac0096eb675e310d",
+      "size": 307984
+    },
+    "src/onecube_robot_description/meshes/head_pitch_link.STL": {
+      "sha256": "b4ed9b298997fc32b8df5a40209bea06031c85adbaf331fd8ea6d5221abd6ac7",
+      "size": 1379884
+    },
+    "src/onecube_robot_description/meshes/head_yaw_link.STL": {
+      "sha256": "37a42c11d8d19c1f2861d1a4893cd71fa917867fc3a7b60912820498f30ac904",
+      "size": 422884
+    },
+    "src/onecube_robot_description/meshes/leg_link1.STL": {
+      "sha256": "2a742a77c16cb2dcecc640c5aaa64994f2f8da02fa431b20a1eb11dc1b09b967",
+      "size": 504784
+    },
+    "src/onecube_robot_description/meshes/leg_link2.STL": {
+      "sha256": "72bfe9b46ced0f4a08daedca877b8a2c142d8cd6862ac6728dd5f112d5644356",
+      "size": 737184
+    },
+    "src/onecube_robot_description/meshes/leg_link3.STL": {
+      "sha256": "745fd9358c2a2e79487c373e1487eace69c177697b876e2a9e75770e619a89cd",
+      "size": 416384
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/Long_gripper_l_Link.STL": {
+      "sha256": "414cf0c98a9fac95d4e5adb28e8e3f64778c9260aff77cf4d4a175d85f80eabd",
+      "size": 4154784
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/Long_gripper_l_Link.dae": {
+      "sha256": "1b5f1484c47c28a1abc218207368f1251ea39d0b1ff26f9f3ed5c9c94b6ef4d3",
+      "size": 4643
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/Long_gripper_l_swept.dae": {
+      "sha256": "830a15d920b5d0d29a3f4d3d90d87132d34028c712dc642053ec9f38cdbc132a",
+      "size": 4576
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/Long_gripper_r_Link.STL": {
+      "sha256": "65c32c65dbc86541fbd7751dd84ee380f9c6597be34fb388a9cfa6df66398a43",
+      "size": 4159784
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/Long_gripper_r_Link.dae": {
+      "sha256": "b81f80813c488b1ba99e2ba0c3fdb6dd17674965195e15b1da800f2fcf877b88",
+      "size": 4647
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/Long_gripper_r_swept.dae": {
+      "sha256": "ed134e959388adcd77b079069535fd43dbb75aa831c756a16bd6456b2337d2d5",
+      "size": 4540
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/gripper_base_l_link.STL": {
+      "sha256": "37024cbaafdc8bbeaa5a0aef68cf4c90521030a1e978c40420dc8e2cf4439b55",
+      "size": 292884
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/gripper_base_l_link.dae": {
+      "sha256": "405308d93352c4aeb954e8cc7dbb2d12415c5beee2800f98a166e080249e18db",
+      "size": 4623
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/gripper_base_r_link.STL": {
+      "sha256": "46a878f2ca0cc3846f12a9a61845414ccba9bae9c03873e5225809acf9310021",
+      "size": 292884
+    },
+    "src/onecube_robot_description/meshes/material_tool_20261116/gripper_base_r_link.dae": {
+      "sha256": "cb97a30ddb5a456ee54abfd2be51fce9272690002c0286b16fa2331c8cfa5014",
+      "size": 4599
+    },
+    "src/onecube_robot_description/package.xml": {
+      "sha256": "0d7a34bf4eb696df08e56a5af2bde8786e26ed1b7b3d1e43d18b6517141e05dd",
+      "size": 693
+    },
+    "src/onecube_robot_description/urdf/onecube_robot_description.urdf": {
+      "sha256": "7d094cd2f75304e65ed382a7985d0b875f54dbe0034c7b464994532c7c5d5d4d",
+      "size": 50051
+    },
+    "vendor/driver_sdk/igh_install/lib/libethercat.so": {
+      "symlink": "libethercat.so.1.2.0"
+    },
+    "vendor/driver_sdk/igh_install/lib/libethercat.so.1": {
+      "symlink": "libethercat.so.1.2.0"
+    },
+    "vendor/driver_sdk/igh_install/lib/libethercat.so.1.2.0": {
+      "sha256": "b86ad9b3dabd45fc4033abda886497b4385b312c2a02d0945744ae868a445c79",
+      "size": 151032
+    },
+    "vendor/driver_sdk/include/loong_driver_sdk.h": {
+      "sha256": "f87861ac6cd01242f67a0ace0534eaa673cd315896732c631c9e8793e476358d",
+      "size": 6170
+    },
+    "vendor/driver_sdk/lib/libhbcanhal_x86_64.so": {
+      "sha256": "36c76a71bc03a0fa8eda30babf322ecc1fc537d2028244e8df69b07fe3d37e19",
+      "size": 15376
+    },
+    "vendor/driver_sdk/lib/libloong_driver_sdk_x64.so": {
+      "sha256": "995702c6698c8d03dfd43957052fca848a6ddcc5d241c8afe289ad5c21c0cf9a",
+      "size": 462360
+    },
+    "vendor/driver_sdk/loong_third_party/lib/libmodbus_x86_64.so": {
+      "sha256": "e2dae1d923f47363f36867642916704cfdb959153e30cc03d6ade9a252425c5e",
+      "size": 63832
+    },
+    "vendor/driver_sdk/loong_third_party/lib/libnetlink_x86_64.so": {
+      "sha256": "d63ae027a872df08ba25446922c36605f166ffc5bc9a389b904d43c12e9017bc",
+      "size": 45096
+    },
+    "vendor/driver_sdk/loong_third_party/lib/libtinyxml2_x86_64.so": {
+      "sha256": "4abd4343847de36e17244b63dfc8ffaae04003b0f85b981f4964e2a19e98270e",
+      "size": 167592
+    },
+    "vendor/driver_sdk/loong_third_party/lib/libutil_x86_64.so": {
+      "sha256": "a6c0f9cc97a2cf7921f791f7ea1f8a9ecbebd4e006225212f224f7b5d8a845e5",
+      "size": 192968
+    },
+    "deployment/GX12-02/opt/onecube/motion_control/config/motion_control_config.yaml": {
+      "sha256": "5ba2a0345c9620a16159c52ba210d9f5f202f90e3cde423f73b3a7f6e6b66d53",
+      "size": 3232,
+      "robot_path": "/opt/onecube/motion_control/config/motion_control_config.yaml"
+    }
+  }
+}

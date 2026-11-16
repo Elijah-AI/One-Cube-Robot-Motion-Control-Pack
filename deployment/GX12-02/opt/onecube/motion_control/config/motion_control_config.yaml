@@ -1,0 +1,86 @@
+/motion_control_ns/motion_control:
+  ros__parameters:
+
+    wbc_static_com_enabled: true
+
+    wbc_dynamic_zmp_enabled: false
+
+    wbc_stationary_horizontal_contact_confirmed: true
+
+    wbc_joint_state_topic: /wbc/joint_states
+
+    wbc_max_state_age_sec: 0.15
+
+    wbc_max_state_skew_sec: 0.06
+
+    wbc_support_inset_m: 0.0
+
+    wbc_steering_uncertainty_margin_enabled: false
+
+    wbc_com_weight: 0.01
+
+
+    left_arm_joint_zero: [0, 0, 0, 0, 0, 0, 0]
+
+    left_arm_joint_dir: [1, 1, 1, 1, 1, 1, 1]
+    left_arm_joint_ratio: [101, 101, 81, 81, 101, 101, 101]
+
+    right_arm_joint_zero: [0, 0, 0, 0, 0, 0, 0]
+
+    right_arm_joint_dir: [1, 1, 1, 1, 1, 1, 1]
+    right_arm_joint_ratio: [101, 101, 81, 81, 101, 101, 101]
+    
+
+    leg_joint_zero: [0, 0, 0, 0]
+
+    leg_joint_dir: [1, 1, 1, 1]
+
+    head_joint_zero: [0, 0]
+
+    head_joint_dir: [1, 1]
+
+    dual_arm_planning_frame: base_link
+    tf_lookup_timeout_sec: 0.2
+
+    left_arm_tool: gripper  #根据机器人实际配置修改 0.2205
+    left_arm_tool_tf: [0.115, 0.0205, 0.321, 0.5, -0.5, 0.5, 0.5]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
+    
+    right_arm_tool: gripper    #根据机器人实际配置修改
+    right_arm_tool_tf: [0.115, -0.0205, 0.321, -0.5, -0.5, -0.5, 0.5]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
+
+    # control_mode=1 时，MoveJoints 使用关节阻抗，MovePose 使用笛卡尔阻抗。
+    left_joint_impedance_stiffness: [5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0]
+    left_joint_impedance_damping: [0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
+    left_joint_impedance_velocity_ratio: 10
+    left_joint_impedance_acceleration_ratio: 10
+    right_joint_impedance_stiffness: [5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0]
+    right_joint_impedance_damping: [0.3, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
+    right_joint_impedance_velocity_ratio: 10
+    right_joint_impedance_acceleration_ratio: 10
+
+    left_cartesian_impedance_stiffness: [10000.0, 10000.0, 10000.0, 600.0, 600.0, 600.0, 20.0]
+    left_cartesian_impedance_damping: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 1.0]
+    left_cartesian_impedance_velocity_ratio: 20
+    left_cartesian_impedance_acceleration_ratio: 20
+    right_cartesian_impedance_stiffness: [10000.0, 10000.0, 10000.0, 600.0, 600.0, 600.0, 20.0]
+    right_cartesian_impedance_damping: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 1.0]
+    right_cartesian_impedance_velocity_ratio: 20
+    right_cartesian_impedance_acceleration_ratio: 20
+
+    # SDK 顺序：[M, MCP_X, MCP_Y, MCP_Z, I_XX, I_XY, I_XZ, I_YY, I_YZ, I_ZZ]。
+    left_tool_dynamics: [0.80742, 1.8435751112505, -10.126530357417, 236.68617256895, 0.057552408510344, 4.1747003243426e-05, -0.00021814502515481, 0.056785982508976, 0.0029127582254842, 0.00094593880451547]
+    right_tool_dynamics: [0.80742, 1.8435033906205, 9.3988236397775, 236.75723719455, 0.057577773810527, -4.0658196514689e-05, -0.00021821607143453, 0.056822819230806, -0.0027749217962012, 0.00093446617210441]
+
+    # chassis_joint_dir: [-1, 1]
+
+    # chassis_max_accx: 1.56  #1.57对应电机端3000rpm/s
+
+    # chassis_wheel_radius: 0.075
+
+    # chassis_width: 0.55 
+
+
+# 通配符/**来为所有节点或命名空间下的节点设置通用参数
+# /**:
+#   ros__parameters:
+#     use_sim_time: true
