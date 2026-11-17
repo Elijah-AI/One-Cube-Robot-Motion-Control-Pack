@@ -52,6 +52,7 @@
 #define DS485_REG_PWM          0x49  // 当前 PWM Int16，0~1000
 #define DS485_REG_TEMPERATURE  0x4A  // 温度 Int16，℃
 #define DS485_REG_VOLTAGE      0x4B  // 电压 Int16，mV
+#define DS485_REG_COMBINED     0x59  // 组合读取，地址列表随本次读请求发送
 #define DS485_REG_MODE         0x5A  // 控制模式 Uint8：0自动 1舵机 2电机
 #define DS485_REG_PWM_LIMIT    0x5B  // 运行时 PWM 上限 Uint16，0~1000（掉电恢复）
 #define DS485_REG_CURRENT_LIMIT 0x5C // 运行时电流上限 Uint16，mA（掉电恢复）
@@ -147,6 +148,7 @@ struct Ds485_config
 
     int      gap_ms;          // 每次发送前的间隔，ms（半双工总线留出切换时间）
     int      timeout_ms;      // 单次应答超时，ms
+    uint16_t default_pwm = 1000; // torque=0 时使用的运行时 PWM 上限
 };
 
 
@@ -173,9 +175,10 @@ public:
     void Ds485_Set_Angle_Range(int side, int32_t open_angle, int32_t close_angle);
 
     /**
-     * @brief 配置速度换算：speed=255 对应 max_speed(°/s)，speed=0 时用 default_speed(°/s)
+     * @brief 配置速度换算：speed=255 对应 max_speed(°/s)，speed=0 时用 default_speed(°/s)，配置为 0 时使用读取的 0x5D 上限
      */
     void Ds485_Set_Speed(int side, uint16_t default_speed, uint16_t max_speed);
+    void Ds485_Set_Default_PWM(int side, uint16_t pwm);
 
     /**
      * @brief 配置到位/夹物判断参数
@@ -207,18 +210,19 @@ public:
     /**
      * @brief 与 Jodell_Move_Abs_A/B 相同的接口
      * @param position  0~255，0 全开，255 全闭，中间线性插值
-     * @param torque    0~255，换算为 PWM 上限 torque*1000/255；0 表示不修改当前 PWM 上限
+     * @param torque    0~255，换算为 PWM 上限 torque*1000/255；0 表示使用 default_pwm（默认 1000）
      * @param speed     0~255，换算为 speed*max_speed/255 (°/s)；0 表示使用 default_speed
      * @return true 指令已下发；false 失败
      */
-    bool Ds485_Move_Abs(int side, uint8_t position, uint8_t torque, uint8_t speed);
+    bool Ds485_Move_Abs(int side, uint8_t position, uint8_t torque, uint8_t speed,
+                        bool *motion_may_be_active = 0);
 
     /**
      * @brief 直接按角度运动（定速 0x66）。会检查标定范围与舵机限位。
      * @param angle  目标角度，0.1°
      * @param speed  速度 °/s，必须大于 0
      */
-    bool Ds485_Move_Angle(int side, int32_t angle, uint16_t speed);
+    bool Ds485_Move_Angle(int side, int32_t angle, uint16_t speed, bool *motion_may_be_active = 0);
 
     /**
      * @brief 设置运行时 PWM 上限（协议称“扭矩”），并读回确认
@@ -287,7 +291,7 @@ public:
     // 读寄存器，要求数据长度正好为 expect_len
     bool Ds485_Read_Reg(int side, uint8_t addr, uint8_t *data, int expect_len);
     // 写寄存器。写应答打开时检查短应答状态；关闭时只发送。
-    bool Ds485_Write_Reg(int side, uint8_t addr, const uint8_t *payload, int len);
+    bool Ds485_Write_Reg(int side, uint8_t addr, const uint8_t *payload, int len, bool *sent = 0);
 
     bool Ds485_Read_U8(int side, uint8_t addr, uint8_t *value);
     bool Ds485_Read_U16(int side, uint8_t addr, uint16_t *value);
@@ -299,6 +303,8 @@ public:
     bool Ds485_Write_U16_Check(int side, uint8_t addr, uint16_t value);
 
 private:
+    bool Read_Reg_With_Request(int side, uint8_t addr,
+        const uint8_t *request, int request_len, uint8_t *data, int expect_len);
     bool Check_Side(int side);
     void Set_Error(int side, const char *text);
     bool Send_Frame(int side, uint8_t cmd, uint8_t addr, const uint8_t *payload, int len);

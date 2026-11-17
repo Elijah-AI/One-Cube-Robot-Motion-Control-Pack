@@ -1429,6 +1429,9 @@ private:
         const std::shared_ptr<GoalHandleControlGripper> goal_handle)
     {
         (void)goal_handle;
+        if (dual_arm_module_ && dual_arm_module_->uses_ds485_gripper()) {
+            return rclcpp_action::CancelResponse::ACCEPT;
+        }
         RCLCPP_WARN(
             this->get_logger(),
             "Rejecting ControlGripper cancel request because a validated "

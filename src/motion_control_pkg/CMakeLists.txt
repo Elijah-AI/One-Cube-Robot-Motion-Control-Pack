@@ -220,6 +220,9 @@ set(SOURCES
     src/leg_body_motion_execution.cpp
     src/whole_body_module.cpp
     src/common/gripper/Modbus_Jodell.cpp
+    # 自制夹爪：德晟串口总线舵机（第五版协议），经机械臂末端透传
+    src/common/gripper/Ds485_Gripper.cpp
+    src/common/gripper/Ds485_Marvin_Transport.cpp
     # src/common/ctrl/PVT_ctrl.cpp
     # src/common/mpc/mpc.cpp
     # src/common/pino/pino_kin_dyn.cpp
@@ -287,6 +290,7 @@ target_compile_definitions(motion_control_node PRIVATE
 target_include_directories(motion_control_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg/ctrl
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg/gripper
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg/mpc
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg/pino
     ${CMAKE_CURRENT_SOURCE_DIR}/include/motion_control_pkg/wbc
@@ -435,7 +439,8 @@ foreach(error_command arm_error body_error)
     install(PROGRAMS scripts/error_option DESTINATION lib/${PROJECT_NAME} RENAME ${error_command})
 endforeach()
 ament_environment_hooks("${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/error_options_path.dsv")
-install(PROGRAMS scripts/joint_tf_pair DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/joint_tf_pair scripts/ds485_gripper DESTINATION lib/${PROJECT_NAME})
+install(FILES doc/DS485_GRIPPER.md DESTINATION share/${PROJECT_NAME}/doc)
 
 # 安装配置文件
 install(DIRECTORY config
@@ -463,6 +468,11 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME ds485_offline COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/ds485/run_tests.py
+        --source ${CMAKE_CURRENT_SOURCE_DIR} --build-dir ${CMAKE_CURRENT_BINARY_DIR}/ds485_offline)
+    set_tests_properties(ds485_offline PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
     add_executable(test_sdk_arm_position_limits test/sdk_arm_position_limits_test.cpp)
     target_link_libraries(test_sdk_arm_position_limits motion_planning_core)
     add_dependencies(test_sdk_arm_position_limits ik_recovery_worker)

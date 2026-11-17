@@ -18,6 +18,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>ros2action</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>tf2_ros_py</exec_depend>
   <depend>geometry_msgs</depend>

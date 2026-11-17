@@ -1,0 +1,67 @@
+#!/bin/bash
+# 自制夹爪（德晟舵机）命令行控制：发送 ControlGripper Action，运控节点需已启动且 gripper_type=ds485。
+#
+# 用法：
+#   ros2 run motion_control_pkg ds485_gripper <动作> <侧> [力矩] [速度] [超时ms]
+#     动作：open（张开）| close（闭合）| 0~255（位置，0 张开，255 闭合）
+#     侧  ：left | right | both
+#     力矩：0~255，默认 0 = 最大扭矩（PWM 1000）
+#     速度：0~255，默认 0 = 最大速度（舵机速度上限）
+#     超时：毫秒，默认 10000
+# 例：
+#   ros2 run motion_control_pkg ds485_gripper close left
+#   ros2 run motion_control_pkg ds485_gripper open both
+#   ros2 run motion_control_pkg ds485_gripper 128 left 100 50
+set -e
+
+usage() {
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+}
+
+[ $# -ge 2 ] && [ $# -le 5 ] || usage
+
+ACTION=$1
+SIDE=$2
+TORQUE=${3:-0}
+SPEED=${4:-0}
+TIMEOUT=${5:-10000}
+
+# 位置
+case "$ACTION" in
+    open)  POS=0 ;;
+    close) POS=255 ;;
+    *)
+        if [[ "$ACTION" =~ ^[0-9]+$ ]] && [ "$ACTION" -le 255 ]; then
+            POS=$ACTION
+        else
+            echo "动作必须是 open、close 或 0~255" >&2
+            usage
+        fi
+        ;;
+esac
+
+# 侧：与 ControlGripper 的 GRIPPER_LEFT=0 / GRIPPER_RIGHT=1 / GRIPPER_BOTH=2 一致
+case "$SIDE" in
+    left)  GRIPPER_ID=0 ;;
+    right) GRIPPER_ID=1 ;;
+    both)  GRIPPER_ID=2 ;;
+    *) echo "侧必须是 left、right 或 both" >&2; usage ;;
+esac
+
+for value in "$TORQUE" "$SPEED"; do
+    if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -gt 255 ]; then
+        echo "力矩、速度必须是 0~255" >&2
+        usage
+    fi
+done
+if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -lt 1 ]; then
+    echo "超时必须是正整数毫秒" >&2
+    usage
+fi
+
+# 两侧数组都填同样的值；只控制一侧时另一侧的值不会被使用。com_port 2 = 机械臂末端 COM1
+ros2 action send_goal --feedback /Control/control_gripper com_interfaces/action/ControlGripper \
+"{task_id: 'ds485_${ACTION}_${SIDE}', gripper_id: ${GRIPPER_ID},
+  position: [${POS}, ${POS}], speed: [${SPEED}, ${SPEED}], max_torque: [${TORQUE}, ${TORQUE}],
+  com_port: [2, 2], block_until_complete: true, timeout_ms: ${TIMEOUT}}"

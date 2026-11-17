@@ -1,0 +1,115 @@
+{
+  "date": "2026-11-17",
+  "branch": "GX12-02",
+  "base_commit": "b0e8911ff1d7e7a25551a19632d68c06abff5396",
+  "scope": "DS485 gripper integration for robot .18",
+  "source_files": 16,
+  "deployment_config_files": 1,
+  "files": {
+    "src/motion_control_pkg/CMakeLists.txt": {
+      "sha256": "91a01270efbd30f4ddb23d681f565df6258f2f79180afe654917d5bb50c9b358",
+      "size": 29171
+    },
+    "src/motion_control_pkg/doc/DS485_GRIPPER.md": {
+      "sha256": "912d91396d1bb68da9266a287e7fb00f0415e44f52d7acb815c07149ad63ee5c",
+      "size": 2605
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/dual_arm_module.hpp": {
+      "sha256": "d965327c02f0c43993fa52830d87107e353b34d7203366dad886ad7bf160eb5d",
+      "size": 21371
+    },
+    "src/motion_control_pkg/include/motion_control_pkg/gripper/Ds485_Gripper.h": {
+      "sha256": "2f16fa6714b03354b1dcb62802742262b1be05c12d4fd77af996404a3eeffd73",
+      "size": 15316
+    },
+    "src/motion_control_pkg/launch/config/motion_control_config.yaml": {
+      "sha256": "f576bc96c10ff49727dfc25ec5b6b50fb05c8ed8b529faeb6abaecb84a70e23b",
+      "size": 3579
+    },
+    "src/motion_control_pkg/scripts/ds485_gripper": {
+      "sha256": "c93d88a447d1d15c5e96532a1d84eec1a1361469387b9bec1c4ccb4e6d15eba0",
+      "size": 2211
+    },
+    "src/motion_control_pkg/src/common/gripper/Ds485_Gripper.cpp": {
+      "sha256": "7194a2bcc6c2367e8c0e624459d9126931a1704f3362c3bf8bef3afe8af24158",
+      "size": 30607
+    },
+    "src/motion_control_pkg/src/dual_arm_module.cpp": {
+      "sha256": "a6fd9b0fe77638f67c5a133f7be3f31c011ed8d3d98e9cefd73e9b58caf0395e",
+      "size": 208708
+    },
+    "src/motion_control_pkg/src/main_node.cpp": {
+      "sha256": "0ac13d48ba73de3d30ee26f2cd303620a5dab6ce8ea11d00c2f0db6cedeecfdf",
+      "size": 86927
+    },
+    "src/motion_control_pkg/test/ds485/fake_ds485_servo.cpp": {
+      "sha256": "a39f9ac087c8bdd9508a62bf9b983f63c5a22f77b20704909b1b72057c4bfa9d",
+      "size": 12635
+    },
+    "src/motion_control_pkg/test/ds485/fake_ds485_servo.h": {
+      "sha256": "307c3bdb04304f59a98d54cb7e8c4afbc6574c0faf83d6f34d1178d420cd34fb",
+      "size": 3849
+    },
+    "src/motion_control_pkg/test/ds485/run_tests.py": {
+      "sha256": "9d2e15a074ed1fa69aaa849ecb9c188441e65801f37103834db5d4b4db108200",
+      "size": 2629
+    },
+    "src/motion_control_pkg/test/ds485/test_action.cpp": {
+      "sha256": "d19ba057af02e37aae8d7819fef73be4095a55924d69ce2aad50b1cabc69b11b",
+      "size": 8284
+    },
+    "src/motion_control_pkg/test/ds485/test_combined.cpp": {
+      "sha256": "c12946e58d05bde9f894321ddbfceec2e6ee036cd4e4342d2fd9b76e42585123",
+      "size": 3815
+    },
+    "src/motion_control_pkg/test/ds485/test_ds485_gripper.cpp": {
+      "sha256": "6ff12ff1ac0cf46586bd2091370b72950cb973c5de04af62c0171d8f6939af2a",
+      "size": 23134
+    },
+    "src/motion_control_pkg/package.xml": {
+      "sha256": "0b99b6436d418b4ff8db25f49769b3aa5a9eefc2486df1787ca52d2291b43e55",
+      "size": 1764
+    },
+    "deployment/GX12-02/opt/onecube/motion_control/config/motion_control_config.yaml": {
+      "sha256": "73f040dea5798217850b56830aef7c4d6f13abf91500e16a54845fbd26e9da96",
+      "size": 3706
+    }
+  },
+  "deployment_config": {
+    "original_parameters_preserved": 43,
+    "parameters_added": 12,
+    "total_parameters": 55,
+    "source": "2026-11-17 .18 delivery configuration snapshot",
+    "live_robot_refreshed_during_publication": false
+  },
+  "template_note": "The generic template retains gripper_type=jodell and uncalibrated angles. default_speed and max_speed are both 0 (query the servo limit), unlike the earlier delivered source template values 30 and 90. The .18 runtime configuration snapshot already uses 0 for both.",
+  "validation_this_publication": {
+    "protocol_checks_passed": 193,
+    "combined_scenarios_passed": 5,
+    "action_scenarios_passed": 13,
+    "offline_only": true,
+    "urdf_unchanged": true
+  },
+  "earlier_robot_delivery_validation": {
+    "ctest_passed": 26,
+    "ctest_total": 30,
+    "baseline_failures_reproduced": [
+      "leg_rigid_grasp",
+      "leg_rigid_execution",
+      "rigid_grasp",
+      "waist_leg_trajectory"
+    ],
+    "build_and_install_completed": true,
+    "runtime_activation_not_rechecked": true
+  },
+  "publication_robot_actions": {
+    "build": false,
+    "restart": false,
+    "motion": false
+  },
+  "hardware_acceptance_pending": [
+    "0x5D speed-limit readback",
+    "real gripper open/close and PWM/speed behavior",
+    "right gripper calibration"
+  ]
+}

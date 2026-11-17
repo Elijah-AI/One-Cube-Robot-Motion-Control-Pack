@@ -29,6 +29,7 @@
 #include "motion_control_pkg/ethercat_bus_manager.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
+#include "Ds485_Gripper.h"
 
 using namespace std::chrono_literals;
 using Matrix4 = double[4][4];
@@ -39,6 +40,8 @@ class MiracleMAlgo;
 class DualArmModule
 {
 public:
+    bool uses_ds485_gripper() const { return gripper_type_ == "ds485"; }
+
     motion_control_pkg::sdk::DriveControlResult setTeachMode(unsigned mask, bool enable,
         const std::function<bool()>& canceled);
     bool expectedModeTransition(unsigned arm,const motion_control_pkg::sdk::ArmFeedback& feedback) const {
@@ -214,6 +217,10 @@ private:
         std::chrono::steady_clock::time_point request_started_at);
 
     void execution_loop_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle);
+    // 自制夹爪（德晟舵机）执行流程，gripper_type 参数为 "ds485" 时使用
+    void execution_loop_control_ds485_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle);
+    // 从 ROS 参数读取自制夹爪配置，构造时调用一次
+    void load_ds485_gripper_parameters(rclcpp::Node& node);
     void execution_loop_control_suck(std::shared_ptr<GoalHandleControlSuck> goal_handle);
 
     rclcpp::Node::SharedPtr lockNode(const char *context) const;
@@ -236,6 +243,11 @@ private:
     std::atomic<bool> is_executing_right_arm_;
     std::atomic<bool> is_executing_left_tool_;
     std::atomic<bool> is_executing_right_tool_;
+
+    // 夹爪类型："jodell" 外购 Jodell 夹爪（默认）；"ds485" 德晟舵机自制夹爪
+    std::string gripper_type_{"jodell"};
+    // 自制夹爪配置，下标 0=左 1=右；channel 每次取自 goal->com_port
+    Ds485_config ds485_config_[2];
 
     rclcpp::Subscription<RobotVision>::SharedPtr collision_cloud_sub_;
     std::mutex latest_cloud_mutex_;

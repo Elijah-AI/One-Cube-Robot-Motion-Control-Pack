@@ -59,13 +59,13 @@ Ds485_Gripper::Ds485_Gripper(Ds485_Transport *transport)
     transport_ = transport;
     for (int side = 0; side < DS485_SIDE_NUM; side++)
     {
-        // 默认值：保守的速度，角度未标定（open == close），必须由调用者配置。
+        // 默认使用舵机速度上限；角度未标定（open == close）时拒绝动作。
         config_[side].channel = 2;          // COM1
         config_[side].id = 1;
         config_[side].open_angle = 0;
         config_[side].close_angle = 0;
-        config_[side].max_speed = 90;       // speed=255 时 90°/s
-        config_[side].default_speed = 30;   // speed=0 时 30°/s
+        config_[side].max_speed = 0;        // Init 读取 0x5D
+        config_[side].default_speed = 0;    // 0 使用速度上限
         config_[side].tolerance = 10;       // 1.0°
         config_[side].still_band = 3;       // 0.3°
         config_[side].blocked_samples = 10;
@@ -140,6 +140,11 @@ void Ds485_Gripper::Ds485_Set_Speed(int side, uint16_t default_speed, uint16_t m
     }
     config_[side].default_speed = default_speed;
     config_[side].max_speed = max_speed;
+}
+
+void Ds485_Gripper::Ds485_Set_Default_PWM(int side, uint16_t pwm)
+{
+    if (Check_Side(side)) config_[side].default_pwm = pwm;
 }
 
 void Ds485_Gripper::Ds485_Set_Detect(int side, int32_t tolerance, int32_t still_band, int blocked_samples)
@@ -319,11 +324,17 @@ bool Ds485_Gripper::Send_Frame(int side, uint8_t cmd, uint8_t addr, const uint8_
 
 bool Ds485_Gripper::Ds485_Read_Reg(int side, uint8_t addr, uint8_t *data, int expect_len)
 {
+    return Read_Reg_With_Request(side, addr, 0, 0, data, expect_len);
+}
+
+bool Ds485_Gripper::Read_Reg_With_Request(int side, uint8_t addr,
+    const uint8_t *request, int request_len, uint8_t *data, int expect_len)
+{
     if (!Check_Side(side))
     {
         return false;
     }
-    if (!Send_Frame(side, DS485_CMD_READ, addr, 0, 0))
+    if (!Send_Frame(side, DS485_CMD_READ, addr, request, request_len))
     {
         return false;
     }
@@ -400,7 +411,7 @@ bool Ds485_Gripper::Ds485_Read_Reg(int side, uint8_t addr, uint8_t *data, int ex
     return false;
 }
 
-bool Ds485_Gripper::Ds485_Write_Reg(int side, uint8_t addr, const uint8_t *payload, int len)
+bool Ds485_Gripper::Ds485_Write_Reg(int side, uint8_t addr, const uint8_t *payload, int len, bool *sent)
 {
     if (!Check_Side(side))
     {
@@ -409,6 +420,11 @@ bool Ds485_Gripper::Ds485_Write_Reg(int side, uint8_t addr, const uint8_t *paylo
     if (!Send_Frame(side, DS485_CMD_WRITE, addr, payload, len))
     {
         return false;
+    }
+
+    if (sent != 0)
+    {
+        *sent = true;
     }
 
     if (!write_ack_[side])
@@ -452,6 +468,10 @@ bool Ds485_Gripper::Ds485_Write_Reg(int side, uint8_t addr, const uint8_t *paylo
                 uint8_t status = frame[4];
                 if (status & DS485_STATE_FAULT_MASK)
                 {
+                    if (sent != 0)
+                    {
+                        *sent = false;
+                    }
                     char faults[120];
                     char text[180];
                     Ds485_Fault_Text(status, faults, sizeof(faults));
@@ -672,9 +692,9 @@ bool Ds485_Gripper::Ds485_Init(int side)
         Set_Error(side, "张开/闭合角度超出协议范围 -3276.8°~3276.7°");
         return false;
     }
-    if (c.max_speed == 0 || c.default_speed == 0)
+    if (c.default_pwm < 1 || c.default_pwm > 1000)
     {
-        Set_Error(side, "速度配置不能为 0");
+        Set_Error(side, "默认 PWM 必须在 1..1000");
         return false;
     }
 
@@ -709,6 +729,16 @@ bool Ds485_Gripper::Ds485_Init(int side)
         Set_Error(side, text);
         return false;
     }
+
+    // 只读取速度上限，绝不写 0x5D；读取失败时拒绝动作。
+    uint16_t servo_speed = 0;
+    if (!Ds485_Read_U16(side, DS485_REG_SPEED_LIMIT, &servo_speed)) return false;
+    if (servo_speed == 0) {
+        Set_Error(side, "舵机速度上限 0x5D 为 0，无法运动");
+        return false;
+    }
+    if (c.max_speed == 0 || c.max_speed > servo_speed) c.max_speed = servo_speed;
+    if (c.default_speed == 0 || c.default_speed > c.max_speed) c.default_speed = c.max_speed;
 
     // 4. 标定角度必须在舵机限位内
     initialized_[side] = true;
@@ -751,8 +781,13 @@ bool Ds485_Gripper::Check_Move_Target(int side, int32_t angle)
     return true;
 }
 
-bool Ds485_Gripper::Ds485_Move_Angle(int side, int32_t angle, uint16_t speed)
+bool Ds485_Gripper::Ds485_Move_Angle(int side, int32_t angle, uint16_t speed,
+                                     bool *motion_may_be_active)
 {
+    if (motion_may_be_active != 0)
+    {
+        *motion_may_be_active = false;
+    }
     if (!Check_Side(side))
     {
         return false;
@@ -762,9 +797,9 @@ bool Ds485_Gripper::Ds485_Move_Angle(int side, int32_t angle, uint16_t speed)
         Set_Error(side, "未初始化，请先调用 Ds485_Init");
         return false;
     }
-    if (speed == 0)
+    if (speed == 0 || speed > config_[side].max_speed)
     {
-        Set_Error(side, "速度不能为 0");
+        Set_Error(side, "速度必须大于 0 且不超过已确认的速度上限");
         return false;
     }
     if (!Check_Move_Target(side, angle))
@@ -806,7 +841,7 @@ bool Ds485_Gripper::Ds485_Move_Angle(int side, int32_t angle, uint16_t speed)
     uint8_t payload[4];
     Put_I16(payload, (int16_t)angle);
     Put_U16(payload + 2, speed);
-    if (!Ds485_Write_Reg(side, DS485_REG_MOVE_SPEED, payload, 4))
+    if (!Ds485_Write_Reg(side, DS485_REG_MOVE_SPEED, payload, 4, motion_may_be_active))
     {
         return false;
     }
@@ -814,23 +849,33 @@ bool Ds485_Gripper::Ds485_Move_Angle(int side, int32_t angle, uint16_t speed)
     return true;
 }
 
-bool Ds485_Gripper::Ds485_Move_Abs(int side, uint8_t position, uint8_t torque, uint8_t speed)
+bool Ds485_Gripper::Ds485_Move_Abs(int side, uint8_t position, uint8_t torque,
+                                   uint8_t speed, bool *motion_may_be_active)
 {
+    if (motion_may_be_active != 0)
+    {
+        *motion_may_be_active = false;
+    }
     if (!Check_Side(side))
     {
         return false;
     }
     const Ds485_config &c = config_[side];
 
-    // 力矩 0~255 -> PWM 上限 0~1000；0 表示沿用舵机当前 PWM 上限
-    if (torque > 0)
-    {
-        uint16_t pwm = (uint16_t)((torque * 1000 + 127) / 255);
-        if (!Ds485_Set_Torque(side, pwm))
-        {
-            return false;
-        }
+    if (!initialized_[side]) {
+        Set_Error(side, "未初始化，请先调用 Ds485_Init");
+        return false;
     }
+    // 保护状态下不修改 PWM 或重新上力。
+    uint8_t state[2];
+    if (!Ds485_Read_Reg(side, DS485_REG_STATE, state, 2)) return false;
+    if (state[0] & DS485_STATE_FAULT_MASK) {
+        Set_Error(side, "舵机状态异常，未下发运动或修改 PWM");
+        return false;
+    }
+    // torque=0 使用默认上限，其余值映射为 1..1000；每次写入并读回确认。
+    const uint16_t pwm = torque ? (uint16_t)((torque * 1000 + 127) / 255) : c.default_pwm;
+    if (!Ds485_Set_Torque(side, pwm)) return false;
 
     // 速度 0~255 -> °/s；0 表示使用默认速度
     uint16_t speed_dps = c.default_speed;
@@ -844,7 +889,7 @@ bool Ds485_Gripper::Ds485_Move_Abs(int side, uint8_t position, uint8_t torque, u
     }
 
     int32_t angle = Ds485_Position_To_Angle(side, position);
-    return Ds485_Move_Angle(side, angle, speed_dps);
+    return Ds485_Move_Angle(side, angle, speed_dps, motion_may_be_active);
 }
 
 bool Ds485_Gripper::Ds485_Set_Torque(int side, uint16_t pwm)
@@ -906,22 +951,21 @@ bool Ds485_Gripper::Ds485_Status(int side, Ds485_status *rt_status)
     rt_status->err_cmd_failed   = (s & 0x40) != 0;
     rt_status->moving           = (s & 0x80) != 0;
 
-    if (!Ds485_Read_I32(side, DS485_REG_ANGLE, &rt_status->angle))
+    // 先读状态，再读同一帧内的位置、速度、电流、PWM。
+    // 0x59 的地址列表随读请求携带，不写配置；应答顺序必须与此列表一致。
+    const uint8_t addresses[] = {
+        DS485_REG_ANGLE, DS485_REG_SPEED, DS485_REG_CURRENT, DS485_REG_PWM
+    };
+    uint8_t data[10];
+    if (!Read_Reg_With_Request(side, DS485_REG_COMBINED,
+            addresses, sizeof(addresses), data, sizeof(data)))
     {
         return false;
     }
-    if (!Ds485_Read_I16(side, DS485_REG_SPEED, &rt_status->speed))
-    {
-        return false;
-    }
-    if (!Ds485_Read_I16(side, DS485_REG_CURRENT, &rt_status->current))
-    {
-        return false;
-    }
-    if (!Ds485_Read_I16(side, DS485_REG_PWM, &rt_status->pwm))
-    {
-        return false;
-    }
+    rt_status->angle = Get_I32(data);       // Int32，0.1°
+    rt_status->speed = Get_I16(data + 4);   // Int16，°/s
+    rt_status->current = Get_I16(data + 6); // Int16，mA
+    rt_status->pwm = Get_I16(data + 8);     // Int16，有符号 PWM
     rt_status->position = Ds485_Angle_To_Position(side, rt_status->angle);
     return true;
 }

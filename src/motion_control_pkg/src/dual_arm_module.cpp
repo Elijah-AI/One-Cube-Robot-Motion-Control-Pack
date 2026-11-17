@@ -15,6 +15,8 @@
 #include "motion_control_pkg/motion/cartesian_line_sampling.hpp"
 #include "motion_control_pkg/motion/pose_space_control.hpp"
 #include "motion_control_pkg/suck/neardi47_gpio.h"
+#include "Ds485_Marvin_Transport.h"
+#include "motion_control_pkg/execution/shutdown_request.hpp"
 
 #include <std_msgs/msg/header.hpp>
 #include <algorithm>
@@ -346,6 +348,8 @@ DualArmModule::DualArmModule(
         !std::isfinite(jerk_scale_) || jerk_scale_ <= 0 || jerk_scale_ > 1) {
         throw std::invalid_argument("arm acceleration/jerk scales must be in (0,1]");
     }
+    // 夹爪类型与自制夹爪（德晟舵机）配置
+    load_ds485_gripper_parameters(*shared_node);
     const std::vector<double> joint_stiffness{
         5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0};
     const std::vector<double> joint_damping{
@@ -3591,6 +3595,12 @@ void DualArmModule::execution_loop_control_suck(
 
 void DualArmModule::execution_loop_control_gripper(std::shared_ptr<GoalHandleControlGripper> goal_handle)
 {
+    // 自制夹爪（德晟舵机）走独立流程，外购 Jodell 夹爪保持原逻辑不变
+    if (gripper_type_ == "ds485") {
+        execution_loop_control_ds485_gripper(goal_handle);
+        return;
+    }
+
     //添加机器人开/合抓逻辑   示例
     const auto goal = goal_handle->get_goal();
     std::atomic<bool> * first_busy_flag = nullptr;
@@ -4224,6 +4234,348 @@ void DualArmModule::control_gripper_result(
         terminal.succeed(result);
     }
 }
+
+// ============================================================================
+// 自制夹爪（德晟串口总线舵机，第五版协议）
+// 协议与换算见 Ds485_Gripper.h；透传方式与 Jodell 相同（左=A 臂，右=B 臂）。
+// ============================================================================
+
+// PWM(0~1000) 换算为 Action 使用的 0~255
+static uint8_t ds485_pwm_to_255(int16_t pwm)
+{
+    int value = pwm < 0 ? -pwm : pwm;
+    value = (value * 255 + 500) / 1000;
+    if (value > 255) {
+        value = 255;
+    }
+    return static_cast<uint8_t>(value);
+}
+
+// 速度(°/s) 换算为 Action 使用的 0~255，max_speed 对应 255
+static uint8_t ds485_speed_to_255(int16_t speed, uint16_t max_speed)
+{
+    if (max_speed == 0) {
+        return 0;
+    }
+    int value = speed < 0 ? -speed : speed;
+    value = (value * 255 + max_speed / 2) / max_speed;
+    if (value > 255) {
+        value = 255;
+    }
+    return static_cast<uint8_t>(value);
+}
+
+// 把各侧最后状态写入 Action 结果
+static void ds485_fill_result(
+    ControlGripper::Result& result, const Ds485_status* rt_status, const bool* use_side)
+{
+    for (int side = 0; side < 2; side++) {
+        if (use_side[side]) {
+            result.final_position[side] = rt_status[side].position;
+            result.final_torque[side] = ds485_pwm_to_255(rt_status[side].pwm);
+        }
+    }
+}
+
+void DualArmModule::load_ds485_gripper_parameters(rclcpp::Node& node)
+{
+    gripper_type_ = node.declare_parameter<std::string>("gripper_type", "jodell");
+    if (gripper_type_ != "jodell" && gripper_type_ != "ds485") {
+        throw std::invalid_argument("gripper_type must be \"jodell\" or \"ds485\"");
+    }
+
+    // 数组参数均为 [左, 右]
+    const std::vector<int64_t> ids = node.declare_parameter<std::vector<int64_t>>(
+        "ds485_gripper_id", std::vector<int64_t>{1, 1});
+    const std::vector<double> open_deg = node.declare_parameter<std::vector<double>>(
+        "ds485_gripper_open_deg", std::vector<double>{0.0, 0.0});
+    const std::vector<double> close_deg = node.declare_parameter<std::vector<double>>(
+        "ds485_gripper_close_deg", std::vector<double>{0.0, 0.0});
+    const int64_t default_speed = node.declare_parameter<int64_t>("ds485_gripper_default_speed", 0);
+    const int64_t max_speed = node.declare_parameter<int64_t>("ds485_gripper_max_speed", 0);
+    const int64_t default_pwm = node.declare_parameter<int64_t>("ds485_gripper_default_pwm", 1000);
+    const double tolerance_deg = node.declare_parameter<double>("ds485_gripper_tolerance_deg", 1.0);
+    const double still_band_deg = node.declare_parameter<double>("ds485_gripper_still_band_deg", 0.3);
+    const int64_t blocked_samples = node.declare_parameter<int64_t>("ds485_gripper_blocked_samples", 10);
+    const int64_t gap_ms = node.declare_parameter<int64_t>("ds485_gripper_gap_ms", 10);
+    const int64_t timeout_ms = node.declare_parameter<int64_t>("ds485_gripper_timeout_ms", 300);
+
+    // 参数检查：不合法直接拒绝启动，避免带着错误配置运行
+    if (ids.size() != 2 || open_deg.size() != 2 || close_deg.size() != 2) {
+        throw std::invalid_argument(
+            "ds485_gripper_id/open_deg/close_deg must each contain [left, right]");
+    }
+    for (int side = 0; side < 2; side++) {
+        if (ids[side] < 0 || ids[side] > 250) {
+            throw std::invalid_argument("ds485_gripper_id must be in 0..250");
+        }
+        if (!std::isfinite(open_deg[side]) || !std::isfinite(close_deg[side]) ||
+            open_deg[side] < -3276.8 || open_deg[side] > 3276.7 ||
+            close_deg[side] < -3276.8 || close_deg[side] > 3276.7) {
+            throw std::invalid_argument("ds485_gripper open/close deg must be in -3276.8..3276.7");
+        }
+    }
+    if (default_speed < 0 || default_speed > 65535 || max_speed < 0 || max_speed > 65535) {
+        throw std::invalid_argument("ds485_gripper default/max speed must be in 0..65535 deg/s (0 uses servo limit)");
+    }
+    if (default_pwm < 1 || default_pwm > 1000)
+        throw std::invalid_argument("ds485_gripper_default_pwm must be in 1..1000");
+    if (!std::isfinite(tolerance_deg) || tolerance_deg < 0.1 || tolerance_deg > 3276.7 ||
+        !std::isfinite(still_band_deg) || still_band_deg < 0.0 || still_band_deg > 3276.7) {
+        throw std::invalid_argument("ds485_gripper tolerance must be > 0 and still_band >= 0");
+    }
+    if (blocked_samples < 2 || blocked_samples > 1000000 || gap_ms < 0 || gap_ms > 1000 || timeout_ms < 10 || timeout_ms > 5000) {
+        throw std::invalid_argument(
+            "ds485_gripper blocked_samples>=2, gap_ms 0..1000, timeout_ms 10..5000");
+    }
+
+    // 角度统一换成 0.1° 整数
+    for (int side = 0; side < 2; side++) {
+        Ds485_config& c = ds485_config_[side];
+        c.channel = 2;   // 实际通道每次取自 goal->com_port
+        c.id = static_cast<uint8_t>(ids[side]);
+        c.open_angle = static_cast<int32_t>(std::lround(open_deg[side] * 10.0));
+        c.close_angle = static_cast<int32_t>(std::lround(close_deg[side] * 10.0));
+        c.default_pwm = static_cast<uint16_t>(default_pwm);
+        c.default_speed = static_cast<uint16_t>(default_speed);
+        c.max_speed = static_cast<uint16_t>(max_speed);
+        c.tolerance = static_cast<int32_t>(std::lround(tolerance_deg * 10.0));
+        c.still_band = static_cast<int32_t>(std::lround(still_band_deg * 10.0));
+        c.blocked_samples = static_cast<int>(blocked_samples);
+        c.gap_ms = static_cast<int>(gap_ms);
+        c.timeout_ms = static_cast<int>(timeout_ms);
+    }
+
+    if (gripper_type_ == "ds485") {
+        rclcpp::Logger logger = node.get_logger();
+        for (int side = 0; side < 2; side++) {
+            const Ds485_config& c = ds485_config_[side];
+            RCLCPP_INFO(logger,
+                "ds485 gripper %s: id=%d open=%.1fdeg close=%.1fdeg speed default/max=%d/%d deg/s (0=servo_max) default_pwm=%u",
+                side == 0 ? "left" : "right", c.id, c.open_angle / 10.0, c.close_angle / 10.0,
+                c.default_speed, c.max_speed, c.default_pwm);
+            if (c.open_angle == c.close_angle) {
+                RCLCPP_WARN(logger,
+                    "ds485 gripper %s: open/close angles are not calibrated; "
+                    "ControlGripper goals for this side will be rejected",
+                    side == 0 ? "left" : "right");
+            }
+        }
+    }
+}
+
+void DualArmModule::execution_loop_control_ds485_gripper(
+    std::shared_ptr<GoalHandleControlGripper> goal_handle)
+{
+    const auto goal = goal_handle->get_goal();
+    rclcpp::Logger logger = rclcpp::get_logger("Ds485_Gripper");
+    const char* side_name[2] = {"left", "right"};
+
+    // 1. 本次要控制哪几侧（下标 0=左 1=右）
+    bool use_side[2] = {false, false};
+    use_side[GRIPPER_LEFT] = goal->gripper_id == GRIPPER_LEFT || goal->gripper_id == GRIPPER_BOTH;
+    use_side[GRIPPER_RIGHT] = goal->gripper_id == GRIPPER_RIGHT || goal->gripper_id == GRIPPER_BOTH;
+
+    // 退出本函数时自动清除忙标志（与 Jodell 流程相同）
+    std::atomic<bool> * first_busy_flag = nullptr;
+    std::atomic<bool> * second_busy_flag = nullptr;
+    if (use_side[GRIPPER_LEFT]) {
+        first_busy_flag = &is_executing_left_tool_;
+    }
+    if (use_side[GRIPPER_RIGHT]) {
+        if (first_busy_flag == nullptr) {
+            first_busy_flag = &is_executing_right_tool_;
+        } else {
+            second_busy_flag = &is_executing_right_tool_;
+        }
+    }
+    motion_control_pkg::execution::ScopedBusyFlagReset busy_reset(
+        first_busy_flag, second_busy_flag);
+    ControlGripperTerminalGuard terminal(goal_handle);
+    const auto start_time = std::chrono::steady_clock::now();
+    const auto timeout = std::chrono::milliseconds(goal->timeout_ms);
+
+    auto feedback = std::make_shared<ControlGripper::Feedback>();
+    auto result = std::make_shared<ControlGripper::Result>();
+    feedback->current_position.assign(2U, 0U);
+    feedback->current_torque.assign(2U, 0U);
+    feedback->current_speed.assign(2U, 0U);
+    result->final_position.assign(2U, 0U);
+    result->final_torque.assign(2U, 0U);
+
+    if (!use_side[GRIPPER_LEFT] && !use_side[GRIPPER_RIGHT]) {
+        result->success = ACTION_FAIL;
+        result->error_message = "Unsupported gripper_id";
+        terminal.abort(result);
+        return;
+    }
+
+    Ds485_Marvin_Transport transport;
+    Ds485_Gripper gripper(&transport);
+    Ds485_status rt_status[2];
+    std::memset(rt_status, 0, sizeof(rt_status));
+    uint8_t init_position[2] = {0, 0};
+    int32_t init_angle[2] = {0, 0};
+    bool done[2] = {!use_side[0], !use_side[1]};
+    int move_state[2] = {DS485_MOVE_RUNNING, DS485_MOVE_RUNNING};
+    bool moving[2] = {false, false};
+
+    // 向可能仍在运动的夹爪请求锁舵，包括已下发但未收到写应答的情况。
+    const auto stop_moving = [&]() {
+        for (int side = 0; side < 2; ++side) {
+            if (moving[side] && !gripper.Ds485_Hold(side)) {
+                result->error_message += std::string("; ") + side_name[side] +
+                    " hold failed: " + gripper.Ds485_Last_Error(side);
+            }
+        }
+    };
+    const auto abort_motion = [&](const std::string& error) {
+        result->success = ACTION_FAIL;
+        result->error_message = error;
+        stop_moving();
+        RCLCPP_ERROR(logger, "%s", result->error_message.c_str());
+        ds485_fill_result(*result, rt_status, use_side);
+        terminal.abort(result);
+    };
+    const auto should_stop = [&]() {
+        if (motion_control_pkg::execution::shutdownRequested()) {
+            abort_motion("ControlGripper stopped for orderly shutdown");
+            return true;
+        }
+        if (goal_handle->is_canceling()) {
+            result->success = ACTION_FAIL;
+            result->error_message = "ControlGripper goal canceled by client";
+            stop_moving();
+            ds485_fill_result(*result, rt_status, use_side);
+            terminal.cancel(result);
+            return true;
+        }
+        if (std::chrono::steady_clock::now() - start_time >= timeout) {
+            abort_motion("time_out");
+            return true;
+        }
+        return false;
+    };
+
+    // 2. 配置、初始化、读初始状态
+    for (int side = 0; side < 2; side++) {
+        if (!use_side[side]) {
+            continue;
+        }
+        if (should_stop()) {
+            return;
+        }
+        const Ds485_config& c = ds485_config_[side];
+        gripper.Ds485_Config(side, goal->com_port[side], c.id);
+        gripper.Ds485_Set_Angle_Range(side, c.open_angle, c.close_angle);
+        gripper.Ds485_Set_Speed(side, c.default_speed, c.max_speed);
+        gripper.Ds485_Set_Default_PWM(side, c.default_pwm);
+        gripper.Ds485_Set_Detect(side, c.tolerance, c.still_band, c.blocked_samples);
+        gripper.Ds485_Set_Bus_Timing(side, c.gap_ms, c.timeout_ms);
+
+        if (!gripper.Ds485_Init(side) || !gripper.Ds485_Status(side, &rt_status[side])) {
+            result->success = ACTION_FAIL;
+            result->error_message = std::string(side_name[side]) + " ds485 init failed: " +
+                gripper.Ds485_Last_Error(side);
+            RCLCPP_ERROR(logger, "%s", result->error_message.c_str());
+            terminal.abort(result);
+            return;
+        }
+        init_position[side] = rt_status[side].position;
+        init_angle[side] = rt_status[side].angle;
+    }
+
+    // 3. 下发运动指令（位置/力矩/速度均为 0~255，与 Jodell 接口一致）
+    for (int side = 0; side < 2; side++) {
+        if (!use_side[side]) {
+            continue;
+        }
+        if (should_stop()) {
+            return;
+        }
+        if (!gripper.Ds485_Move_Abs(side, goal->position[side],
+                goal->max_torque[side], goal->speed[side], &moving[side])) {
+            abort_motion(std::string(side_name[side]) + " ds485 move command failed: " +
+                gripper.Ds485_Last_Error(side));
+            return;
+        }
+        gripper.Ds485_Watch_Start(side, gripper.Ds485_Target_Angle(side), rt_status[side].angle);
+    }
+
+    // 4. 轮询直到全部到位/夹到物体，或取消、超时、故障
+    while (true) {
+        rclcpp::sleep_for(std::chrono::milliseconds(20));
+
+        if (should_stop()) {
+            return;
+        }
+
+        for (int side = 0; side < 2; side++) {
+            if (done[side]) {
+                continue;
+            }
+            if (!gripper.Ds485_Status(side, &rt_status[side])) {
+                abort_motion(std::string(side_name[side]) +
+                    " ds485 status failed while moving: " + gripper.Ds485_Last_Error(side));
+                return;
+            }
+            move_state[side] = gripper.Ds485_Watch_Update(side, rt_status[side]);
+            if (move_state[side] == DS485_MOVE_FAULT) {
+                // 保护已经触发，不给故障侧重新上力，只停仍在运动的另一侧。
+                moving[side] = false;
+                abort_motion(std::string(side_name[side]) + " ds485 fault: " +
+                    gripper.Ds485_Last_Error(side));
+                return;
+            }
+            if (move_state[side] == DS485_MOVE_ARRIVED || move_state[side] == DS485_MOVE_BLOCKED) {
+                done[side] = true;
+                moving[side] = false;
+            }
+        }
+
+        if (done[GRIPPER_LEFT] && done[GRIPPER_RIGHT]) {
+            break;
+        }
+
+        // 反馈：位置/力矩/速度换算为 0~255，进度取参与侧的平均值
+        float progress_sum = 0.0F;
+        int progress_count = 0;
+        for (int side = 0; side < 2; side++) {
+            if (!use_side[side]) {
+                continue;
+            }
+            feedback->current_position[side] = rt_status[side].position;
+            feedback->current_torque[side] = ds485_pwm_to_255(rt_status[side].pwm);
+            feedback->current_speed[side] = ds485_speed_to_255(
+                rt_status[side].speed, gripper.Ds485_Get_Config(side).max_speed);
+            progress_sum += get_progress_1000(
+                init_position[side], goal->position[side], rt_status[side].position);
+            progress_count++;
+        }
+        feedback->progress_rate = progress_sum / progress_count;
+        if (auto node = lockNode(__func__)) {
+            feedback->header.stamp = node->now();
+        }
+        goal_handle->publish_feedback(feedback);
+    }
+
+    // 5. 完成：到位或夹到物体都算成功
+    for (int side = 0; side < 2; side++) {
+        if (use_side[side] && move_state[side] == DS485_MOVE_BLOCKED) {
+            if (std::abs(static_cast<int64_t>(rt_status[side].angle) - init_angle[side]) <= ds485_config_[side].still_band)
+                RCLCPP_WARN(logger, "%s ds485 gripper barely moved; already holding an object or insufficient torque", side_name[side]);
+            RCLCPP_INFO(logger,
+                "%s ds485 gripper stopped at position %d before target %d (object gripped)",
+                side_name[side], static_cast<int>(rt_status[side].position),
+                static_cast<int>(goal->position[side]));
+        }
+    }
+    result->success = ACTION_SUCCESS;
+    result->error_message.clear();
+    ds485_fill_result(*result, rt_status, use_side);
+    terminal.succeed(result);
+}
+
 void DualArmModule::heart_beat_cb()
 {
     //每隔一秒发送一次心跳报文

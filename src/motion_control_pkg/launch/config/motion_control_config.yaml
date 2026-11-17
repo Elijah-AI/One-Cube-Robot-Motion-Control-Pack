@@ -1,5 +1,18 @@
 /motion_control_ns/motion_control:
   ros__parameters:
+    # DS485: left A / right B; ControlGripper COM1=2, COM2=3.
+    gripper_type: jodell
+    ds485_gripper_id: [1, 1]
+    ds485_gripper_open_deg: [0.0, 0.0]
+    ds485_gripper_close_deg: [0.0, 0.0]
+    ds485_gripper_default_pwm: 1000
+    ds485_gripper_default_speed: 0
+    ds485_gripper_max_speed: 0
+    ds485_gripper_tolerance_deg: 1.0
+    ds485_gripper_still_band_deg: 0.3
+    ds485_gripper_blocked_samples: 10
+    ds485_gripper_gap_ms: 10
+    ds485_gripper_timeout_ms: 300
 
     left_arm_joint_zero: [0, 0, 0, 0, 0, 0, 0]
 

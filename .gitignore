@@ -163,6 +163,8 @@ Testing/
 !/src/motion_control_pkg/test/shutdown_signal_test.cpp
 !/src/motion_control_pkg/test/robot_tf_test.py
 !/src/motion_control_pkg/test/waist_leg_trajectory_test.cpp
+!/src/motion_control_pkg/test/ds485/
+!/src/motion_control_pkg/test/ds485/**
 
 # Regression sources referenced by the deployed interface/task CMake files.
 !/src/com_interfaces/test/
