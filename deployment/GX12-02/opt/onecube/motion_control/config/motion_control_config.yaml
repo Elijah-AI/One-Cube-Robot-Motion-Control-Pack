@@ -1,10 +1,10 @@
 /motion_control_ns/motion_control:
   ros__parameters:
-    # DS485: left A / right B; ControlGripper COM1=2, COM2=3.
+    # DS485 shared SDK: left A / right B, fixed COM1=2; topic + Action.
     gripper_type: ds485
     ds485_gripper_config: /opt/onecube/motion_control/config/ds485_gripper.yaml
 
-    wbc_static_com_enabled: true
+    wbc_static_com_enabled: false
 
     wbc_dynamic_zmp_enabled: false
 
@@ -46,10 +46,10 @@
     tf_lookup_timeout_sec: 0.2
 
     left_arm_tool: gripper  #根据机器人实际配置修改 0.2205
-    left_arm_tool_tf: [0.115, 0.0205, 0.321, 0.5, -0.5, 0.5, 0.5]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
+    left_arm_tool_tf: [0.0115, 0.0205, 0.321, 0.5, -0.5, 0.5, 0.5]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
     
     right_arm_tool: gripper    #根据机器人实际配置修改
-    right_arm_tool_tf: [0.115, -0.0205, 0.321, -0.5, -0.5, -0.5, 0.5]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
+    right_arm_tool_tf: [0.0115, -0.0205, 0.321, -0.5, -0.5, -0.5, 0.5]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
 
     # control_mode=1 时，MoveJoints 使用关节阻抗，MovePose 使用笛卡尔阻抗。
     left_joint_impedance_stiffness: [5.0, 5.0, 5.0, 4.0, 3.0, 3.0, 2.0]

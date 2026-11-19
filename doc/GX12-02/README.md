@@ -6,7 +6,7 @@
 
 以 `.29` 的共享 MarvinSDK 运控为集成目标，合入 `ds485_ws@93f0b749`。默认位置策略保留 `ControlGripper`，恒定 PWM 策略使用 `/ds485/servo/set_torque`。现场夹爪配置按侧保存，左开/闭为 0.2°/98.1°，右开/闭为 57.9°/167.6°。[GX12-02 夹爪配置](../../deployment/GX12-02/opt/onecube/motion_control/config/ds485_gripper.yaml)
 
-`keep_grasp_rigid` 支持腰腿 MoveJ 和单目标主从 MoveP。按抓取起姿保留左右手相对位姿和料框倾角，允许平移和偏航，标准启动默认关闭静态 COM。右手主导的 WBC 仿真结果、参数与指令见[运控指令与参数](../MOTION_COMMANDS_AND_PARAMETERS.md)。
+`keep_grasp_rigid` 支持腰腿 MoveJ 和单目标主从 MoveP。按抓取起姿保留左右手相对位姿和料框倾角，允许平移和偏航，标准启动默认关闭静态 COM。本次仿真使用现场左右法兰到 TCP 的 X 偏移 0.0115 m。部署目录中的两份 YAML 与 `.29` 现场文件逐字节一致。右手主导的 WBC 仿真结果、参数与指令见[运控指令与参数](../MOTION_COMMANDS_AND_PARAMETERS.md)。
 
 ## 2026-11-17：DS485 夹爪
 
