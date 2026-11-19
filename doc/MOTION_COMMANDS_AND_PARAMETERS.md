@@ -580,7 +580,7 @@ speed: 0.1
 timeout_ms: 120000
 ```
 
-从该起姿单发目标，轨迹时长 5.096 s，右手终点位置误差 0.0136 mm，全程双手最大相对位置误差 0.1205 mm。这是固定底盘的 MuJoCo 运动学回放，夹持力和带载接触需实机测量。本例中头部俯仰连杆原点的终高在腰腿 MoveJ 下为 1.486 m，在右手 WBC MoveP 下为 1.334 m。WBC 按 TCP 目标选择腰腿终姿。需要复现指定腰腿角度时，可使用刚性 MoveJ。更多用法与实测反馈条件见[刚性抓取说明](RIGID_GRASP.md)。
+从该起姿单发目标，轨迹时长 5.096 s，右手终点位置误差 0.0136 mm，全程双手最大相对位置误差 0.1205 mm。这是固定底盘的 MuJoCo 运动学回放，夹持力和带载接触需实机测量。本例中头部俯仰连杆原点的终高在腰腿 MoveJ 下为 1.486 m，在右手 WBC MoveP 下为 1.334 m。WBC 按 TCP 目标选择腰腿终姿。需要复现指定腰腿角度时，可使用刚性 MoveJ。[MoveJ 与右手 WBC MoveP 的 MuJoCo 对照视频](GX12-02/rigid-grasp-right-wbc-movep.mp4) · [刚性抓取说明](RIGID_GRASP.md)
 
 ## 5. ControlGripper 与 ControlSuck
 
