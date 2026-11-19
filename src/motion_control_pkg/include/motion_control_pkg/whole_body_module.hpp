@@ -62,8 +62,8 @@ private:
     double balance_age_{.15}, balance_skew_{.06};
     template<class Action> void start_execution(std::shared_ptr<rclcpp_action::ServerGoalHandle<Action>> goal_handle);
     template<class Action> void execution_loop(std::shared_ptr<rclcpp_action::ServerGoalHandle<Action>> goal_handle);
-    bool read_leg_compensation_state(std::vector<double>& q,std::string& error,
-                                    const std::vector<double>* expected_start=nullptr) const;
+    bool read_rigid_start_state(std::vector<double>& q, std::string& error, bool hold_head,
+                                const std::vector<double>* expected_start=nullptr) const;
 
     bool normalize_target(
         const geometry_msgs::msg::PoseStamped& input,

@@ -11,20 +11,70 @@ namespace {
 void check(bool condition, const std::string& message) {
   if (!condition) throw std::runtime_error(message);
 }
-task_cfg::MoveJointsParam parse(const YAML::Node& params, const std::string& file, bool expected=true) {
+task_cfg::AtomicAction parseAction(const std::string& type, const YAML::Node& params,
+                                  const std::string& file, bool expected=true) {
   YAML::Node root;
   root["action_sequencenum"]=1;
   YAML::Node action;
-  action["action_type"]="move_joints";
+  action["action_type"]=type;
   action["params"]=params;
   root["action_sequence1"].push_back(action);
   {std::ofstream stream(file); stream << root;}
   task_cfg::TaskConfigParser parser;
   task_cfg::GlobalConfig config{};
   const bool loaded=parser.load_task_config(file,config,"offline");
-  check(loaded==expected,"Body mode YAML validation mismatch");
+  check(loaded==expected,type+" YAML validation mismatch");
   if (!loaded) return {};
-  return config.task_dict.at("offline").action_seq.at(0).at(0).move_joints_param;
+  return config.task_dict.at("offline").action_seq.at(0).at(0);
+}
+task_cfg::MoveJointsParam parse(const YAML::Node& params, const std::string& file, bool expected=true) {
+  return parseAction("move_joints",params,file,expected).move_joints_param;
+}
+void testLeaderPose(const std::string& file) {
+  using namespace std::chrono_literals;
+  using Action=com_interfaces::action::MovePose;
+  const auto base=YAML::Load("{use_config_pose: true, use_force_control: false, target_pose: [0.4, 0.1, 0.8, 0, 0, 0, 1], bound_size: [0, 0, 0], frame_id: base_link, speed: 0.2, timeout_ms: 30000, keep_grasp_rigid: true, grasp_position_tolerance_m: 0.002}");
+  auto server_node=std::make_shared<rclcpp::Node>("offline_rigid_pose_server");
+  std::shared_ptr<const Action::Goal> captured;
+  auto server=rclcpp_action::create_server<Action>(server_node,"/offline/leader",
+      [](const auto&,auto){return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;},
+      [](auto){return rclcpp_action::CancelResponse::ACCEPT;},
+      [&](auto handle){captured=handle->get_goal();auto result=std::make_shared<Action::Result>();
+                       result->success=true;handle->succeed(result);});
+  std::vector<std::string> args{"--ros-args"};
+  for (const auto* endpoint:{"send_goal","get_result","cancel_goal","feedback","status"}) {
+    args.push_back("-r");
+    args.push_back(std::string("/Control/move_pose/_action/")+endpoint+":=/offline/leader/_action/"+endpoint);
+  }
+  auto node=std::make_shared<rclcpp::Node>("offline_rigid_pose_client",rclcpp::NodeOptions().arguments(args));
+  task_act::TaskActionClient client(node);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(server_node);executor.add_node(node);
+  for (const int id:{0,1,5,6}) {
+    auto yaml=YAML::Clone(base);yaml["arm_id"]=id;
+    const auto pose=parseAction("move_pose",yaml,file).arm_param;
+    auto invalid=YAML::Clone(yaml);invalid["enable_move_line"]=true;
+    parseAction("move_pose",invalid,file,false);
+    auto compound=YAML::Load("{sub_actions: [{action_type: move_pose}, {action_type: move_pose}]}");
+    compound["sub_actions"][0]["params"]=yaml;
+    compound["sub_actions"][1]["params"]=yaml;
+    parseAction("move_compound",compound,file,false);
+    captured.reset();
+    auto sent=std::async(std::launch::async,[&]{return client.call_move_pose("leader",pose,{},{}, "base_link");});
+    const auto deadline=std::chrono::steady_clock::now()+8s;
+    while (!captured || sent.wait_for(0s)!=std::future_status::ready ||
+           client.get_context("default").state!=task_act::ActionRunState::SUCCESS) {
+      executor.spin_some();
+      check(std::chrono::steady_clock::now()<deadline,"leader MoveP wire capture timeout");
+      std::this_thread::sleep_for(2ms);
+    }
+    check(sent.get()==task_act::ActionCallResult::SUCCESS && captured->arm_id==id &&
+          captured->keep_grasp_rigid && captured->grasp_position_tolerance_m==.002 &&
+          captured->target_pose.header.frame_id=="base_link" && std::abs(captured->target_pose.pose.position.x-.4)<1e-6 &&
+          captured->left_target_pose.header.frame_id.empty() && captured->right_target_pose.header.frame_id.empty(),
+          "leader Goal did not contain exactly one configured TCP target");
+  }
+  std::cout<<"PASS four single-target MoveP YAML/ROS Action modes and compound conflicts\n";
 }
 }
 int main(int argc,char** argv) {
@@ -50,6 +100,14 @@ int main(int argc,char** argv) {
     legacy["position"]=YAML::Load("[-1,2.2,-1.2,0]");
     cases.push_back(parse(legacy,file));
     check(cases.back().leg_motion_mode==0 && cases.back().joint_name.size()==4,"Legacy YAML behavior changed");
+    auto defaults=YAML::Clone(legacy);
+    defaults.remove("grasp_position_tolerance_m");
+    cases.push_back(parse(defaults,file));
+    check(cases.back().grasp_position_tolerance_m==.002,"LEG YAML default must be 2 mm");
+    auto tighter=YAML::Clone(legacy);
+    tighter["grasp_position_tolerance_m"]=.001;
+    cases.push_back(parse(tighter,file));
+    check(cases.back().grasp_position_tolerance_m==.001,"explicit 1 mm setting lost");
     for(const auto* names:{"[body_joint]","[leg_joint1,leg_joint2]","[leg_joint1,leg_joint2,body_joint]"}) {
       auto yaml=YAML::Clone(base);yaml["joint_name"]=YAML::Load(names);
       for(std::size_t i=0;i<yaml["joint_name"].size();++i) yaml["position"].push_back(.1);
@@ -82,6 +140,7 @@ int main(int argc,char** argv) {
       parse(invalid,file,false);
     }
     rclcpp::init(argc,argv);
+    testLeaderPose(file);
     using Action=com_interfaces::action::MoveJoints;
     using Handle=rclcpp_action::ServerGoalHandle<Action>;
     rclcpp::executors::SingleThreadedExecutor executor;
@@ -157,7 +216,7 @@ int main(int argc,char** argv) {
     }
     executor.remove_node(server_node);
     rclcpp::shutdown();
-    std::cout << "PASS: 10 YAML/ROS Action contracts, 15 invalid YAML policies, isolated mock server; no hardware\n";
+    std::cout << "PASS " << cases.size() << " YAML/ROS Action contracts and 15 invalid YAML cases\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

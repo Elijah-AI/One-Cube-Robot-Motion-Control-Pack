@@ -26,11 +26,21 @@
 namespace
 {
 template<class Goal> motion_control_pkg::motion::RigidGraspOptions graspOptions(const Goal& goal) {
-    return {goal.keep_grasp_rigid,goal.grasp_position_tolerance_m,goal.grasp_orientation_tolerance_rad};
+    using motion_control_pkg::motion::GraspReference;
+    const auto reference = (std::is_same_v<Goal, MoveJoints::Goal> || com_interfaces::isRigidGraspLeaderGoal(goal))
+        ? GraspReference::MeasuredStart : GraspReference::TopSuction;
+    return {goal.keep_grasp_rigid,goal.grasp_position_tolerance_m,goal.grasp_orientation_tolerance_rad,reference};
 }
 Eigen::Isometry3d graspFrame(const Eigen::Isometry3d& left,const Eigen::Isometry3d& right) {
     Eigen::Isometry3d frame=left;
     frame.translation()=.5*(left.translation()+right.translation());return frame;
+}
+
+bool tcpWithinTolerance(const Eigen::Isometry3d& actual, const Eigen::Isometry3d& target,
+                        double position_tolerance) {
+    return (actual.translation() - target.translation()).norm() <= position_tolerance &&
+        Eigen::Quaterniond(actual.rotation()).angularDistance(Eigen::Quaterniond(target.rotation())) <=
+        motion_control_pkg::execution::kGoalRotationToleranceRad;
 }
 
 class LegRigidStateGuard {
@@ -102,7 +112,8 @@ public:
         return arms_->get_joint_motion_limits(l,v,a,j);
     }
     bool prepare_dispatch(const Path& l,const Path& r,const Path& p,std::uint8_t mode,std::string& e) override {
-        return arms_->prepare_preplanned_dispatch(l,r,mode,e) && legs_->prepare_preplanned_dispatch(p,e);
+        return arms_->prepare_preplanned_dispatch(l,r,mode,e) &&
+            (p.empty() || legs_->prepare_preplanned_dispatch(p,e));
     }
     bool execute_arms(const Path&,const Path&,std::uint8_t,Time start,const Cancel& cancel,std::string& e) override {
         return arms_->dispatch_preplanned(start,cancel,e);
@@ -240,6 +251,71 @@ bool makeWholeBodyActiveWaypoint(
     }
     active_q.insert(active_q.end(), leg_q.begin(), leg_q.end());
     return !active_q.empty();
+}
+
+// Each Cartesian substep shares the measured leader-to-follower transform.
+// Both IK modes return the same full-model path for projection and retiming.
+bool planRigidLeaderSegment(MiracleMAlgo& algo, const MovePose::Goal& goal,
+    const Eigen::Isometry3d& begin, const Eigen::Isometry3d& end,
+    const Eigen::Isometry3d& leader_to_follower, const Eigen::Isometry3d& left_tool,
+    const Eigen::Isometry3d& right_tool, std::vector<std::vector<double>>& path, std::string& error)
+{
+    const bool left_leads = goal.arm_id == ARM_LEFT || goal.arm_id == WHOLE_BODY_LEFT;
+    const bool arms_only = goal.arm_id <= ARM_RIGHT;
+    if (begin.matrix().isApprox(end.matrix(), 1e-12)) return true;
+    const auto start_q = path.back();
+    auto q = start_q;
+    std::vector<double> fixed_legs, arm_goal;
+    if (arms_only && !algo.extractLegJoints(start_q, fixed_legs)) {
+        error = "cannot read fixed leg/waist coordinates"; return false;
+    }
+    const auto samples = motion_control_pkg::motion::computeCartesianLineSegmentCount(begin, end, .05, .2);
+    if (!samples.valid) {error = samples.error_message; return false;}
+    std::vector<std::vector<double>> segment;
+    for (std::size_t i = 1; i <= samples.segments; ++i) {
+        const auto master = interpolatePose(begin, end, static_cast<double>(i) / samples.segments);
+        const Eigen::Isometry3d follower = master * leader_to_follower;
+        const Eigen::Isometry3d left_end = (left_leads ? master : follower) * left_tool.inverse();
+        const Eigen::Isometry3d right_end = (left_leads ? follower : master) * right_tool.inverse();
+        if (arms_only) {
+            if (!algo.solveDualArmCartesianIk(q, left_end, right_end, arm_goal)) {
+                error = "rigid MoveP fixed-leg dual-arm IK failed"; return false;
+            }
+            auto active = arm_goal;
+            active.insert(active.end(), fixed_legs.begin(), fixed_legs.end());
+            if (!algo.mergeWholeBodyJoints(start_q, true, true, active, q)) {
+                error = "cannot rebuild rigid MoveP fixed-leg solution"; return false;
+            }
+        } else {
+            Eigen::VectorXd next;
+            if (!algo.solveWholeBodyIK(algo.toEigenConfig(q), left_end, right_end, next,
+                    {1.0, 1.0, 1.0, .2}, 0.0, 10.0, 5, false, goal.whole_body_waist_only)) {
+                error = "rigid MoveP coupled whole-body IK failed"; return false;
+            }
+            if (goal.enable_collision_check && i == samples.segments && !algo.isFullQValid(next)) {
+                Eigen::VectorXd corrected;
+                if (!algo.solveWholeBodyIK(next, left_end, right_end, corrected,
+                        {1.0, 1.0, 1.0, .2}, 0.0, 5.0, 15, true, goal.whole_body_waist_only)) {
+                    error = "rigid MoveP could not find a collision-free whole-body target"; return false;
+                }
+                next = std::move(corrected);
+            }
+            q.assign(next.data(), next.data() + next.size());
+        }
+        segment.push_back(q);
+    }
+    if (goal.enable_collision_check && !segment.empty()) {
+        std::vector<std::vector<double>> collision_path;
+        const bool found = arms_only ? algo.planDualArmJointSpace(start_q, arm_goal, collision_path) :
+            algo.planWholeBodyJointSpace(start_q, q, true, true, collision_path, goal.whole_body_waist_only);
+        if (!found || collision_path.size() < 2) {
+            error = "rigid MoveP collision planning failed"; return false;
+        }
+        path.insert(path.end(), collision_path.begin() + 1, collision_path.end());
+    } else {
+        path.insert(path.end(), segment.begin(), segment.end());
+    }
+    return true;
 }
 
 bool splitWholeBodyActiveTrajectory(
@@ -426,20 +502,20 @@ WholeBodyModule::~WholeBodyModule()
     }
 }
 
-bool WholeBodyModule::read_leg_compensation_state(std::vector<double>& q,std::string& error,
+bool WholeBodyModule::read_rigid_start_state(std::vector<double>& q,std::string& error, bool hold_head,
     const std::vector<double>* expected_start) const {
     auto node=node_.lock(); sensor_msgs::msg::JointState state;
     if(!node || !backend_ || !backend_->read_body_state(state,error) || !read_balance_state(q,error)) return false;
     const double stamp=rclcpp::Time(state.header.stamp).seconds(),now=node->now().seconds();
     if(stamp<=0 || stamp>now || now-stamp>.1 || state.name.size()!=20 ||
        state.position.size()!=20 || state.velocity.size()!=20) {
-        error="rigid LEG MoveJ needs fresh complete measured arm/leg/head state";return false;
+        error="rigid grasp needs fresh complete measured arm/leg/head state";return false;
     }
     std::map<std::string,std::size_t> indices;
     for(std::size_t i=0;i<20;++i)
         if(!indices.emplace(state.name[i],i).second || !std::isfinite(state.position[i]) ||
-           !std::isfinite(state.velocity[i]) || std::abs(state.velocity[i])>.02) {
-            error="rigid LEG MoveJ must start with finite stationary joints";return false;
+           !std::isfinite(state.velocity[i])) {
+            error="invalid rigid grasp measured state";return false;
         }
     std::vector<std::string> names{"leg_joint1","leg_joint2","leg_joint3","body_joint","head_yaw_joint","head_pitch_joint"};
     for(const auto* side:{"_L","_R"}) for(int j=1;j<=7;++j) names.push_back("Joint"+std::to_string(j)+side);
@@ -447,9 +523,14 @@ bool WholeBodyModule::read_leg_compensation_state(std::vector<double>& q,std::st
     for(const auto& name:names) {
         if(!indices.count(name) || !model.existJointName(name)) {error="missing measured joint "+name;return false;}
         const auto index=model.joints[model.getJointId(name)].idx_q();
-        q.at(index)=state.position.at(indices.at(name));
+        const auto sample=indices.at(name);
+        q.at(index)=state.position.at(sample);
+        if (!hold_head && (name=="head_yaw_joint" || name=="head_pitch_joint")) continue;
+        if (std::abs(state.velocity[sample])>.02) {
+            error="rigid grasp must start with stationary joints: "+name;return false;
+        }
         if(expected_start && std::abs(q[index]-expected_start->at(index))>.01) {
-            error="rigid LEG MoveJ start changed during planning: "+name;return false;
+            error="rigid grasp start changed during planning: "+name;return false;
         }
     }
     return true;
@@ -638,9 +719,10 @@ void WholeBodyModule::start_execution(std::shared_ptr<rclcpp_action::ServerGoalH
         return;
     }
     constexpr bool leg_goal=std::is_same_v<Action,MoveJoints>;
-    const bool need_left = goal && (leg_goal || goal->arm_id == WHOLE_BODY_LEFT ||
+    const bool leader = goal && com_interfaces::isRigidGraspLeaderGoal(*goal);
+    const bool need_left = goal && (leg_goal || leader || goal->arm_id == WHOLE_BODY_LEFT ||
         goal->arm_id == WHOLE_BODY_BOTH);
-    const bool need_right = goal && (leg_goal || goal->arm_id == WHOLE_BODY_RIGHT ||
+    const bool need_right = goal && (leg_goal || leader || goal->arm_id == WHOLE_BODY_RIGHT ||
         goal->arm_id == WHOLE_BODY_BOTH);
     if (!goal || (!need_left && !need_right) || (leg_goal && (goal->arm_id!=LEG || !goal->keep_grasp_rigid))) {
         auto result = std::make_shared<typename Action::Result>();
@@ -789,7 +871,8 @@ bool WholeBodyModule::plan_trajectory(
     right_path.clear();
     leg_path.clear();
     if (reference) *reference = {};
-    if (!goal || (goal->arm_id!=WHOLE_BODY_LEFT && goal->arm_id!=WHOLE_BODY_RIGHT && goal->arm_id!=WHOLE_BODY_BOTH)) {
+    const bool leader = goal && com_interfaces::isRigidGraspLeaderGoal(*goal);
+    if (!goal || (!leader && goal->arm_id!=WHOLE_BODY_LEFT && goal->arm_id!=WHOLE_BODY_RIGHT && goal->arm_id!=WHOLE_BODY_BOTH)) {
         error_message = "unsupported whole-body planning goal"; return false;
     }
     if (!com_interfaces::validatePrecisionArrivalGoal(goal->precision_arrival,
@@ -809,45 +892,72 @@ bool WholeBodyModule::plan_trajectory(
         goal->env_point_cloud, error_message);
     if (!collision_scene) return false;
 
-    const bool use_left = goal->arm_id == WHOLE_BODY_LEFT ||
+    const bool left_leader = goal->arm_id == ARM_LEFT || goal->arm_id == WHOLE_BODY_LEFT;
+    const bool arms_only = leader && goal->arm_id <= ARM_RIGHT;
+    if (leader && (goal->via_poses.size() > 64 || (arms_only && goal->whole_body_waist_only))) {
+        error_message = "rigid MoveP allows up to 64 via poses and waist-only selection in WBC mode"; return false;
+    }
+    const bool use_left = leader || goal->arm_id == WHOLE_BODY_LEFT ||
         goal->arm_id == WHOLE_BODY_BOTH;
-    const bool use_right = goal->arm_id == WHOLE_BODY_RIGHT ||
+    const bool use_right = leader || goal->arm_id == WHOLE_BODY_RIGHT ||
         goal->arm_id == WHOLE_BODY_BOTH;
     motion_control_pkg::motion::TcpLevelPlan level(goal->keep_tcp_level,
         miracle_algo_->getModel(), start_q, use_left, use_right, true,
         left_model_end_to_tool_tcp_, right_model_end_to_tool_tcp_, goal->tcp_level_tolerance_rad,graspOptions(*goal));
     if (!level.initialize(error_message)) return false;
     std::vector<double> frozen_leg_q;
-    if (goal->whole_body_waist_only &&
+    if ((arms_only || goal->whole_body_waist_only) &&
         (!miracle_algo_->extractLegJoints(start_q, frozen_leg_q) || frozen_leg_q.size() != 4U)) {
         error_message = "cannot obtain waist-only starting leg configuration";
         return false;
     }
     geometry_msgs::msg::PoseStamped left_target;
     geometry_msgs::msg::PoseStamped right_target;
-    if (use_left && !normalize_target(goal->arm_id == WHOLE_BODY_BOTH ?
+    const bool input_left = use_left && (!leader || left_leader);
+    const bool input_right = use_right && (!leader || !left_leader);
+    if (input_left && !normalize_target(goal->arm_id == WHOLE_BODY_BOTH ?
         goal->left_target_pose : goal->target_pose, start_q, left_target,
         error_message)) {
         return false;
     }
-    if (use_right && !normalize_target(goal->arm_id == WHOLE_BODY_BOTH ?
+    if (input_right && !normalize_target(goal->arm_id == WHOLE_BODY_BOTH ?
         goal->right_target_pose : goal->target_pose, start_q, right_target,
         error_message)) {
         return false;
     }
-    if (use_left) {
+    if (input_left) {
         if (goal->arm_id == WHOLE_BODY_BOTH) {
             addBoundOffset(left_target.pose, goal->left_bound_size);
         } else {
             addBoundOffset(left_target.pose, goal->bound_size);
         }
     }
-    if (use_right) {
+    if (input_right) {
         if (goal->arm_id == WHOLE_BODY_BOTH) {
             addBoundOffset(right_target.pose, goal->right_bound_size);
         } else {
             addBoundOffset(right_target.pose, goal->bound_size);
         }
+    }
+
+    Eigen::Isometry3d left_start = Eigen::Isometry3d::Identity();
+    Eigen::Isometry3d right_start = Eigen::Isometry3d::Identity();
+    if ((use_left && !miracle_algo_->getFramePoseAtConfiguration(
+            "base_link", "gripper_base_l_link", start_q, left_start)) ||
+        (use_right && !miracle_algo_->getFramePoseAtConfiguration(
+            "base_link", "gripper_base_r_link", start_q, right_start))) {
+        error_message = "failed to obtain arm start pose"; return false;
+    }
+    Eigen::Isometry3d leader_to_follower = Eigen::Isometry3d::Identity();
+    if (leader) {
+        const Eigen::Isometry3d left_tcp = left_start * left_model_end_to_tool_tcp_;
+        const Eigen::Isometry3d right_tcp = right_start * right_model_end_to_tool_tcp_;
+        leader_to_follower = left_leader ? left_tcp.inverse() * right_tcp : right_tcp.inverse() * left_tcp;
+        const auto& command = left_leader ? left_target : right_target;
+        auto& follower = left_leader ? right_target : left_target;
+        follower.header = command.header;
+        follower.pose = motion_control_pkg::kinematics::isometryToPose(
+            motion_control_pkg::kinematics::poseToIsometry(command.pose) * leader_to_follower);
     }
 
     // 记录规划系下的目标 TCP 位姿，供执行结束后计算最终误差。
@@ -894,18 +1004,6 @@ bool WholeBodyModule::plan_trajectory(
         (use_right && !level.target(false, right_root_goal * right_model_end_to_tool_tcp_, error_message))) return false;
     if(!level.targets(left_root_goal*left_model_end_to_tool_tcp_,
                       right_root_goal*right_model_end_to_tool_tcp_,error_message)) return false;
-    Eigen::Isometry3d left_start = Eigen::Isometry3d::Identity();
-    Eigen::Isometry3d right_start = Eigen::Isometry3d::Identity();
-    if (use_left && !miracle_algo_->getFramePoseAtConfiguration(
-        "base_link", "gripper_base_l_link", start_q, left_start)) {
-        error_message = "failed to obtain left arm start pose";
-        return false;
-    }
-    if (use_right && !miracle_algo_->getFramePoseAtConfiguration(
-        "base_link", "gripper_base_r_link", start_q, right_start)) {
-        error_message = "failed to obtain right arm start pose";
-        return false;
-    }
 
     if (!std::isfinite(goal->speed) || goal->speed <= 0 || goal->speed > 1 ||
         !std::isfinite(goal->acceleration_scale) || goal->acceleration_scale < 0 || goal->acceleration_scale > 1 ||
@@ -927,7 +1025,42 @@ bool WholeBodyModule::plan_trajectory(
             object*object_right*right_model_end_to_tool_tcp_.inverse()};
     };
 
-    if (goal->enable_move_line) {
+    std::vector<std::vector<double>> pinned;
+    std::vector<Eigen::Isometry3d> via_tcp;
+    if (leader) {
+        full_waypoints.push_back(start_q);
+        const auto& tool = left_leader ? left_model_end_to_tool_tcp_ : right_model_end_to_tool_tcp_;
+        Eigen::Isometry3d begin = (left_leader ? left_start : right_start) * tool;
+        for (std::size_t i = 0; i <= goal->via_poses.size(); ++i) {
+            const bool via = i < goal->via_poses.size();
+            Eigen::Isometry3d end = (left_leader ? left_root_goal : right_root_goal) * tool;
+            if (via) {
+                geometry_msgs::msg::PoseStamped normalized;
+                Eigen::Isometry3d root_end;
+                if (!normalize_target(goal->via_poses[i], start_q, normalized, error_message)) return false;
+                if (!target_to_root(normalized, left_leader, root_end)) {
+                    error_message = "cannot transform rigid MoveP via TCP"; return false;
+                }
+                end = root_end * tool;
+                const Eigen::Isometry3d follower = end * leader_to_follower;
+                if (!level.targets(left_leader ? end : follower, left_leader ? follower : end, error_message))
+                    return false;
+                via_tcp.push_back(end);
+            }
+            if (!planRigidLeaderSegment(*miracle_algo_, *goal, begin, end, leader_to_follower,
+                    left_model_end_to_tool_tcp_, right_model_end_to_tool_tcp_, full_waypoints, error_message))
+                return false;
+            if (via) {
+                std::vector<double> active;
+                if (!makeWholeBodyActiveWaypoint(*miracle_algo_, full_waypoints.back(), true, true, active)) {
+                    error_message = "cannot extract rigid MoveP via waypoint"; return false;
+                }
+                pinned.push_back(std::move(active));
+            }
+            begin = end;
+        }
+        if (full_waypoints.size() == 1) full_waypoints.push_back(start_q);
+    } else if (goal->enable_move_line) {
         // Sample TCP geometry independently of time. Both arms use one path
         // parameter; orientation-only goals receive their own sampling budget.
         std::size_t segments = 1;
@@ -1101,20 +1234,21 @@ bool WholeBodyModule::plan_trajectory(
     // Keep the existing four-axis lower-body wire format: J1/J2/J3 hold the
     // measured start, J4 moves. Never repair a genuinely moving leg trajectory
     // by overwriting it after IK; only remove floating-point interpolation noise.
-    if ((!goal->enable_move_line || goal->keep_grasp_rigid) && !level.project(active_waypoints, error_message)) return false;
+    if ((!goal->enable_move_line || goal->keep_grasp_rigid) && !level.project(active_waypoints, error_message, pinned)) return false;
     const auto enforce_frozen_legs = [&](std::vector<std::vector<double>>& path) {
-        if (!goal->whole_body_waist_only) return true;
+        if (!arms_only && !goal->whole_body_waist_only) return true;
         const std::size_t offset = (use_left ? 7U : 0U) + (use_right ? 7U : 0U);
         for (auto& sample : path) {
             if (sample.size() != offset + 4U) {
                 error_message = "invalid waist-only trajectory dimensions";
                 return false;
             }
-            for (std::size_t k = 0; k < 3U; ++k) {
+            const std::size_t held_joints = arms_only ? 4U : 3U;
+            for (std::size_t k = 0; k < held_joints; ++k) {
                 if (!std::isfinite(sample[offset + k]) ||
                     !std::isfinite(frozen_leg_q[k]) ||
                     std::abs(sample[offset + k] - frozen_leg_q[k]) > 1e-10) {
-                    error_message = "waist-only trajectory changes leg_joint1/2/3";
+                    error_message = "trajectory changes a fixed leg/waist joint";
                     return false;
                 }
                 sample[offset + k] = frozen_leg_q[k];
@@ -1288,6 +1422,7 @@ bool WholeBodyModule::plan_trajectory(
             velocity_limits, acceleration_limits, jerk_limits, error_message)) return false;
     if (!level.validate(active_trajectory, error_message)) return false;
     std::vector<std::vector<double>> balance_path;
+    std::size_t next_via = 0;
     for (const auto& active_q : active_trajectory) {
         std::vector<double> full_q;
         if (!miracle_algo_->mergeWholeBodyJoints(start_q, use_left, use_right, active_q, full_q) ||
@@ -1300,6 +1435,29 @@ bool WholeBodyModule::plan_trajectory(
             if (!std::isfinite(full_q[j]) || full_q[j] < model.lowerPositionLimit[j] - 1e-8 ||
                 full_q[j] > model.upperPositionLimit[j] + 1e-8) {
                 error_message = "retimed whole-body trajectory violates URDF position limits"; return false;
+            }
+        }
+        if (next_via < via_tcp.size()) {
+            Eigen::Isometry3d actual;
+            if (!miracle_algo_->getFramePoseAtConfiguration("base_link",
+                    left_leader ? "gripper_base_l_link" : "gripper_base_r_link", full_q, actual)) {
+                error_message = "cannot validate rigid MoveP via FK"; return false;
+            }
+            actual = actual * (left_leader ? left_model_end_to_tool_tcp_ : right_model_end_to_tool_tcp_);
+            while (next_via < via_tcp.size() &&
+                   tcpWithinTolerance(actual, via_tcp[next_via], motion_control_pkg::motion::kCartesianLinePositionToleranceMeters))
+                ++next_via;
+        }
+        if (leader && balance_path.size() + 1 == active_trajectory.size()) {
+            for (bool left : {true, false}) {
+                Eigen::Isometry3d end;
+                const auto& tool = left ? left_model_end_to_tool_tcp_ : right_model_end_to_tool_tcp_;
+                if (!miracle_algo_->getFramePoseAtConfiguration("base_link",
+                        left ? "gripper_base_l_link" : "gripper_base_r_link", full_q, end) ||
+                    !tcpWithinTolerance(end * tool, (left ? left_root_goal : right_root_goal) * tool,
+                        motion_control_pkg::execution::kGoalTranslationToleranceM)) {
+                    error_message = "retimed rigid MoveP misses a target TCP"; return false;
+                }
             }
         }
         if (goal->enable_move_line && goal->keep_grasp_rigid) {
@@ -1340,6 +1498,9 @@ bool WholeBodyModule::plan_trajectory(
         }
         balance_path.push_back(std::move(full_q));
     }
+    if (next_via != via_tcp.size()) {
+        error_message = "retimed rigid MoveP missed a leader via pose"; return false;
+    }
     if (!miracle_algo_->validateStaticBalancePath(balance_path, error_message,
             motion_control_pkg::execution::kDualArmControlPeriodSeconds)) return false;
     if (!splitWholeBodyActiveTrajectory(
@@ -1365,9 +1526,11 @@ void WholeBodyModule::execution_loop(
     const auto action_precision = motion_control_pkg::execution::actionPrecisionPolicy(
         leg_precision_policy_, goal->precision_arrival);
     constexpr bool leg_goal=std::is_same_v<Action,MoveJoints>;
-    const bool need_left = leg_goal || goal->arm_id == WHOLE_BODY_LEFT ||
+    const bool leader = com_interfaces::isRigidGraspLeaderGoal(*goal);
+    const bool arms_only = leader && goal->arm_id <= ARM_RIGHT;
+    const bool need_left = leg_goal || leader || goal->arm_id == WHOLE_BODY_LEFT ||
         goal->arm_id == WHOLE_BODY_BOTH;
-    const bool need_right = leg_goal || goal->arm_id == WHOLE_BODY_RIGHT ||
+    const bool need_right = leg_goal || leader || goal->arm_id == WHOLE_BODY_RIGHT ||
         goal->arm_id == WHOLE_BODY_BOTH;
     std::unique_ptr<LegRigidStateGuard> leg_state_guard;
     const auto release_child_resources = [&]() {
@@ -1378,7 +1541,7 @@ void WholeBodyModule::execution_loop(
         if constexpr (leg_goal) backend_->release_head();
     };
     auto result = std::make_shared<typename Action::Result>();
-    motion_control_pkg::execution::MotionSafetyScope safety_scope((need_left?1U:0U)|(need_right?2U:0U)|4U);
+    motion_control_pkg::execution::MotionSafetyScope safety_scope((need_left?1U:0U)|(need_right?2U:0U)|(arms_only?0U:4U));
     result->success = false;
     auto feedback = std::make_shared<typename Action::Feedback>();
     const auto publish_feedback = [&](float progress, const std::string& step,
@@ -1407,7 +1570,7 @@ void WholeBodyModule::execution_loop(
         return;
     }
     std::vector<double> start_q;
-    if (!(leg_goal ? read_leg_compensation_state(start_q,result->error_message) : read_balance_state(start_q,result->error_message))) {
+    if (!((leg_goal || leader) ? read_rigid_start_state(start_q,result->error_message,leg_goal) : read_balance_state(start_q,result->error_message))) {
         if (result->error_message.empty()) result->error_message = "failed to obtain whole-body start state";
         finish_time();
         terminal.abort(result);
@@ -1437,6 +1600,16 @@ void WholeBodyModule::execution_loop(
     } else {
         planned=plan_trajectory(goal,start_q,left_path,right_path,leg_path,planning_error,
             left_target_tcp,right_target_tcp,backend_->needs_reference() ? &reference : nullptr);
+        // Resolve the same start-frame targets used by IK when the planning frame can move with the torso.
+        if (planned && leader) {
+            for (auto* target : {&left_target_tcp, &right_target_tcp}) {
+                Eigen::Isometry3d root;
+                if (!*target || !miracle_algo_->transformPoseToModelRoot(planning_frame_, start_q, **target, root)) {
+                    planned = false; planning_error = "cannot resolve rigid MoveP completion target"; break;
+                }
+                *target = root;
+            }
+        }
     }
     if(!planned) {
         const bool canceled = goal_handle->is_canceling();
@@ -1465,19 +1638,19 @@ void WholeBodyModule::execution_loop(
     }
 
     const auto check_execution_state = [&] {
-        if constexpr (leg_goal) {
+        if (leg_goal || leader) {
             const auto safety=motion_control_pkg::execution::motionSafety();
             if(!safety || !safety->ready(result->error_message)) {
-                if(result->error_message.empty()) result->error_message="rigid LEG measured safety unavailable";
+                if(result->error_message.empty()) result->error_message="rigid grasp measured safety unavailable";
                 return false;
             }
         }
         return check_balance_feedback(start_q,need_left,need_right,false,result->error_message);
     };
     const auto check_start = [&] {
-        if constexpr (leg_goal) {
+        if (leg_goal || leader) {
             std::vector<double> measured;
-            if(!read_leg_compensation_state(measured,result->error_message,&start_q) || !check_execution_state()) return false;
+            if(!read_rigid_start_state(measured,result->error_message,leg_goal,&start_q) || !check_execution_state()) return false;
         }
         return check_balance_feedback(start_q,need_left,need_right,true,result->error_message);
     };
@@ -1505,7 +1678,7 @@ void WholeBodyModule::execution_loop(
         result->error_message = "whole-body motion and settling exceed remaining timeout; no samples sent";
         finish_time(); terminal.abort(result); release_child_resources(); return;
     }
-    publish_feedback(20.0F,"preparing arm and leg trajectories");
+    publish_feedback(20.0F,arms_only ? "preparing synchronized arm trajectories" : "preparing arm and leg trajectories");
     motion_control_pkg::motion::TcpLevelPlan level_monitor(goal->keep_tcp_level,
         miracle_algo_->getModel(), start_q, need_left, need_right, true,
         left_model_end_to_tool_tcp_, right_model_end_to_tool_tcp_, goal->tcp_level_tolerance_rad,graspOptions(*goal));
@@ -1513,7 +1686,9 @@ void WholeBodyModule::execution_loop(
         !level_monitor.startMonitoring(result->error_message)) {
         finish_time(); terminal.abort(result); release_child_resources(); return;
     }
-    if (!backend_->prepare_dispatch(left_path,right_path,leg_path,goal->control_mode,result->error_message)) {
+    // The fixed leg path is a reference for FK and feedback only in arm mode.
+    const decltype(leg_path) no_leg_commands;
+    if (!backend_->prepare_dispatch(left_path,right_path,arms_only ? no_leg_commands : leg_path,goal->control_mode,result->error_message)) {
         finish_time(); terminal.abort(result); release_child_resources(); return;
     }
     if (goal_handle->is_canceling() || (goal->timeout_ms>0 &&
@@ -1530,7 +1705,7 @@ void WholeBodyModule::execution_loop(
         result->error_message = "insufficient timeout after whole-body preparation; no samples sent";
         finish_time(); terminal.abort(result); release_child_resources(); return;
     }
-    publish_feedback(30.0F, "dispatching preplanned arm and leg trajectories");
+    publish_feedback(30.0F, arms_only ? "dispatching both arms" : "dispatching preplanned arm and leg trajectories");
     auto cancel = std::make_shared<motion_control_pkg::execution::CancellationToken>();
     // Observation must not delay cancellation/balance supervision or child start.
     motion_control_pkg::execution::LatestProgressPublisher stream_progress([&](float value) {
@@ -1563,7 +1738,7 @@ void WholeBodyModule::execution_loop(
                     left_path, right_path, goal->control_mode, start_time,
                     cancel, arm_error);
             });
-        leg_future = std::async(
+        if (!arms_only) leg_future = std::async(
             std::launch::async,
             [this, &leg_path, start_time, cancel, &leg_error]() {
                 return backend_->execute_legs(
@@ -1589,6 +1764,7 @@ void WholeBodyModule::execution_loop(
 
     std::optional<bool> arm_ok;
     std::optional<bool> leg_ok;
+    if (arms_only) leg_ok = true;
     bool child_failed = false;
     bool timed_out = false;
     while (!arm_ok || !leg_ok)
@@ -1681,10 +1857,13 @@ void WholeBodyModule::execution_loop(
             }
             bool tcp_reached = true;
             if constexpr (!leg_goal) {
+            if (leader && !level_monitor.validate({measured_active},result->error_message)) {
+                child_failed = true; break;
+            }
             for (bool left : {true, false}) {
                 if ((left && !need_left) || (!left && !need_right)) continue;
                 Eigen::Isometry3d actual;
-                if (!miracle_algo_->getFramePoseAtConfiguration(planning_frame_,
+                if (!miracle_algo_->getFramePoseAtConfiguration(leader ? "base_link" : planning_frame_,
                         left ? "gripper_base_l_link" : "gripper_base_r_link", final_q, actual)) {
                     child_failed = true; result->error_message = "invalid measured completion FK"; break;
                 }

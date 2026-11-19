@@ -57,7 +57,7 @@ ros2 launch motion_control_pkg bringup.launch.py \
 
 **launch 实际读取 `/opt/onecube/motion_control/config/motion_control_config.yaml`。**
 修改 `src/motion_control_pkg/launch/config/motion_control_config.yaml` 不会自动改变运行参数。
-当前 bringup 没有 `config_path` 或 WBC 开关的 launch 参数；不要随意添加 `wbc_static_com_enabled:=true` 并假定生效。
+标准 bringup 用启动参数覆盖 YAML 中的两个平衡开关。省略参数时，静态 COM 和动态 ZMP 都关闭。
 
 已运行节点的只读检查：
 
@@ -164,7 +164,7 @@ timeout_ms: 60000
 - **全身实现把 `bound_size/left_bound_size/right_bound_size` 直接作为规划坐标系下的 XYZ 位移加到目标上。** 虽然 Action 注释称其为工具/负载包络，它在此处不是避障包围盒或障碍膨胀半径；不用偏移时保持 `[0,0,0]`。
 - `speed` 为 `(0,1]` 比例，不是 m/s。
 - 全身 `acceleration_scale`、`jerk_scale` 必须为 `0` 或省略；非零会拒绝。普通手臂 `0/1/2` 才支持这两个字段，`0` 表示默认倍率 1。
-- 全身不能使用 `via_poses`；它只用于单臂 `0/1` 的连续 MoveP，最多 64 个中间位姿。
+- `via_poses` 支持单臂 0/1 的连续 MoveP，以及 `keep_grasp_rigid=true` 的主从 MoveP 0/1/5/6。最多填写 64 个主手中间位姿。
 - 示例使用 `control_mode: 0` 位置模式。`use_force_control: true` 和非空 `hand_action_type` 当前会被拒绝；不要用它们开启笛卡尔阻抗。
 
 ## 4. 点云防碰撞怎么接
@@ -356,13 +356,11 @@ observer 的 `zmp_valid` 固定为 false；启动 observer 不会开启运控的
 
 ### 7.2 运控启用静态 COM 保护
 
-在真机实际生效的 YAML 对应节点下合并这些字段，保留原有零位、方向、工具和驱动配置：
+需要启用静态 COM 时，启动命令加上 `wbc_static_com_enabled:=true`。支撑条件和反馈参数从机器 YAML 读取。
 
 ```yaml
 /motion_control_ns/motion_control:
   ros__parameters:
-    wbc_static_com_enabled: true
-    wbc_dynamic_zmp_enabled: false
     # 只在现场确实满足静止、水平、四轮接触条件时声明 true。
     wbc_stationary_horizontal_contact_confirmed: true
     wbc_joint_state_topic: /wbc/joint_states
@@ -394,7 +392,7 @@ wbc_steering_uncertainty_margin_enabled: false
 
 ### 7.3 动态 ZMP
 
-在静态 COM 已开启的基础上设置 `wbc_dynamic_zmp_enabled: true`。
+启动命令同时传入 `wbc_static_com_enabled:=true wbc_dynamic_zmp_enabled:=true`。
 动态模式要求完整、新鲜的实测 q/v，包含 `base_front_wheel_1_yaw_joint` 和 `base_rear_wheel_1_yaw_joint`；不能使用静态阶段的假设转向状态。
 腿/躯干指定关节可按配置由连续位置估计速度；需等估计器有效，不能只发送一帧位置。
 缺反馈、过期或时序不一致会拒绝动作，不应为让动作通过而伪造零反馈。

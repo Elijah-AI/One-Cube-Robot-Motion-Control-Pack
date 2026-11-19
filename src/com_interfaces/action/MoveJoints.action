@@ -67,11 +67,10 @@ float64 body_height_m
 # Body orientation/height and rigid-grasp modes retain their constrained paths
 # and only change settling; no ordinary single-leg slow suffix is appended.
 bool precision_arrival false
-# LEG position MoveJ with coupled arm compensation. Both calibrated suction
-# TCPs must initially face down and share a height. Preserve initial left_T_right
-# while executing the requested leg/waist path on one synchronized time base.
+# LEG MoveJ captures the measured left_T_right, signed TCP height difference
+# and tool tilt relative to base_link. Common translation and yaw are free.
 bool keep_grasp_rigid false
-float64 grasp_position_tolerance_m 0.001
+float64 grasp_position_tolerance_m 0.002
 float64 grasp_orientation_tolerance_rad 0.005
 ---
 bool success

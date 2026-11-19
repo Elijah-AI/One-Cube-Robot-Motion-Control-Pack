@@ -105,7 +105,8 @@ ros2 service call /Control/reset_motion_fault std_srvs/srv/Trigger '{}'
 | WBC 腿腰补偿 | MovePose `arm_id=5/6/7` + 水平约束 | 腿腰与手臂使用联合时间参数化；5/6 约束对应单臂，7 约束双臂 |
 | 仅腰参与 WBC | `whole_body_waist_only=false` | 设 true 时冻结腿 J1/J2/J3，只允许 WBC MoveP |
 | 笛卡尔直线 | `enable_move_line=false` | 设 true 为 MoveL；支持单臂、双臂、WBC，也覆盖原地改变姿态 |
-| 连续经过点 | `via_poses=[]` | 仅单臂配置位姿 MoveP，最多 64 点，中间点不要求停稳 |
+| 刚性搬框 | `keep_grasp_rigid=false` | 腰腿 MoveJ 4 按起姿搬运。主从 MoveP 0/1/5/6 接收一个主手目标，7 接收两个顶吸目标，见第 4.6 节 |
+| 连续经过点 | `via_poses=[]` | 单臂或刚性主从 MoveP 可给最多 64 个经过点，任务 YAML 使用配置位姿 |
 | 双臂同步 | `synchronization_mode=0` | 同时开始和结束；值 1 虽有枚举但被拒绝 |
 | 碰撞检查 | `enable_collision_check=0` | 1 自碰撞；2 自碰撞及环境点云；碰撞检查不等于每条路由都能自动绕障 |
 | 目标位置偏移 | `bound_size` 及左右版本 | 在规划坐标系直接叠加 XYZ，实际未用作碰撞包络 |
@@ -281,6 +282,8 @@ ros2 param get /motion_control_ns/motion_control planning_worker_count
 | `control_mode` | uint8 | 0 位置；1 手臂关节阻抗。头/腿普通旧路由不会因此成为阻抗控制；身体专用和双关节补偿要求 0 |
 | `keep_tcp_level` | bool，默认 false | 所有 MoveJoints 均须为 false；仅 WBC MovePose 支持开启 |
 | `tcp_level_tolerance_rad` | float64，默认 0.02 rad | 有限且在 `[0.0001,0.1]`；即使关闭约束也要求有效值 |
+| `keep_grasp_rigid` | bool，默认 false | 独立腰腿 MoveJ（4）在位置控制、同步模式 0 下让双臂补偿，保留两手起始相对位姿和倾角 |
+| `grasp_position_tolerance_m` / `grasp_orientation_tolerance_rad` | float64，默认 0.002 m / 0.005 rad | 相对位置和方向容差，位置单位为米 |
 | `joint_name` | string[] | 单臂完整唯一七关节；头部两关节；腿部规则见下文 |
 | `position` | float64[]，rad | 与 joint_name 对应的绝对目标；头部/普通四关节腿路由按固定顺序读取位置 |
 | `left_joint_name` / `right_joint_name` | string[7] | arm_id=2 的左右七关节名 |
@@ -432,9 +435,11 @@ precision_arrival: true
 | `control_mode` | uint8 | 0 位置；1 手臂笛卡尔阻抗；全身的腰腿仍下发位置轨迹 |
 | `keep_tcp_level` | bool，默认 false | 仅 arm_id=5/6/7 且 control_mode=0 可设 true；所选手臂补偿腿腰运动，全程水平；起点和目标须已满足 |
 | `tcp_level_tolerance_rad` | float64，默认 0.02 rad | 有限且在 `[0.0001,0.1]`；以 base_link 为参考，允许竖直轴转向但禁止翻面 |
+| `keep_grasp_rigid` | bool，默认 false | 0/1/5/6 的 MoveP 用一个主手 TCP 目标，7 用两个显式顶吸目标 |
+| `grasp_position_tolerance_m` / `grasp_orientation_tolerance_rad` | float64，默认 0.001 m / 0.005 rad | 主从搬框允许 2 mm 时显式传 0.002 m |
 | `target_pose` | PoseStamped | 单臂/单臂全身 TCP 目标，m + 四元数 |
 | `bound_size` | float32[] | 空或三有限值；**实现是目标 XYZ 平移偏移，不是碰撞包络尺寸**，通常填 `[0,0,0]` |
-| `via_poses` | PoseStamped[] | 单臂 MoveP 连续经过点，最多 64 个；每个带 frame；空为普通单目标 |
+| `via_poses` | PoseStamped[] | 单臂或刚性主从 MoveP 的连续经过点，最多 64 个，每个点带 frame |
 | `left_target_pose` / `right_target_pose` | PoseStamped | arm_id=2/7 显式左右 TCP 目标 |
 | `left_bound_size` / `right_bound_size` | float32[3] | 左右目标平移偏移，通常置零 |
 | `synchronization_mode` | uint8 | 双臂/全身双臂只允许 0；1 不支持 |
@@ -451,7 +456,7 @@ precision_arrival: true
 
 `bound_size` 会在目标转入规划坐标系后直接叠加 XYZ，连续 MoveP 的经过点也会叠加此偏移。任务层使用视觉偏移时要求 bound 为零，避免双重补偿。接口文件的“工具/负载包络”注释与当前执行语义不同，以此处及源码为准。
 
-`via_poses` 只允许 arm_id=0/1、MoveP；不可与双臂、全身、MoveL 混用。它是连续经过路径，不保证在每个中间点停稳。
+`via_poses` 支持普通单臂 MoveP 0/1，以及开启刚性主从的 MoveP 0/1/5/6。各点均为所选主手的 TCP 位姿，轨迹连续经过。
 
 字段 `precision_arrival` 为 bool，默认 false；仅 LEG/WBC 位置模式可开启，详见第 3.5 节。
 
@@ -535,13 +540,45 @@ ros2 action send_goal /Control/move_pose com_interfaces/action/MovePose \
   enable_collision_check: 1, timeout_ms: 60000}' --feedback
 ```
 
-改为 MoveL 时将 `enable_move_line` 设 true，并保持 `whole_body_waist_only=false`。任务 YAML 的完整动作片段见第 10.3 节。WBC 根据 TCP 目标解算腿腰与手臂，接口没有同时指定某个腰腿关节角的字段；独立 LEG MoveJ 不支持开启 `keep_tcp_level`；本次发布仅包含 WBC MovePose 的水平约束。
+改为 MoveL 时将 `enable_move_line` 设 true，并保持 `whole_body_waist_only=false`。任务 YAML 的完整动作片段见第 10.3 节。WBC 根据 TCP 目标解算腿腰与手臂，接口没有同时指定某个腰腿关节角的字段；独立 LEG MoveJ 的双手补偿使用 `keep_grasp_rigid`，见第 4.6 节。
 
 全程约束使用实际 `left_arm_tool_tf/right_arm_tool_tf`，覆盖最终 4 ms 指令点、点间关节插值及执行/到位期间的实测 TCP 姿态。腿腰与手臂共用时间参数，不能只检查起终点水平。普通手臂 `arm_id=0/1/2`、头部、独立腿部 MovePose 均不支持启用；MoveJoints 仅 `arm_id=4` 支持；阻抗模式也会被拒绝。水平补偿不可行、越限、碰撞或监控异常时动作失败，不转为关闭约束执行。
 
 参考系为固定 `base_link`，底盘须固定且水平；当前没有 IMU 重力补偿。该约束也没有加入双臂刚性抓持的固定相对位姿或受力约束。`force_vertical_down` 只生成视觉目标姿态，不能代替全程水平约束。
 
 **水平倾角容差 0.02 rad 与关节精定位容差 0.002 rad 分别配置。** 即使收紧 `leg_precision.goal_tolerance_rad`，也不会自动改变 `tcp_level_tolerance_rad` 或手臂关节容差。同时设置 `keep_tcp_level=true` 和 `precision_arrival=true` 时，两项功能在同一个 WBC 动作中共同生效：路径保持 TCP 水平，结束时腿腰按精定位判据到位。详细定义及源码入口见 [WBC 末端水平约束](TCP_LEVEL_CONSTRAINT.md)。
+
+### 4.6 按起始抓姿搬框
+
+`keep_grasp_rigid: true` 以动作开始时的实测关节状态和左右工具 TCP 建立抓取关系。单目标主从 MoveP 和腰腿 MoveJ 保持双手的相对位姿、起始高差和相对底盘的倾角，允许料框平移并绕底盘 Z 轴偏航。主手目标里的俯仰或侧倾改变超过容差，规划会拒绝目标。
+
+| Action 和 `arm_id` | 填写的目标 | 运动部件 |
+|---|---|---|
+| MoveJoints 4 | 腰腿的 `joint_name`、`position` 或支持的身体模式 | 腰腿按目标运动，双臂同步补偿 |
+| MovePose 0 / 1 | 左 / 右主手的 `target_pose` | 双臂同步运动，腰腿固定在起姿 |
+| MovePose 5 / 6 | 左 / 右主手的 `target_pose` | 双臂、腰及三腿关节参与求解，`whole_body_waist_only: true` 可固定三腿关节 |
+| MovePose 7 | `left_target_pose`、`right_target_pose` | 双目标顶吸，两接触点同高，两侧吸盘 +Z 朝下 |
+
+从手的基座坐标系目标等于“主手目标 × 主手起姿的逆 × 从手起姿”。主从模式使用同步位置控制，`enable_move_line`、`keep_tcp_level` 和 `use_force_control` 均为 false。腰腿 MoveJ 的默认位置容差是 2 mm，MovePose 的默认值是 1 mm。两者的默认方向容差均为 0.005 rad。
+
+下面是 GX12-02 实测起姿在 MuJoCo 中回放的右主手 WBC MoveP Goal。位置单位为米，四元数顺序为 xyzw。目标取自原刚性腰腿 MoveJ 的右手终点，左手目标由运控生成。
+
+```yaml
+arm_id: 6
+keep_grasp_rigid: true
+grasp_position_tolerance_m: 0.002
+grasp_orientation_tolerance_rad: 0.005
+target_pose:
+  header: {frame_id: base_link}
+  pose:
+    position: {x: 1.044456318, y: -0.271335518, z: 0.857651771}
+    orientation: {x: -0.000115254, y: 0.001437143, z: -0.019607321, w: 0.999806718}
+enable_collision_check: 1
+speed: 0.1
+timeout_ms: 120000
+```
+
+从该起姿单发目标，轨迹时长 5.096 s，右手终点位置误差 0.0136 mm，全程双手最大相对位置误差 0.1205 mm。WBC 按 TCP 目标选择腰腿终姿。需要复现指定腰腿角度时，可使用刚性 MoveJ。更多用法与实测反馈条件见[刚性抓取说明](RIGID_GRASP.md)。
 
 ## 5. ControlGripper 与 ControlSuck
 
@@ -989,6 +1026,8 @@ ros2 param get /motion_control_ns/motion_control head_precision.goal_tolerance_r
 | `wbc_reference_max_duration_sec` | 60.0 | 动态模式才声明；参考轨迹时长预算，有限且 >0 |
 | `wbc_reference_max_zmp_scale` | 10.0 | 动态模式才声明；ZMP 时间缩放预算，有限且 ≥1 |
 
+标准 `bringup.launch.py` 默认将 `wbc_static_com_enabled` 和 `wbc_dynamic_zmp_enabled` 设为 false，启动参数覆盖机器 YAML 的同名项。启用静态 COM 时，在现有启动参数中加 `wbc_static_com_enabled:=true`。同时使用动态 ZMP 时还要加 `wbc_dynamic_zmp_enabled:=true`，并满足该模式的接触和反馈条件。
+
 四轮 link 默认是 `base_front_wheel_1_pitch_link`、`base_rear_wheel_1_pitch_link`、`base_front_wheel_2_link`、`base_rear_wheel_2_link`。未知转向 joint 默认是 `base_front_wheel_1_yaw_joint`、`base_rear_wheel_1_yaw_joint`。
 
 除前三个开关外，其余静态参数只有静态 COM 开启才声明；查询不存在不一定是版本故障。以上参数只在启动读取。下例合并到现有完整运控配置，不可覆盖掉驱动/工具/零位参数：
@@ -1062,7 +1101,7 @@ ros2 run motion_control_pkg wbc_zmp_audit /path/to/robot.urdf \
 | `frame_id` | 目标坐标系，转入 PoseStamped.header.frame_id；视觉偏移/缓存要求显式填写 |
 | `target_pose` | `[x,y,z,qx,qy,qz,qw]`，不是 PoseStamped 对象；单臂分支仍解析此数组 |
 | `left_target_pose/right_target_pose` | 双臂同样为七元素数组 |
-| `via_poses` | 七元素数组的列表，仅配置位姿、单臂 MoveP，最多 64 |
+| `via_poses` | 七元素数组的列表，单臂或刚性主从 MoveP 的配置位姿，最多 64 |
 | `bound_size/left_bound_size/right_bound_size` | 必须按相应分支提供三元素数组，视觉偏移时全零 |
 | `speed` | move_pose 默认 0.5；move_joints 必填；建议显式给值 |
 | `use_force_control` / `timeout_ms` | move_pose 必填，当前力控应 false |
@@ -1390,12 +1429,19 @@ uint8 leg_motion_mode
 # TILT holds measured J1/J2/body_joint; omitted angle means upright (0 degrees).
 float64 body_tilt_deg
 # RELATIVE: delta Z; ABSOLUTE: body_link origin Z in base_link; metres.
-# Both height modes hold body_link orientation, X/Y and all upper-body joints.
+# Both height modes hold body_link orientation and X/Y. Upper-body joints hold
+# by default; keep_grasp_rigid enables synchronized arm compensation.
 float64 body_height_m
 # Optional precision arrival for HEAD/LEG only; defaults off.
 # true selects head_precision/leg_precision, including the ordinary MoveJ slow suffix.
-# Body orientation/height modes retain their constrained paths and only change settling.
+# Body orientation/height and rigid-grasp modes retain their constrained paths
+# and only change settling; no ordinary single-leg slow suffix is appended.
 bool precision_arrival false
+# LEG MoveJ captures the measured left_T_right, signed TCP height difference
+# and tool tilt relative to base_link. Common translation and yaw are free.
+bool keep_grasp_rigid false
+float64 grasp_position_tolerance_m 0.002
+float64 grasp_orientation_tolerance_rad 0.005
 ---
 bool success
 string error_message
@@ -1459,8 +1505,18 @@ uint8 control_mode
 bool keep_tcp_level false
 float64 tcp_level_tolerance_rad 0.02
 
+# Rigid grasp uses calibrated tool TCPs and holds the measured initial left_T_right.
+# MoveP 0/1 (arms only), 5/6 (WBC): target_pose is the left/right leader's TCP goal.
+# Both arms move synchronously. The follower target is derived from the initial grasp.
+# Leader MoveP preserves the initial tilt and signed height difference; translation and yaw are free.
+# WBC BOTH (7) uses two explicit goals with common height and both suction +Z axes down.
+# Requires synchronized position control. Mutually exclusive with keep_tcp_level.
+bool keep_grasp_rigid false
+float64 grasp_position_tolerance_m 0.001
+float64 grasp_orientation_tolerance_rad 0.005
+
 # ARM_LEFT/ARM_RIGHT 使用 target_pose/bound_size。
-# Optional continuous MoveP via TCP poses; single arm only, no intermediate stops.
+# Optional continuous MoveP via TCP poses of the selected arm or rigid-grasp leader.
 # Empty preserves the existing one-target action. Each via pose supplies its frame.
 geometry_msgs/PoseStamped[] via_poses
 geometry_msgs/PoseStamped target_pose    # 目标 6D 位姿，位置单位：米

@@ -40,14 +40,22 @@ inline bool validateRigidLegTargets(const std::vector<std::string>& names,
   }
   error="rigid LEG MoveJ needs body_joint, two leg joints optionally with waist, or all four named joints";return false;
 }
+template<class Goal> bool isRigidGraspLeaderGoal(const Goal& goal) {
+  return goal.keep_grasp_rigid &&
+    (goal.arm_id == 0 || goal.arm_id == 1 || goal.arm_id == 5 || goal.arm_id == 6);
+}
 template<class Goal> bool validateRigidGraspGoal(const Goal& goal,std::string& error) {
   if(!std::isfinite(goal.grasp_position_tolerance_m)||goal.grasp_position_tolerance_m<1e-5||goal.grasp_position_tolerance_m>.01||
      !std::isfinite(goal.grasp_orientation_tolerance_rad)||goal.grasp_orientation_tolerance_rad<1e-4||goal.grasp_orientation_tolerance_rad>.05) {
     error="grasp tolerances must be position [0.00001,0.01] m, orientation [0.0001,0.05] rad";return false;
   }
-  if(goal.keep_grasp_rigid && (goal.arm_id!=7||goal.control_mode!=0||goal.synchronization_mode!=0||
+  const bool leader = isRigidGraspLeaderGoal(goal);
+  if(leader && goal.enable_move_line) {
+    error="single-target rigid grasp requires MoveP (enable_move_line=false)";return false;
+  }
+  if(goal.keep_grasp_rigid && ((!leader && goal.arm_id!=7)||goal.control_mode!=0||goal.synchronization_mode!=0||
       goal.keep_tcp_level||goal.use_force_control)) {
-    error="keep_grasp_rigid requires WBC BOTH arm_id=7, synchronized position control, keep_tcp_level=false, use_force_control=false";
+    error="keep_grasp_rigid requires a MoveP leader (arm_id=0/1/5/6) or WBC BOTH (7), synchronized position control, keep_tcp_level=false, use_force_control=false";
     return false;
   }error.clear();return true;
 }

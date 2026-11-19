@@ -13,6 +13,8 @@
 #include "task_manager/task_config_parser.hpp"
 #include "com_interfaces/tcp_level_goal.hpp"
 #include "com_interfaces/rigid_grasp_goal.hpp"
+#include "com_interfaces/action/move_pose.hpp"
+#include <algorithm>
 #include "task_manager/log_helper.hpp"
 #include "com_interfaces/leg_body_motion_goal.hpp"
 #include <rclcpp/rclcpp.hpp>
@@ -646,11 +648,12 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
   act.arm_param.grasp_position_tolerance_m = p["grasp_position_tolerance_m"] ? p["grasp_position_tolerance_m"].as<double>() : .001;
   act.arm_param.grasp_orientation_tolerance_rad = p["grasp_orientation_tolerance_rad"] ? p["grasp_orientation_tolerance_rad"].as<double>() : .005;
   struct RigidGoalView {
-    bool keep_grasp_rigid, keep_tcp_level, use_force_control;
+    bool keep_grasp_rigid, keep_tcp_level, use_force_control, enable_move_line;
     int arm_id, control_mode, synchronization_mode;
     double grasp_position_tolerance_m, grasp_orientation_tolerance_rad;
   } rigid_view{act.arm_param.keep_grasp_rigid, act.arm_param.keep_tcp_level,
-    p["use_force_control"] ? p["use_force_control"].as<bool>() : false, act.arm_param.arm_id,
+    p["use_force_control"] ? p["use_force_control"].as<bool>() : false,
+    p["enable_move_line"] ? p["enable_move_line"].as<bool>() : false, act.arm_param.arm_id,
     p["control_mode"] ? p["control_mode"].as<int>() : 0,
     p["synchronization_mode"] ? p["synchronization_mode"].as<int>() : 0,
     act.arm_param.grasp_position_tolerance_m, act.arm_param.grasp_orientation_tolerance_rad};
@@ -672,9 +675,9 @@ bool TaskConfigParser::parse_move_pose_params(YAML::Node p, AtomicAction& act)
     act.arm_param.via_poses.clear();
     if (p["via_poses"]) {
       act.arm_param.via_poses = p["via_poses"].as<std::vector<std::vector<double>>>();
-      if (act.arm_param.arm_id > 1 || act.arm_param.enable_move_line ||
+      if ((act.arm_param.arm_id > 1 && !com_interfaces::isRigidGraspLeaderGoal(act.arm_param)) || act.arm_param.enable_move_line ||
           act.arm_param.via_poses.size() > 64 || !act.arm_param.use_config_pose) {
-        throw std::invalid_argument("via_poses requires single-arm configured MoveP, at most 64 poses");
+        throw std::invalid_argument("via_poses requires configured single-arm or rigid leader MoveP, at most 64 poses");
       }
       for (const auto& pose : act.arm_param.via_poses) {
         if (pose.size() != 7) {throw std::invalid_argument("via_poses needs seven values per pose");}
@@ -845,7 +848,7 @@ bool TaskConfigParser::parse_move_joints_params(YAML::Node p, AtomicAction& act)
   act.move_joints_param.arm_id = p["arm_id"].as<uint8_t>();
   act.move_joints_param.precision_arrival = parse_precision_arrival(p, act.move_joints_param.arm_id, false);
   act.move_joints_param.keep_grasp_rigid = p["keep_grasp_rigid"] ? p["keep_grasp_rigid"].as<bool>() : false;
-  act.move_joints_param.grasp_position_tolerance_m = p["grasp_position_tolerance_m"] ? p["grasp_position_tolerance_m"].as<double>() : .001;
+  act.move_joints_param.grasp_position_tolerance_m = p["grasp_position_tolerance_m"] ? p["grasp_position_tolerance_m"].as<double>() : .002;
   act.move_joints_param.grasp_orientation_tolerance_rad = p["grasp_orientation_tolerance_rad"] ? p["grasp_orientation_tolerance_rad"].as<double>() : .005;
   act.move_joints_param.enable_collision_check = parse_collision_mode(p);
   act.move_joints_param.acceleration_scale = scale("acceleration_scale");
@@ -1066,6 +1069,16 @@ bool TaskConfigParser::parse_compound_move_params(YAML::Node p, AtomicAction& ac
     ++idx;
   }
 
+  const auto& actions = act.compound_move_param.sub_actions;
+  const bool has_leader = std::any_of(actions.begin(), actions.end(), [](const auto& sub) {
+    return sub.action_type == "move_pose" && com_interfaces::isRigidGraspLeaderGoal(sub.move_pose_param);
+  });
+  if (has_leader && std::count_if(actions.begin(), actions.end(), [](const auto& sub) {
+        const auto id = sub.action_type == "move_pose" ? sub.move_pose_param.arm_id : sub.move_joints_param.arm_id;
+        return id != com_interfaces::action::MovePose::Goal::HEAD;
+      }) > 1) {
+    throw std::invalid_argument("rigid leader MoveP owns both arms and the leg/waist resource in move_compound");
+  }
   LOG_INFO(rclcpp::get_logger(kConfigLogger), task_log::Tag::CONFIG,
     "move_compound: sub_actions=" << act.compound_move_param.sub_actions.size()
     << ", timeout_ms=" << act.compound_move_param.timeout_ms);

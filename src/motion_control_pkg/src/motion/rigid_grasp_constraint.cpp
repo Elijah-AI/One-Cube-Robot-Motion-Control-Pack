@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <mutex>
 #include <cmath>
 
 namespace motion_control_pkg::motion {
@@ -28,11 +29,13 @@ bool isPose(const Eigen::Isometry3d& p) {
 struct RigidGraspConstraint::Impl {
   pinocchio::Model model;
   pinocchio::Data data;
+  std::mutex fk_mutex;
   Q reference;
   std::array<Eigen::Isometry3d,2> tools;
   std::array<pinocchio::FrameIndex,2> frames{};
   Eigen::Isometry3d relative=Eigen::Isometry3d::Identity();
-  Eigen::Vector3d local_up=Eigen::Vector3d::UnitZ();
+  std::array<Eigen::Vector3d,2> local_up;
+  double reference_height_difference{0};
   std::vector<int> arms;
   std::map<std::string,int> required;
   RigidGraspOptions options;
@@ -73,6 +76,8 @@ struct RigidGraspConstraint::Impl {
     return true;
   }
   std::array<Eigen::Isometry3d,2> poses(const Q& q) {
+    // Completion checks and the measured-state callback share this FK cache.
+    std::lock_guard<std::mutex> lock(fk_mutex);
     pinocchio::framesForwardKinematics(model,data,Eigen::Map<const Eigen::VectorXd>(q.data(),q.size()));
     std::array<Eigen::Isometry3d,2> p;
     for(int i=0;i<2;++i) {
@@ -83,36 +88,50 @@ struct RigidGraspConstraint::Impl {
   // Dimensionless maximum violation; every component has an explicit unit.
   double errorAt(const std::array<Eigen::Isometry3d,2>& p) const {
     const Eigen::Isometry3d rel=p[0].inverse()*p[1];
-    return std::max({(rel.translation()-relative.translation()).norm()/options.position_tolerance_m,
+    const Eigen::Vector3d up=Eigen::Vector3d::UnitZ();
+    const double height_difference=p[0].translation().z()-p[1].translation().z();
+    const double shared=std::max({(rel.translation()-relative.translation()).norm()/options.position_tolerance_m,
       logRotation(relative.rotation().transpose()*rel.rotation()).norm()/options.orientation_tolerance_rad,
-      std::abs(p[0].translation().z()-p[1].translation().z())/options.position_tolerance_m,
-      angle(p[0].rotation().col(2),-Eigen::Vector3d::UnitZ())/options.orientation_tolerance_rad,
-      angle(p[1].rotation().col(2),-Eigen::Vector3d::UnitZ())/options.orientation_tolerance_rad,
-      angle(p[0].rotation()*local_up,Eigen::Vector3d::UnitZ())/options.orientation_tolerance_rad});
+      std::abs(height_difference-reference_height_difference)/options.position_tolerance_m,
+      angle(p[0].rotation()*local_up[0],up)/options.orientation_tolerance_rad});
+    if(options.reference==GraspReference::MeasuredStart)
+      return std::max(shared,angle(p[1].rotation()*local_up[1],up)/options.orientation_tolerance_rad);
+    return std::max({shared,angle(p[0].rotation().col(2),-up)/options.orientation_tolerance_rad,
+      angle(p[1].rotation().col(2),-up)/options.orientation_tolerance_rad});
+  }
+  const char* requirement() const {
+    return options.reference==GraspReference::MeasuredStart
+      ? "initial relative pose / height difference / tilt"
+      : "relative pose / common height / downward normal";
   }
   bool check(const Q& q,std::string& e) {
     if(!initialized) {e="rigid grasp not initialized";return false;}
     if(!configuration(q,e)) return false;
     const double v=errorAt(poses(q));
-    if(!std::isfinite(v)||v>1.) {e="rigid grasp relative pose / common height / downward normal violation, normalized="+std::to_string(v);return false;}
+    if(!std::isfinite(v)||v>1.) {e=std::string("rigid grasp ")+requirement()+" violation, normalized="+std::to_string(v);return false;}
     e.clear();return true;
   }
-  Eigen::Matrix<double,9,1> residual(const Q& q) {
-    const auto p=poses(q);const Eigen::Isometry3d rel=p[0].inverse()*p[1];
+  Eigen::Matrix<double,9,1> residual(const std::array<Eigen::Isometry3d,2>& p) const {
+    const Eigen::Isometry3d rel=p[0].inverse()*p[1];
     Eigen::Matrix<double,9,1> e;
     e.head<3>()=rel.translation()-relative.translation();
     e.segment<3>(3)=.2*logRotation(relative.rotation().transpose()*rel.rotation());
-    e.tail<3>()=.2*(p[0].rotation()*local_up-Eigen::Vector3d::UnitZ());return e;
+    e.tail<3>()=.2*(p[0].rotation()*local_up[0]-Eigen::Vector3d::UnitZ());return e;
   }
   bool project(Q& q,std::string& error) {
     // Jointly solve BOTH arms; the lower-body path is immutable. Differencing
     // the full calibrated FK includes the actual rotated/translated tool frames.
     for(int iteration=0;iteration<100;++iteration) {
-      const auto e=residual(q);
+      const auto p=poses(q);
+      const auto e=residual(p);
+      // Take a correction at each new leg waypoint for a smooth arm path.
+      // Reserve half the tolerance for interpolation and time parameterization.
+      if(iteration>0 && options.reference==GraspReference::MeasuredStart && errorAt(p)<=.5)
+        return true;
       if(e.norm()<1e-9) return check(q,error);
       Eigen::Matrix<double,9,14> jac;
       constexpr double eps=1e-6;
-      for(int j=0;j<14;++j) {Q trial=q;trial[arms[j]]+=eps;jac.col(j)=(residual(trial)-e)/eps;}
+      for(int j=0;j<14;++j) {Q trial=q;trial[arms[j]]+=eps;jac.col(j)=(residual(poses(trial))-e)/eps;}
       Eigen::Matrix<double,14,1> dq;
       for(int active_set=0;active_set<=14;++active_set) {
         dq=-jac.transpose()*(jac*jac.transpose()+1e-9*Eigen::Matrix<double,9,9>::Identity()).ldlt().solve(e);
@@ -130,11 +149,12 @@ struct RigidGraspConstraint::Impl {
         Q trial=q;
         for(int j=0;j<14;++j) trial[arms[j]]=std::clamp(q[arms[j]]+scale*dq[j],
           model.lowerPositionLimit[arms[j]],model.upperPositionLimit[arms[j]]);
-        if(residual(trial).norm()<e.norm()) {q=std::move(trial);accepted=true;break;}
+        if(residual(poses(trial)).norm()<e.norm()) {q=std::move(trial);accepted=true;break;}
       }
       if(!accepted) break;
     }
-    error="coupled rigid-grasp projection failed; residual="+std::to_string(residual(q).norm());return false;
+    if(options.reference==GraspReference::MeasuredStart && check(q,error)) return true;
+    error="coupled rigid-grasp projection failed; residual="+std::to_string(residual(poses(q)).norm());return false;
   }
   bool edge(const Q& a,const Q& b,double ea,double eb,unsigned depth,std::size_t& budget,std::string& e) {
     if(++budget>2000000) {e="rigid grasp interpolation certificate budget exceeded";return false;}
@@ -164,7 +184,11 @@ bool RigidGraspConstraint::initialize(std::string& e) {
   }
   if(!p.configuration(p.reference,e)) return false;
   const auto start=p.poses(p.reference);
-  p.relative=start[0].inverse()*start[1];p.local_up=start[0].rotation().transpose()*Eigen::Vector3d::UnitZ();
+  p.relative=start[0].inverse()*start[1];
+  for(std::size_t i=0;i<start.size();++i)
+    p.local_up[i]=start[i].rotation().transpose()*Eigen::Vector3d::UnitZ();
+  if(p.options.reference==GraspReference::MeasuredStart)
+    p.reference_height_difference=start[0].translation().z()-start[1].translation().z();
   if(p.relative.translation().norm()<.02) {e="rigid grasp suction points must be distinct (>= 20 mm)";return false;}
   p.initialized=true;
   if(!p.check(p.reference,e)) {p.initialized=false;e="rigid grasp start: "+e;return false;}
@@ -173,7 +197,7 @@ bool RigidGraspConstraint::initialize(std::string& e) {
 bool RigidGraspConstraint::check(const Q& q,std::string& e) {return impl_->check(q,e);}
 bool RigidGraspConstraint::checkTargets(const Eigen::Isometry3d& l,const Eigen::Isometry3d& r,std::string& e) const {
   if(!impl_->initialized||!isPose(l)||!isPose(r)||impl_->errorAt({l,r})>1) {
-    e="rigid grasp targets must preserve initial left_T_right, common height and downward suction normals";return false;
+    e=std::string("rigid grasp targets must preserve ")+impl_->requirement();return false;
   }e.clear();return true;
 }
 bool RigidGraspConstraint::validatePath(const Path& path,std::string& e) {

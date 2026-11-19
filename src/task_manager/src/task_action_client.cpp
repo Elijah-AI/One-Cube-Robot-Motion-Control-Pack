@@ -13,6 +13,7 @@
 #include "com_interfaces/action/detection_pose_cloud.hpp"
 #include "com_interfaces/action/control_gripper.hpp"
 #include "com_interfaces/action/move_pose.hpp"
+#include "com_interfaces/rigid_grasp_goal.hpp"
 #include "com_interfaces/action/move_joints.hpp"
 #include "com_interfaces/action/control_suck.hpp"
 
@@ -750,11 +751,12 @@ std::vector<ResourceType> TaskActionClient::get_required_resources(
     {
         // arm_id 使用 com_interfaces 命名常量: ARM_LEFT=0, ARM_RIGHT=1, ARM_BOTH=2, HEAD=3, LEG=4
         const auto& aid = act.arm_param.arm_id;
-        if (aid == MovePose::Goal::ARM_LEFT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_LEFT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
+        const bool leader = com_interfaces::isRigidGraspLeaderGoal(act.arm_param);
+        if (leader || aid == MovePose::Goal::ARM_LEFT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_LEFT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
         {
             resources.push_back(ResourceType::LEFT_ARM);
         }
-        if (aid == MovePose::Goal::ARM_RIGHT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_RIGHT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
+        if (leader || aid == MovePose::Goal::ARM_RIGHT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_RIGHT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
         {
             resources.push_back(ResourceType::RIGHT_ARM);
         }
@@ -763,7 +765,7 @@ std::vector<ResourceType> TaskActionClient::get_required_resources(
             resources.push_back(ResourceType::HEAD);
         }
         // LEG 统一表示腿 / 腰部（腰部关节 16-18 由 move_joints 以 arm_id=LEG 派发）
-        if (aid == MovePose::Goal::LEG || aid == MovePose::Goal::WHOLE_BODY_LEFT || aid == MovePose::Goal::WHOLE_BODY_RIGHT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
+        if (leader || aid == MovePose::Goal::LEG || aid == MovePose::Goal::WHOLE_BODY_LEFT || aid == MovePose::Goal::WHOLE_BODY_RIGHT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
         {
             resources.push_back(ResourceType::LEG);
         }
@@ -867,34 +869,10 @@ std::vector<ResourceType> TaskActionClient::get_required_resources(
         {
             if (sub.action_type == "move_pose" || sub.action_type == "move_arm")
             {
-                const auto& aid = sub.move_pose_param.arm_id;
-                if (aid == MovePose::Goal::ARM_LEFT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_LEFT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
-                {
-                    add_if_missing(ResourceType::LEFT_ARM);
-                }
-                if (aid == MovePose::Goal::ARM_RIGHT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_RIGHT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
-                {
-                    add_if_missing(ResourceType::RIGHT_ARM);
-                }
-                if (aid == MovePose::Goal::HEAD)
-                {
-                    add_if_missing(ResourceType::HEAD);
-                }
-                if (aid == MovePose::Goal::LEG || aid == MovePose::Goal::WHOLE_BODY_LEFT || aid == MovePose::Goal::WHOLE_BODY_RIGHT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
-                {
-                    add_if_missing(ResourceType::LEG);
-                }
-                if (!sub.move_pose_param.hand_action_type.empty())
-                {
-                    if (aid == MovePose::Goal::ARM_LEFT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_LEFT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
-                    {
-                        add_if_missing(ResourceType::LEFT_HAND);
-                    }
-                    if (aid == MovePose::Goal::ARM_RIGHT || aid == MovePose::Goal::ARM_BOTH || aid == MovePose::Goal::WHOLE_BODY_RIGHT || aid == MovePose::Goal::WHOLE_BODY_BOTH)
-                    {
-                        add_if_missing(ResourceType::RIGHT_HAND);
-                    }
-                }
+                task_cfg::AtomicAction child;
+                child.arm_param = sub.move_pose_param;
+                for (auto res : get_required_resources(sub.action_type, child))
+                    add_if_missing(res);
             }
             else if (sub.action_type == "move_joints")
             {

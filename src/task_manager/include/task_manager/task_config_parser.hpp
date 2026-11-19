@@ -78,7 +78,7 @@ struct MovePoseParam
   bool precision_arrival{false};          ///< 腿腰/WBC 精定位，按动作显式开启
   bool keep_tcp_level{false};             ///< 仅 WBC arm_id=5/6/7 可开启腿腰运动中的 TCP 水平补偿
   double tcp_level_tolerance_rad{0.02};    ///< 水平倾角容差，rad
-  bool keep_grasp_rigid{false};            ///< 双吸盘刚性约束，仅 WBC BOTH
+  bool keep_grasp_rigid{false};            ///< 0/1/5/6 单目标主从 MoveP，7 双目标顶吸
   double grasp_position_tolerance_m{.001};
   double grasp_orientation_tolerance_rad{.005};
   float acceleration_scale{0.0f};         ///< 0=默认，(0,1]额外加速度比例
@@ -163,7 +163,7 @@ struct MoveJointsParam
 {
   bool precision_arrival{false};          ///< 头部/腿腰精定位，默认关闭
   bool keep_grasp_rigid{false};            ///< LEG MoveJ with automatic rigid two-arm compensation
-  double grasp_position_tolerance_m{.001};
+  double grasp_position_tolerance_m{.002};
   double grasp_orientation_tolerance_rad{.005};
   uint8_t leg_motion_mode{0}; ///< 0=关节目标；1=绝对身体倾角；2=相对升降；3=绝对身体高度
   double body_tilt_deg{0};    ///< 身体 +Z 向 base_link +X 的有符号倾角（度）

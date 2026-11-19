@@ -2,8 +2,7 @@
 #include "motion_control_pkg/motion/tcp_level_plan.hpp"
 #include "com_interfaces/action/move_pose.hpp"
 #include "com_interfaces/rigid_grasp_goal.hpp"
-#include <jsoncpp/json/json.h>
-#include <fstream>
+#include "rigid_grasp_fixture.hpp"
 #include <iostream>
 #include <stdexcept>
 using namespace motion_control_pkg;
@@ -13,17 +12,11 @@ void require(bool ok,const std::string& e) {if(!ok) throw std::runtime_error(e);
 int main(int argc,char** argv) try {
   require(argc==2,"expected repository");std::string root=argv[1];
   MiracleMAlgo algo(root+"/src/onecube_robot_description/urdf/onecube_robot_description.urdf",root+"/src");
-  const auto& m=algo.getModel();Json::Value f;
-  std::ifstream input(root+"/src/motion_control_pkg/tools/mujoco_validation/rigid_grasp_fixture.json");input>>f;
-  Eigen::Isometry3d lt=Eigen::Isometry3d::Identity(),rt=lt;
-  for(bool left:{true,false}) {
-    Q a;for(const auto& v:f[left?"left_joints":"right_joints"]) a.push_back(v.asDouble());
-    require(algo.updateChainJointsAngle(left?"left_arm":"right_arm",a)==0,"fixture joints");
-    const auto& p=f[left?"left_tool_tf":"right_tool_tf"];auto& t=left?lt:rt;
-    t.translation()<<p[0].asDouble(),p[1].asDouble(),p[2].asDouble();
-    t.linear()=Eigen::Quaterniond(p[6].asDouble(),p[3].asDouble(),p[4].asDouble(),p[5].asDouble()).toRotationMatrix();
-  }
-  Q start;require(algo.getFullJointState(start),"start state");
+  RigidFixture fixture(algo,root);
+  const auto& m=algo.getModel();
+  const auto& start=fixture.start;
+  const auto& lt=fixture.left_tool;
+  const auto& rt=fixture.right_tool;
   const auto idx=[&](const std::string& n){return m.joints[m.getJointId(n)].idx_q();};
   const motion::RigidGraspOptions options{true,.001,.005};std::string error;
   motion::RigidGraspConstraint grasp(m,start,lt,rt,options);
@@ -46,6 +39,35 @@ int main(int argc,char** argv) try {
   require(grasp.checkTargets(common*l,common*r,error),"common yaw/translation must stay free");
   std::cout<<"PASS rigid geometry and rotated calibrated tools\n";
 
+  // Start with one tool facing up and the other oblique, 14 mm lower.
+  Eigen::Isometry3d left=l,right=r;
+  left.linear().setIdentity();
+  right.linear()=Eigen::AngleAxisd(.6,Eigen::Vector3d::UnitX()).toRotationMatrix();
+  right.translation().z()=left.translation().z()-.014;
+  const Eigen::Isometry3d left_tool=lt*l.inverse()*left,right_tool=rt*r.inverse()*right;
+  const motion::RigidGraspOptions captured{true,.002,.005,motion::GraspReference::MeasuredStart};
+  motion::RigidGraspConstraint carried(m,start,left_tool,right_tool,captured);
+  require(carried.initialize(error),error);
+  require(carried.checkTargets(common*left,common*right,error),"initial grasp must allow common yaw and translation");
+  auto altered=right;
+  altered.translation().y()+=.00199;
+  require(carried.checkTargets(left,altered,error),"relative drift within 2 mm rejected");
+  altered.translation().y()+=.00002;
+  require(!carried.checkTargets(left,altered,error),"relative drift above 2 mm accepted");
+  altered=right;altered.linear()=right.rotation()*Eigen::AngleAxisd(.006,Eigen::Vector3d::UnitZ());
+  require(!carried.checkTargets(left,altered,error),"relative rotation outside tolerance accepted");
+  auto tipped=Eigen::Isometry3d::Identity();
+  tipped.linear()=Eigen::AngleAxisd(.02,Eigen::Vector3d::UnitY()).toRotationMatrix();
+  require(!carried.checkTargets(tipped*left,tipped*right,error),"common pitch changed while preserving relative geometry");
+  tipped.linear()=Eigen::AngleAxisd(.0048,Eigen::Vector3d::UnitX()).toRotationMatrix();
+  const auto tipped_left=tipped*left,tipped_right=tipped*right;
+  const double dz=tipped_left.translation().z()-tipped_right.translation().z();
+  require(std::abs(dz-.014)>.002,"test requires more than 2 mm of signed height drift");
+  require(!carried.checkTargets(tipped_left,tipped_right,error),"height difference drift accepted within tilt tolerance");
+  motion::RigidGraspConstraint top_only(m,start,left_tool,right_tool,options);
+  require(!top_only.initialize(error),"top suction must still reject this start");
+  std::cout<<"PASS measured-start grasp and 2 mm relative position boundary\n";
+
   Q bent=start;bent[idx("leg_joint1")]=.2;
   Path path{start,bent,start};const auto raw=path;
   require(!grasp.validatePath(path,error),"uncompensated leg path must fail");
@@ -66,7 +88,12 @@ int main(int argc,char** argv) try {
 
   com_interfaces::action::MovePose::Goal goal;require(!goal.keep_grasp_rigid,"default off");
   goal.keep_grasp_rigid=true;goal.arm_id=7;require(com_interfaces::validateRigidGraspGoal(goal,error),error);
-  for(unsigned id:{0,1,2,3,4,5,6}) {goal.arm_id=id;require(!com_interfaces::validateRigidGraspGoal(goal,error),"unsupported part");}
+  for(unsigned id:{0,1,5,6}) {
+    goal.arm_id=id;require(com_interfaces::validateRigidGraspGoal(goal,error),"MoveP leader");
+    goal.enable_move_line=true;require(!com_interfaces::validateRigidGraspGoal(goal,error),"leader MoveL");
+    goal.enable_move_line=false;
+  }
+  for(unsigned id:{2,3,4,8}) {goal.arm_id=id;require(!com_interfaces::validateRigidGraspGoal(goal,error),"unsupported part");}
   goal.arm_id=7;goal.keep_tcp_level=true;require(!com_interfaces::validateRigidGraspGoal(goal,error),"conflicting flag");
   goal.keep_tcp_level=false;goal.control_mode=1;require(!com_interfaces::validateRigidGraspGoal(goal,error),"impedance");
   goal.control_mode=0;goal.synchronization_mode=1;require(!com_interfaces::validateRigidGraspGoal(goal,error),"unsynchronized");

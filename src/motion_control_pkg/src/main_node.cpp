@@ -830,8 +830,9 @@ private:
             return rclcpp_action::GoalResponse::REJECT;
         }
         if (!goal->via_poses.empty()) {
-            if (goal->arm_id > ARM_RIGHT || goal->enable_move_line || goal->via_poses.size() > 64) {
-                RCLCPP_WARN(this->get_logger(), "via_poses supports single-arm MoveP only, at most 64 poses");
+            if ((goal->arm_id > ARM_RIGHT && !com_interfaces::isRigidGraspLeaderGoal(*goal)) ||
+                goal->enable_move_line || goal->via_poses.size() > 64) {
+                RCLCPP_WARN(this->get_logger(), "via_poses requires single-arm or rigid leader MoveP, at most 64 poses");
                 return rclcpp_action::GoalResponse::REJECT;
             }
             for (const auto& via : goal->via_poses) {
@@ -985,16 +986,16 @@ private:
         }
 
         // 【路由检查】：根据指令中的参数，检查对应模块是否繁忙
-        if (goal->arm_id == WHOLE_BODY_LEFT ||
+        if (com_interfaces::isRigidGraspLeaderGoal(*goal) || goal->arm_id == WHOLE_BODY_LEFT ||
             goal->arm_id == WHOLE_BODY_RIGHT ||
             goal->arm_id == WHOLE_BODY_BOTH) {
             if (goal->timeout_ms <= 0 || !whole_body_module_->is_idle()) {
                 RCLCPP_WARN(this->get_logger(), "Whole-body module is busy or timeout is invalid");
                 return rclcpp_action::GoalResponse::REJECT;
             }
-            const bool needs_left = goal->arm_id == WHOLE_BODY_LEFT ||
+            const bool needs_left = goal->keep_grasp_rigid || goal->arm_id == WHOLE_BODY_LEFT ||
                 goal->arm_id == WHOLE_BODY_BOTH;
-            const bool needs_right = goal->arm_id == WHOLE_BODY_RIGHT ||
+            const bool needs_right = goal->keep_grasp_rigid || goal->arm_id == WHOLE_BODY_RIGHT ||
                 goal->arm_id == WHOLE_BODY_BOTH;
             if (miracleAlgo_ptr_->staticBalance() &&
                 (!head_module_->is_idle(ID_HEAD) || !dual_arm_module_->is_idle(ID_LEFT_ARM) ||
@@ -1064,7 +1065,7 @@ private:
         const auto goal = goal_handle->get_goal();
 
         // 全身模式由协调模块统一规划，再把轨迹分发给手臂和腿部。
-        if (goal->arm_id == WHOLE_BODY_LEFT ||
+        if (com_interfaces::isRigidGraspLeaderGoal(*goal) || goal->arm_id == WHOLE_BODY_LEFT ||
             goal->arm_id == WHOLE_BODY_RIGHT ||
             goal->arm_id == WHOLE_BODY_BOTH) {
             whole_body_module_->start_execution_move_pose(goal_handle);

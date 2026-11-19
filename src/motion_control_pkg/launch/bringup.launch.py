@@ -40,6 +40,14 @@ def generate_launch_description():
                 description='Planning workers: 1 serial, 2/4 parallel validation; dual-arm IK uses two',
             ),
             DeclareLaunchArgument(
+                'wbc_static_com_enabled', default_value='false', choices=['true', 'false'],
+                description='Enable the static COM support constraint on this launch',
+            ),
+            DeclareLaunchArgument(
+                'wbc_dynamic_zmp_enabled', default_value='false', choices=['true', 'false'],
+                description='Enable dynamic ZMP checking (requires wbc_static_com_enabled)',
+            ),
+            DeclareLaunchArgument(
                 'driver_config',
                 default_value=os.environ.get(
                     'DRIVER_SDK_CONFIG',
@@ -87,6 +95,10 @@ def generate_launch_description():
                         'active_arm_configuration': active_arm_configuration,
                         'planning_worker_count': ParameterValue(
                             LaunchConfiguration('planning_worker_count'), value_type=int),
+                        'wbc_static_com_enabled': ParameterValue(
+                            LaunchConfiguration('wbc_static_com_enabled'), value_type=bool),
+                        'wbc_dynamic_zmp_enabled': ParameterValue(
+                            LaunchConfiguration('wbc_dynamic_zmp_enabled'), value_type=bool),
                         'collision_pointcloud_topic': LaunchConfiguration('collision_pointcloud_topic'),
                         'ik_recovery_enabled': ParameterValue(LaunchConfiguration('ik_recovery_enabled'), value_type=bool),
                         'ik_recovery_seed_count': ParameterValue(LaunchConfiguration('ik_recovery_seed_count'), value_type=int),

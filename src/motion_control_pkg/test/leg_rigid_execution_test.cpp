@@ -1,6 +1,7 @@
 #include "whole_body_hardware_traps.hpp"
 #include "rigid_grasp_fixture.hpp"
 #include "motion_control_pkg/execution/motion_safety.hpp"
+#include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <mutex>
 #include <iostream>
@@ -15,6 +16,7 @@ public:
   std::vector<double> q;
   std::mutex mutex;
   std::string scenario;
+  int leader_id{-1};
   std::array<std::vector<std::string>,4> names;
   std::array<std::uint64_t,4> seq{};
   std::atomic<int> reservations{0},dispatches{0},canceled_children{0};
@@ -50,8 +52,10 @@ public:
     return true;
   }
   bool prepare_dispatch(const Path& l,const Path& r,const Path& p,std::uint8_t mode,std::string& e) override {
-    require(reservations==4 && mode==0,"dispatch without all resource reservations");
-    require(l.size()==r.size() && l.size()==p.size(),"unsynchronized path lengths");
+    require(reservations==(leader_id<0 ? 4 : 3) && mode==0,"dispatch without all resource reservations");
+    require(!l.empty() && l.size()==r.size(),"unsynchronized arm path lengths");
+    if (leader_id==0 || leader_id==1) require(p.empty(),"arm-only MoveP prepared leg commands");
+    else require(p.size()==l.size(),"unsynchronized leg path length");
     if(scenario=="prepare_failure") {e="injected preparation failure";return false;}
     if(scenario=="start_changed") {std::lock_guard<std::mutex> lock(mutex);q[index("body_joint")]+=.03;}
     return true;
@@ -67,7 +71,7 @@ public:
   }
   bool delay(const Cancel& cancel,std::string& error) {
     for(int i=0;i<40;++i) {
-      if(i==5 && (scenario=="grasp_violation" || scenario=="head_moved") && !injected.exchange(true)) {
+      if(i==5 && (scenario=="grasp_violation" || scenario=="leader_slip" || scenario=="head_moved") && !injected.exchange(true)) {
         std::lock_guard<std::mutex> lock(mutex);
         q[index(scenario=="head_moved"?"head_pitch_joint":"Joint2_R")]+=.03;
       }
@@ -106,16 +110,63 @@ public:
   }
 };
 
+static void exerciseLeaderAction(WholeBodyModule& whole, FakeLegBackend& backend, const RigidFixture& fixture) {
+  using namespace std::chrono_literals;
+  auto node=backend.node;
+  auto server=rclcpp_action::create_server<MovePose>(node,"/offline_rigid_leader",
+    [](const auto&,auto){return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;},
+    [](auto){return rclcpp_action::CancelResponse::ACCEPT;},
+    [&](auto handle){whole.start_execution_move_pose(handle);});
+  auto client=rclcpp_action::create_client<MovePose>(node,"/offline_rigid_leader");
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  require(client->wait_for_action_server(3s),"leader Action unavailable");
+  MovePose::Goal goal;
+  goal.arm_id=backend.leader_id; goal.keep_grasp_rigid=true; goal.grasp_position_tolerance_m=.002;
+  goal.speed=.3; goal.timeout_ms=10000; goal.target_pose.header.frame_id="base_link";
+  const bool left=goal.arm_id==0 || goal.arm_id==5;
+  Eigen::Isometry3d master;
+  require(backend.model->getFramePoseAtConfiguration("base_link",left?"gripper_base_l_link":"gripper_base_r_link",
+        backend.q,master),"leader FK");
+  master=master*(left ? fixture.left_tool : fixture.right_tool);
+  if (backend.scenario!="leader_hold") master.translation().z()+=.002;
+  if (backend.scenario=="leader_tilt") master.linear()=Eigen::AngleAxisd(.05,Eigen::Vector3d::UnitX())*master.linear();
+  goal.target_pose.pose=motion_control_pkg::kinematics::isometryToPose(master);
+  auto accepted=client->async_send_goal(goal);
+  require(executor.spin_until_future_complete(accepted,3s)==rclcpp::FutureReturnCode::SUCCESS &&
+          accepted.get()!=nullptr,"leader acceptance timeout");
+  auto result=client->async_get_result(accepted.get());
+  require(executor.spin_until_future_complete(result,12s)==rclcpp::FutureReturnCode::SUCCESS,"leader result timeout");
+  const auto reply=result.get();
+  const auto until=Time::clock::now()+1s;
+  while(!whole.is_idle() && Time::clock::now()<until) std::this_thread::sleep_for(2ms);
+  require(whole.is_idle() && backend.reservations==0,"leader resource leak");
+  if (backend.scenario=="leader_tilt") {
+    require(!reply.result->success && backend.dispatches==0,"sent samples for incompatible leader tilt");
+  } else if (backend.scenario=="leader_slip") {
+    require(!reply.result->success && backend.canceled_children>0,"missed measured follower slip");
+  } else {
+    require(reply.result->success && reply.code==rclcpp_action::ResultCode::SUCCEEDED,reply.result->error_message);
+    require(backend.dispatches==(goal.arm_id<=1 ? 1 : 2),"incorrect lower-body dispatch");
+    require(reply.result->left_final_distance_error_m<.003 && reply.result->right_final_distance_error_m<.003,
+            "leader or follower missed its measured goal");
+  }
+  std::cout<<"PASS MoveP "<<backend.scenario<<" dispatches="<<backend.dispatches<<" "<<reply.result->error_message<<std::endl;
+}
+
 int main(int argc,char** argv) try {
   require(argc==2,"expected repository path");
   const std::string repo=argv[1];
   auto model=std::make_shared<MiracleMAlgo>(repo+"/src/onecube_robot_description/urdf/onecube_robot_description.urdf",repo+"/src");
   model->setCollisionCheckMode(0);
-  RigidFixture fixture(*model);
-  const auto initial=fixture.start;
+  RigidFixture fixture(*model,repo);
+  auto initial=fixture.start;
+  const auto& joints=model->getModel();
+  initial[joints.joints[joints.getJointId("Joint2_R")].idx_q()]+=.1;
   rclcpp::init(0,nullptr);
   unsigned cases=0;
-  for(const std::string scenario:{"success","head_busy","stale_start","missing_start","moving_start","prepare_failure","start_changed","child_failure","arm_failure","grasp_violation","head_moved","stale_runtime","cancel","not_at_target","not_stopped"}) {
+  for(const std::string scenario:{"success","head_busy","stale_start","missing_start","moving_start","prepare_failure","start_changed","child_failure","arm_failure","grasp_violation","head_moved","stale_runtime","cancel","not_at_target","not_stopped",
+      "leader_0","leader_1","leader_5","leader_6","leader_tilt","leader_slip","leader_hold"}) {
     auto node=std::make_shared<rclcpp::Node>("leg_rigid_offline_"+scenario);
     auto backend=std::make_shared<FakeLegBackend>(model,node,initial,scenario);
     auto safety=std::make_shared<MotionSafety>();
@@ -130,7 +181,14 @@ int main(int argc,char** argv) try {
     }
     installMotionSafety(safety);safety->start();
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    WholeBodyModule whole(node,model,nullptr,nullptr,"base_link",fixture.left_tool,fixture.right_tool,backend);
+    WholeBodyModule whole(node,model,nullptr,nullptr,scenario=="leader_6" ? "body_link" : "base_link",fixture.left_tool,fixture.right_tool,backend);
+    if (scenario.rfind("leader_",0)==0) {
+      if (scenario=="leader_slip") backend->leader_id=0; // Joint2_R fault is on the follower.
+      else if (scenario=="leader_tilt" || scenario=="leader_hold") backend->leader_id=1;
+      else backend->leader_id=std::stoi(scenario.substr(7));
+      exerciseLeaderAction(whole,*backend,fixture);
+      safety->stop();installMotionSafety(nullptr);++cases;continue;
+    }
     auto server=rclcpp_action::create_server<MoveJoints>(node,"/offline_leg_rigid",
       [](const auto&,auto){return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;},
       [](auto){return rclcpp_action::CancelResponse::ACCEPT;},
@@ -171,5 +229,5 @@ int main(int argc,char** argv) try {
       clean();++cases;
     } catch(...) {clean();throw;}
   }
-  rclcpp::shutdown();std::cout<<"TOTAL "<<cases<<" LEG Action cases PASS; simulated feedback only\n";return 0;
+  rclcpp::shutdown();std::cout<<"TOTAL "<<cases<<" rigid Action cases PASS; simulated feedback only\n";return 0;
 } catch(const std::exception& e) {std::cerr<<"FAIL "<<e.what()<<'\n';if(rclcpp::ok()) rclcpp::shutdown();return 1;}

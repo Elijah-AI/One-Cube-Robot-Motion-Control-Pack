@@ -274,6 +274,9 @@ ActionCallResult TaskActionClient::call_move_pose(
         << "\n enable_move_line=" << (goal.enable_move_line ? "true" : "false")
         << "\n whole_body_waist_only=" << (goal.whole_body_waist_only ? "true" : "false")
         << "\n precision_arrival=" << (goal.precision_arrival ? "true" : "false")
+        << "\n keep_grasp_rigid=" << (goal.keep_grasp_rigid ? "true" : "false")
+        << "\n grasp_position_tolerance_m=" << goal.grasp_position_tolerance_m
+        << "\n grasp_orientation_tolerance_rad=" << goal.grasp_orientation_tolerance_rad
         << "\n speed=" << goal.speed
         << "\n timeout_ms=" << goal.timeout_ms
         << "\n cloud_frame=" << goal.point_cloud_frame_id

@@ -504,6 +504,8 @@ if(BUILD_TESTING)
     ament_target_dependencies(test_rigid_grasp com_interfaces)
     add_test(NAME rigid_grasp COMMAND test_rigid_grasp "${CMAKE_CURRENT_SOURCE_DIR}/../..")
     set_tests_properties(rigid_grasp PROPERTIES TIMEOUT 180)
+    add_test(NAME bringup_balance COMMAND /usr/bin/python3
+        "${CMAKE_CURRENT_SOURCE_DIR}/test/bringup_balance_test.py" "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME robot_tf COMMAND /usr/bin/python3
         "${CMAKE_CURRENT_SOURCE_DIR}/test/robot_tf_test.py"
         "${CMAKE_CURRENT_SOURCE_DIR}")

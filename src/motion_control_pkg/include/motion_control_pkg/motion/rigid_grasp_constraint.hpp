@@ -6,12 +6,13 @@
 #include <vector>
 
 namespace motion_control_pkg::motion {
+enum class GraspReference { TopSuction, MeasuredStart };
 struct RigidGraspOptions {
   bool enabled{false};
   double position_tolerance_m{.001};
   double orientation_tolerance_rad{.005};
+  GraspReference reference{GraspReference::TopSuction};
 };
-// Both calibrated suction TCPs face down and share one rigid, level object.
 // The initial left_T_right is the reference; common translation/yaw are free.
 class RigidGraspConstraint {
 public:
