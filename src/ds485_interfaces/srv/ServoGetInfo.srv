@@ -1,0 +1,19 @@
+# 调试：读取舵机全部常用信息（约 13 次通信）
+uint8 side
+---
+bool success
+string message
+ServoState state
+uint8 sys_config          # 0x11
+bool write_ack            # 0x11 Bit3，写指令是否有短应答
+float32 min_angle_deg     # 0x19，0 表示不限
+float32 max_angle_deg     # 0x1A，0 表示不限
+uint8 mode                # 0x5A：0 自动 1 舵机 2 电机
+uint8 torque_switch       # 0x64：0 释放 1 刹车 2 锁舵 3 预启动
+uint16 pwm_limit          # 0x5B
+uint16 current_limit      # 0x5C，读不到为 0
+uint16 speed_limit        # 0x5D，读不到为 0
+uint16 max_pwm            # 0x13（存储值），读不到为 0
+int16 temperature         # 0x4A，℃
+float32 voltage           # 0x4B，伏
+string bus_name           # 例如 "marvin A/COM1"

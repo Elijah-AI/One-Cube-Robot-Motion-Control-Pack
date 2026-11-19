@@ -606,7 +606,36 @@ ros2 action send_goal /Control/control_gripper com_interfaces/action/ControlGrip
   com_port: [2, 2], block_until_complete: true, timeout_ms: 10000}' --feedback
 ```
 
-Result：`success`、`final_position[]`、`final_torque[]`、`error_message`。Feedback：`current_position[]`、`current_torque[]`、`current_speed[]`、`progress_rate`、`header`。左右固定索引 0/1；未选侧数据不能当作有效新测量。当前取消请求被拒绝，因为没有经过验证的夹爪物理停止命令。
+Result：`success`、`final_position[]`、`final_torque[]`、`error_message`。Feedback：`current_position[]`、`current_torque[]`、`current_speed[]`、`progress_rate`、`header`。左右固定索引 0/1；未选侧数据不能当作有效新测量。DS485 位置模式接受 Action 取消，驱动对该 Goal 占用的夹爪请求锁舵并返回结果。Jodell 后端拒绝 Action 取消。
+
+#### 5.1.1 恒定 PWM
+
+GX12-02 的 DS485 夹爪使用机器配置的左右通道和设备 ID。运控参数 `gripper_type: ds485` 选择该后端，`ds485_gripper_config` 默认读取 `/opt/onecube/motion_control/config/ds485_gripper.yaml`。运控进程复用已有的 MarvinSDK 会话。两种启动策略使用同一套末端总线，一次选择一种。
+
+| 标准 bringup 启动参数 | 运控入口 | 适用指令 |
+|---|---|---|
+| `ds485_control_strategy:=position`（默认） | `/Control/control_gripper` 或 `/ds485/gripper/command` | 按左右标定做位置开合，Action 通过 `gripper_id` 选择单侧或双侧 |
+| `ds485_control_strategy:=torque` | `/ds485/servo/set_torque`，类型为 `ds485_interfaces/srv/ServoSetTorque` | 对一个电机下发有符号恒定 PWM，两侧可分别控制 |
+
+恒定 PWM 表示电机输出占空比，单位为千分比，实际夹持力随机构和负载变化。每次服务请求选择 `side: 0` 左或 `side: 1` 右。正负号表示电机方向，开闭方向以该侧机械安装为准。位置控制的 `max_torque` 字段仍是原 Action 的限幅参数。
+
+| 请求字段 | 值与行为 |
+|---|---|
+| `pwm` | −1000 到 +1000。非零值下发至寄存器 `0x6E`。0 请求该侧制动并恢复进入前的电机模式 |
+| `duration_ms` | 正数从运动帧交给传输层时计时，到期制动。0 使非零输出持续至替换、停止或故障处理 |
+
+以下为服务请求示例。第一条是左侧 +10% 占空比的 200 ms 脉冲，第二条请求左侧停止。
+
+```bash
+ros2 service call /ds485/servo/set_torque ds485_interfaces/srv/ServoSetTorque \
+  '{side: 0, pwm: 100, duration_ms: 200}'
+ros2 service call /ds485/servo/set_torque ds485_interfaces/srv/ServoSetTorque \
+  '{side: 0, pwm: 0, duration_ms: 0}'
+```
+
+返回的 `sent` 表示帧已交给传输层，`acknowledged` 表示收到成功短应答。`stop_confirmed` 表示已读回制动状态并两次确认零速度、零 PWM 和运动标志清除。持续输出请求返回成功时应通过 `/ds485/state` 查看实际 PWM。`/ds485/gripper/health` 提供该侧的阶段和原因。`STOP_UNCONFIRMED` 或 `MODE_RESTORE_UNCONFIRMED` 会标明哪一步未能确认。同侧停止可抢占当前脉冲，另一侧独立运行。运控收到整机停止或退出请求时先通知正在输出的夹爪制动，退出流程随后等待工具空闲。
+
+舵机速度限制使用小端无符号 16 位寄存器 `0x5D`，单位为 °/s。电流限制为 `0x5C`，单位为 mA。协议及响应细节见[夹爪驱动的恒定 PWM 说明](../src/ds485_driver/doc/constant-torque.md)。
 
 ### 5.2 吸盘字段
 

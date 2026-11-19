@@ -40,6 +40,10 @@ def generate_launch_description():
                 description='Planning workers: 1 serial, 2/4 parallel validation; dual-arm IK uses two',
             ),
             DeclareLaunchArgument(
+                'ds485_control_strategy', default_value='position', choices=['position', 'torque'],
+                description='Select DS485 position commands or constant PWM in the motion process',
+            ),
+            DeclareLaunchArgument(
                 'wbc_static_com_enabled', default_value='false', choices=['true', 'false'],
                 description='Enable the static COM support constraint on this launch',
             ),
@@ -95,6 +99,8 @@ def generate_launch_description():
                         'active_arm_configuration': active_arm_configuration,
                         'planning_worker_count': ParameterValue(
                             LaunchConfiguration('planning_worker_count'), value_type=int),
+                        'ds485_control_strategy': ParameterValue(
+                            LaunchConfiguration('ds485_control_strategy'), value_type=str),
                         'wbc_static_com_enabled': ParameterValue(
                             LaunchConfiguration('wbc_static_com_enabled'), value_type=bool),
                         'wbc_dynamic_zmp_enabled': ParameterValue(

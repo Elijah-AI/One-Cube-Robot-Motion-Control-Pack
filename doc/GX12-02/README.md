@@ -2,6 +2,12 @@
 
 以 2026-11-16 机器人 `.18` 标定后的本体、新搬料框执行器及配套运控为基线，2026-11-17 增加 DS485 自制夹爪接入。末端坐标系可视化已由用户确认。
 
+## 2026-11-19 刚性搬框与双侧夹爪
+
+以 `.29` 的共享 MarvinSDK 运控为集成目标，合入 `ds485_ws@93f0b749`。默认位置策略保留 `ControlGripper`，恒定 PWM 策略使用 `/ds485/servo/set_torque`。现场夹爪配置按侧保存，左开/闭为 0.2°/98.1°，右开/闭为 57.9°/167.6°。[GX12-02 夹爪配置](../../deployment/GX12-02/opt/onecube/motion_control/config/ds485_gripper.yaml)
+
+`keep_grasp_rigid` 支持腰腿 MoveJ 和单目标主从 MoveP。按抓取起姿保留左右手相对位姿和料框倾角，允许平移和偏航，标准启动默认关闭静态 COM。右手主导的 WBC 仿真结果、参数与指令见[运控指令与参数](../MOTION_COMMANDS_AND_PARAMETERS.md)。
+
 ## 2026-11-17：DS485 夹爪
 
 `ControlGripper` 新增 `gripper_type=ds485`，经 Marvin 末端 485 透传控制德晟舵机，提供 `ros2 run motion_control_pkg ds485_gripper` 命令入口。默认夹爪类型仍为 `jodell`；取消、超时、通信异常及退出路径处理可能仍在运动的夹爪。协议、参数、动作和离线验证命令见 [DS485 说明](../../src/motion_control_pkg/doc/DS485_GRIPPER.md)。

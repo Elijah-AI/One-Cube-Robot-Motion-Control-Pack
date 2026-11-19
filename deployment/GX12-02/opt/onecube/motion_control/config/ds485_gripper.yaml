@@ -1,0 +1,79 @@
+# DS485 独立配置：运控使用 C++ LoadGripperConfig 读取，无需运行 ds485_node。
+# 角度单位：度；速度单位：度/秒；时间单位：毫秒
+# 修改后重启运控生效；运控的 ds485_gripper_config 参数指定此文件。
+ds485_node:
+  ros__parameters:
+    # ---------------- 全局 ----------------
+    marvin_ip: "192.168.1.190"   # 独立节点使用；集成模式的 SDK 地址由运控管理
+    state_rate_hz: 10.0          # ds485/state 发布频率；0 表示不周期读取
+    poll_ms: 20                  # 工作线程循环间隔：执行命令期间两次读状态之间的间隔
+    default_timeout_ms: 10000    # 命令 timeout_ms=0 时使用
+    allow_raw_write: false       # 是否允许 ds485/servo/write_register 写任意寄存器（调试用，默认关闭）
+
+    # ---------------- 左夹爪 ----------------
+    left:
+      enabled: true
+      # 总线：marvin = 机械臂末端透传；serial = USB-485 串口（台架调试）
+      port_type: "marvin"
+      arm: "A"                   # A = 左臂
+      channel: 2                 # 末端通道：1 CANFD，2 COM1，3 COM2（舵机接在 COM1）
+      serial_device: "/dev/ttyUSB0"   # 仅 port_type=serial 时使用
+      serial_baud: 115200
+      servo_id: 1                # 舵机 ID
+      gap_ms: 10                 # 每次发送前间隔（半双工总线切换时间）
+      timeout_ms: 300            # 单次应答超时
+
+      # 0x04=0 时舵机会保存保护参数。启动只写差异。-1 保留字段现值。0x32 沿用舵机配置。
+      protection:
+        auto_recover: true       # 0x33 低四位清零。异常消失后，下一条新运动指令可触发解除
+        voltage_high_v: 30       # 0x3C 高压 / 低压，单位 V，检测固定 3 秒
+        voltage_low_v: 5
+        temperature_trip_c: 60   # 0x3D 温度，单位 ℃，检测固定 3 秒
+        temperature_hysteresis_c: 5  # 降到 60 - 5 = 55 ℃ 可解除
+        current_ma: 6000         # 0x3E 电流与检测时间，时间以 100 ms 为一格
+        current_detect_ms: 200
+        stall_pwm: 600           # 0x3F 堵转/过载检测 PWM，范围 0~1000
+        stall_detect_ms: 3000
+
+      # 夹爪标定：position 0 对应 open_deg，255 对应 close_deg（按当前左右机构分别标定）
+      open_deg: 0.2
+      close_deg: 98.1 
+      default_pwm: 1000          # torque=0 时的 PWM 上限 1~1000，1000 = 最大扭矩
+      max_speed: 0               # speed=255 对应速度；0 = 舵机速度上限 0x5D（最大速度）
+      default_speed: 0           # speed=0 时的速度；0 = 最大速度
+      tolerance_deg: 1.0         # 到位容差
+      still_band_deg: 0.3        # 角度变化不超过该值视为“不动”
+      blocked_samples: 10        # 连续“不动”次数，达到后判定夹到物体
+
+    # ---------------- 右夹爪 ----------------
+    right:
+      enabled: true
+      port_type: "marvin"
+      arm: "B"                   # B = 右臂
+      channel: 2
+      serial_device: "/dev/ttyUSB1"
+      serial_baud: 115200
+      servo_id: 1
+      gap_ms: 10
+      timeout_ms: 300
+
+      # 右侧阈值尚未实测。可逐项填写，其余字段沿用该侧舵机现值。
+      protection:
+        auto_recover: true
+        voltage_high_v: -1
+        voltage_low_v: -1
+        temperature_trip_c: -1
+        temperature_hysteresis_c: -1
+        current_ma: -1
+        current_detect_ms: -1
+        stall_pwm: -1
+        stall_detect_ms: -1
+
+      open_deg: 57.9
+      close_deg: 167.6 
+      default_pwm: 1000
+      max_speed: 0
+      default_speed: 0
+      tolerance_deg: 1.0
+      still_band_deg: 0.3
+      blocked_samples: 10

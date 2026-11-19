@@ -202,3 +202,13 @@ Testing/
 !/src/motion_control_pkg/test/fixtures/
 /src/motion_control_pkg/test/fixtures/*
 !/src/motion_control_pkg/test/fixtures/ik_recovery_failures.json
+
+# DS485 production transport libraries and offline pseudo-terminal regressions.
+!/src/ds485_driver/test/
+!/src/ds485_driver/test/*.cpp
+!/src/ds485_driver/test/*.h
+!/src/ds485_driver/test/*.py
+!/src/ds485_driver/test/*.sh
+!/src/ds485_driver/third_party/marvin_sdk/lib/x64/libMarvinSDK.so
+!/src/ds485_driver/third_party/marvin_sdk/lib/aarch64/libMarvinSDK.so
+!/src/motion_control_pkg/test/test_ds485_ros_bridge.cpp

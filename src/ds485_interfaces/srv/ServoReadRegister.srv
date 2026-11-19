@@ -1,0 +1,11 @@
+# 调试：读舵机任意寄存器
+uint8 side            # 0 左 1 右
+uint8 address         # 寄存器地址，例如 0x46=70 角度
+uint8 length          # 期望数据长度；0 表示不检查
+uint8[] request       # 读指令附带参数，只有 0x59 地址列表读需要，其他留空
+---
+bool success
+string message
+uint8[] data          # 读到的数据（小端）
+string tx_hex         # 发出的报文，十六进制
+string rx_hex         # 收到的报文，十六进制

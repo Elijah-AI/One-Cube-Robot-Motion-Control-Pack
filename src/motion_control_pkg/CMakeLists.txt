@@ -41,6 +41,8 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(com_interfaces REQUIRED)
+find_package(ds485_interfaces REQUIRED)
+find_package(ds485_driver REQUIRED)
 # --- 查找可通过 apt 安装的第三方库 ---
 # find_package(glfw3 REQUIRED)
 # find_package(console_bridge REQUIRED)
@@ -221,8 +223,7 @@ set(SOURCES
     src/whole_body_module.cpp
     src/common/gripper/Modbus_Jodell.cpp
     # 自制夹爪：德晟串口总线舵机（第五版协议），经机械臂末端透传
-    src/common/gripper/Ds485_Gripper.cpp
-    src/common/gripper/Ds485_Marvin_Transport.cpp
+    # Legacy DS485 protocol sources are retained only for offline regression fixtures.
     # src/common/ctrl/PVT_ctrl.cpp
     # src/common/mpc/mpc.cpp
     # src/common/pino/pino_kin_dyn.cpp
@@ -252,6 +253,9 @@ else()
         list(APPEND SOURCES src/common/suck/neardi47_gpio_unavailable.c)
     endif()
 endif()
+
+# The independent ds485_ws exports the control library; motion contains no driver copy.
+list(APPEND SOURCES src/common/gripper/ds485_ros_bridge.cpp)
 
 # 创建可执行节点
 add_executable(motion_control_node ${SOURCES})
@@ -331,6 +335,7 @@ ament_target_dependencies(motion_control_node
     rclcpp
     rclcpp_action
     com_interfaces
+    ds485_interfaces
     std_msgs
     std_srvs
     rcl_interfaces
@@ -345,6 +350,7 @@ ament_target_dependencies(motion_control_node
 
 # 2. 第三方库
 target_link_libraries(motion_control_node
+    ds485_driver::ds485_control
     motion_planning_core
     dual_arm_sdk_core
     marvin_sdk
@@ -468,6 +474,25 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    add_executable(test_ds485_ros_bridge test/test_ds485_ros_bridge.cpp
+        src/common/gripper/ds485_ros_bridge.cpp test/ds485/fake_servo_port.cpp)
+    target_include_directories(test_ds485_ros_bridge PRIVATE test/ds485)
+    target_link_libraries(test_ds485_ros_bridge ds485_driver::ds485_control dual_arm_sdk_core)
+    ament_target_dependencies(test_ds485_ros_bridge rclcpp rclcpp_action com_interfaces ds485_interfaces)
+    add_test(NAME ds485_ros_bridge COMMAND ${CMAKE_COMMAND} -E env
+        --unset=FASTRTPS_DEFAULT_PROFILES_FILE --unset=CYCLONEDDS_URI
+        ROS_DOMAIN_ID=187 ROS_LOCALHOST_ONLY=1 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+        $<TARGET_FILE:test_ds485_ros_bridge>)
+    set_tests_properties(ds485_ros_bridge PROPERTIES TIMEOUT 45 RUN_SERIAL TRUE)
+    add_executable(test_ds485_torque_host test/ds485/embedded_torque_host.cpp
+        src/common/gripper/ds485_ros_bridge.cpp ../ds485_driver/test/marvin_link_spy.cpp)
+    target_link_libraries(test_ds485_torque_host ds485_driver::ds485_control dual_arm_sdk_core)
+    ament_target_dependencies(test_ds485_torque_host rclcpp rclcpp_action com_interfaces ds485_interfaces std_srvs)
+    add_test(NAME ds485_torque_host COMMAND /usr/bin/python3 -B
+        "${CMAKE_CURRENT_SOURCE_DIR}/../ds485_driver/test/test_torque_pty.py"
+        $<TARGET_FILE:test_ds485_torque_host> --embedded)
+    set_tests_properties(ds485_torque_host PROPERTIES TIMEOUT 75 RUN_SERIAL TRUE)
+
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME ds485_offline COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test/ds485/run_tests.py

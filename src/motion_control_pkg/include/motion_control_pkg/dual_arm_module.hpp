@@ -29,7 +29,7 @@
 #include "motion_control_pkg/ethercat_bus_manager.hpp"
 #include "FxRobot.h"
 #include "Modbus_Jodell.h"
-#include "Ds485_Gripper.h"
+#include "motion_control_pkg/gripper/ds485_ros_bridge.hpp"
 
 using namespace std::chrono_literals;
 using Matrix4 = double[4][4];
@@ -41,6 +41,19 @@ class DualArmModule
 {
 public:
     bool uses_ds485_gripper() const { return gripper_type_ == "ds485"; }
+    void setGripperAdmission(motion_control_pkg::gripper::Ds485RosBridge::Admission guard) {
+        if (ds485_bridge_) ds485_bridge_->setAdmission(std::move(guard));
+    }
+    void stopActiveGripperTorque() {
+        if (ds485_bridge_) ds485_bridge_->stopActiveTorque();
+    }
+    bool toolActionBusy(unsigned side) const {
+        return (side != 1 && is_executing_left_tool_.load()) ||
+               (side != 0 && is_executing_right_tool_.load());
+    }
+    bool validGripperGoal(const ControlGripper::Goal& goal, std::string& error) const {
+        return !ds485_bridge_ || ds485_bridge_->validGoal(goal,error);
+    }
 
     motion_control_pkg::sdk::DriveControlResult setTeachMode(unsigned mask, bool enable,
         const std::function<bool()>& canceled);
@@ -77,6 +90,7 @@ public:
         error=result.error_message; return static_cast<bool>(result);
     }
     bool releaseAfterShutdown(std::string& error) {
+        if (ds485_bridge_) ds485_bridge_->shutdown();
         if (!sdk_connected_) return true;
         const auto result=sdk_command_gate_->release();
         error=result.error_message;
@@ -246,8 +260,7 @@ private:
 
     // 夹爪类型："jodell" 外购 Jodell 夹爪（默认）；"ds485" 德晟舵机自制夹爪
     std::string gripper_type_{"jodell"};
-    // 自制夹爪配置，下标 0=左 1=右；channel 每次取自 goal->com_port
-    Ds485_config ds485_config_[2];
+    std::unique_ptr<motion_control_pkg::gripper::Ds485RosBridge> ds485_bridge_;
 
     rclcpp::Subscription<RobotVision>::SharedPtr collision_cloud_sub_;
     std::mutex latest_cloud_mutex_;

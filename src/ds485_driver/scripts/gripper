@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""自制夹爪命令行。同时也是“外部模块用 ROS2 话题控制夹爪”的完整示例。
+
+用法：
+  ros2 run ds485_driver gripper <动作> <侧> [力矩] [速度] [超时ms]
+    动作：open（张开）| close（闭合）| 0~255（位置，0 张开，255 闭合）| stop（锁舵停止）
+    侧  ：left | right | both
+    力矩：0~255，默认 0 = 配置 default_pwm，再受本侧 PWM 限制
+    速度：0~255，默认 0 = 配置 default_speed，再受标定速度限制
+    超时：毫秒，默认 0 = 配置 default_timeout_ms
+例：
+  ros2 run ds485_driver gripper close left
+  ros2 run ds485_driver gripper open both
+  ros2 run ds485_driver gripper 128 left 100 50
+  ros2 run ds485_driver gripper stop both
+
+流程：发布 GripperCommand 到 /ds485/gripper/command（带唯一 id），
+      在 /ds485/gripper/result 上等待 id 相同的结果（两侧时等两条）。
+退出码：0 全部成功（到位或夹到物体）；1 有失败；2 ds485_node 未运行或未收到结果。
+"""
+import sys
+import time
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+
+from ds485_interfaces.msg import GripperCommand, GripperResult, GripperStop
+
+SIDES = {'left': 0, 'right': 1, 'both': 2}
+SIDE_NAMES = {0: '左', 1: '右'}
+RESULT_NAMES = {1: '到位', 2: '夹到物体', 3: '舵机故障', 4: '超时',
+                5: '失败', 6: '被停止', 7: '被新命令替换'}
+
+
+def usage():
+    print(__doc__.split('流程：')[0].strip())
+    sys.exit(1)
+
+
+def to_byte(text, name):
+    if not text.isdigit() or int(text) > 255:
+        print(f'{name}必须是 0~255：{text}')
+        usage()
+    return int(text)
+
+
+def wait_for_node(node, publisher, seconds):
+    """等待 ds485_node 订阅命令话题，否则发出的消息可能没人收到。"""
+    deadline = time.time() + seconds
+    while publisher.get_subscription_count() == 0:
+        if time.time() > deadline:
+            return False
+        rclpy.spin_once(node, timeout_sec=0.1)
+    # 再等一会儿，让本程序的结果订阅也与 ds485_node 的发布者完成匹配
+    end = time.time() + 0.3
+    while time.time() < end:
+        rclpy.spin_once(node, timeout_sec=0.05)
+    return True
+
+
+def main():
+    argv = sys.argv[1:]
+    if len(argv) < 2 or argv[1] not in SIDES:
+        usage()
+    action, side = argv[0], SIDES[argv[1]]
+
+    rclpy.init()
+    node = Node('ds485_gripper_cli')
+    qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+
+    # ---------- 停止 ----------
+    if action == 'stop':
+        pub = node.create_publisher(GripperStop, '/ds485/gripper/stop', qos)
+        if not wait_for_node(node, pub, 3.0):
+            print('未发现 ds485_node（/ds485/gripper/stop 没有订阅者）')
+            sys.exit(2)
+        pub.publish(GripperStop(side=side))
+        rclpy.spin_once(node, timeout_sec=0.2)   # 给发送留一点时间
+        print('已发布停止')
+        return 0
+
+    # ---------- 位置命令 ----------
+    if action == 'open':
+        position = 0
+    elif action == 'close':
+        position = 255
+    else:
+        position = to_byte(action, '位置')
+    torque = to_byte(argv[2], '力矩') if len(argv) > 2 else 0
+    speed = to_byte(argv[3], '速度') if len(argv) > 3 else 0
+    timeout_ms = int(argv[4]) if len(argv) > 4 and argv[4].isdigit() else 0
+
+    results = {}
+    cmd_id = int(time.time() * 1000) & 0xFFFFFFFF   # 本次命令的唯一编号
+
+    def on_result(msg):
+        if msg.id == cmd_id:
+            results[msg.side] = msg
+
+    node.create_subscription(GripperResult, '/ds485/gripper/result', on_result, qos)
+    pub = node.create_publisher(GripperCommand, '/ds485/gripper/command', qos)
+    if not wait_for_node(node, pub, 3.0):
+        print('未发现 ds485_node（/ds485/gripper/command 没有订阅者）')
+        sys.exit(2)
+
+    pub.publish(GripperCommand(id=cmd_id, side=side, position=position,
+                               torque=torque, speed=speed, timeout_ms=timeout_ms))
+    print(f'已发布命令 id={cmd_id} side={argv[1]} position={position} torque={torque} speed={speed}')
+
+    expect = [0, 1] if side == 2 else [side]
+    wait_s = (timeout_ms if timeout_ms > 0 else 10000) / 1000.0 + 3.0
+    deadline = time.time() + wait_s
+    while len(results) < len(expect) and time.time() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.05)
+
+    ok = True
+    for s in expect:
+        r = results.get(s)
+        if r is None:
+            print(f'{SIDE_NAMES[s]}夹爪：{wait_s:.0f} 秒内未收到结果')
+            ok = False
+            continue
+        name = RESULT_NAMES.get(r.result, str(r.result))
+        print(f'{SIDE_NAMES[s]}夹爪：{name}，位置 {r.final_position}，角度 {r.final_angle_deg:.1f}°，{r.message}')
+        ok = ok and r.success
+    node.destroy_node()
+    rclpy.shutdown()
+    if len(results) < len(expect):
+        return 2
+    return 0 if ok else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

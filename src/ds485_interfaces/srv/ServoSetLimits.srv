@@ -1,0 +1,8 @@
+# 调试：运行时限制（掉电后恢复舵机存储值）。给 -1 表示不修改该项
+uint8 side
+int32 pwm_limit       # 0x5B，0~1000（协议中的“扭矩”）
+int32 speed_limit     # 0x5D，度/秒（未实机验证）
+int32 current_limit   # 0x5C，毫安（未实机验证）
+---
+bool success
+string message

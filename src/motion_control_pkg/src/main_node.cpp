@@ -234,6 +234,25 @@ public:
             recovery.enabled, recovery.seeds, miracleAlgo_ptr_->ikRecoveryStats().cpus.size(),
             selected_cpus.str().c_str(), recovery.seed_timeout_s, recovery.request_timeout_s);
 
+        dual_arm_module_->setGripperAdmission([this](unsigned side,
+            const std::function<void()>& dispatch,std::string& error) {
+            std::lock_guard<std::mutex> lock(admission_mutex_);
+            if (motion_control_pkg::execution::shutdownRequested() || maintenance_active_ || teaching_mask_) {
+                error="shutdown, maintenance or teaching in progress";return false;
+            }
+            if (motion_safety_ && motion_safety_->latched()) {
+                error = "motion safety stop is latched";
+                return false;
+            }
+            if (head_startup_policy_.enabled && (!motion_safety_ || !motion_safety_->ready(error))) {
+                if (error.empty()) error="startup safety is not ready";
+                return false;
+            }
+            if (dual_arm_module_->toolActionBusy(side)) {
+                error="ControlGripper Action owns a requested tool";return false;
+            }
+            dispatch();return true;
+        });
         dual_arm_module_->attachMeasuredFeedbackBus(ethercat_bus_manager_ptr_);
         lower_body_module_->set_body_motion_callbacks(
             [arms = dual_arm_module_, head = head_module_](std::string& error) {
@@ -322,6 +341,7 @@ public:
         std::lock_guard<std::mutex> lock(admission_mutex_);
         motion_control_pkg::execution::requestShutdown();
         if (shutdown_) return;
+        if (dual_arm_module_) dual_arm_module_->stopActiveGripperTorque();
         if (motion_safety_) motion_safety_->requestStop("orderly process shutdown");
         const std::size_t axes=(ethercat_attempted_ ? 6U : 0U)+
             ((dual_arm_module_ && dual_arm_module_->shutdownDriverConnected()) ? 14U : 0U);
@@ -442,9 +462,10 @@ private:
         ~MaintenanceActiveReset() { value=false; }
     };
     void cancelMaintenance(const std::string& reason) {
-        std::lock_guard<std::mutex> lock(maintenance_stop_mutex_);
+        std::scoped_lock lock(admission_mutex_, maintenance_stop_mutex_);
         ++maintenance_epoch_;
         motion_safety_->requestStop(reason);
+        if (dual_arm_module_) dual_arm_module_->stopActiveGripperTorque();
     }
     bool startMaintenance(std::string& error) {
         std::lock_guard<std::mutex> lock(admission_mutex_);
@@ -1395,6 +1416,12 @@ private:
             RCLCPP_WARN(
                 this->get_logger(), "Rejecting ControlGripper goal: %s",
                 validation.error_message.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+
+        std::string ds485_error;
+        if (!dual_arm_module_->validGripperGoal(*goal,ds485_error)) {
+            RCLCPP_WARN(get_logger(),"Rejecting ControlGripper: %s",ds485_error.c_str());
             return rclcpp_action::GoalResponse::REJECT;
         }
 

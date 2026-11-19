@@ -1,0 +1,11 @@
+# 调试：舵机定速转到绝对角度（0x66），不经过夹爪标定换算
+# 只检查舵机自身限位(0x19/0x1A)和速度上限(0x5D)，请先确认机构可动范围
+uint8 side            # 0 左 1 右
+float32 angle_deg     # 目标角度，度（精度 0.1°）
+uint16 speed_dps      # 速度，度/秒；0 表示用舵机速度上限
+bool wait             # true：等到停止或超时再返回
+uint32 timeout_ms     # wait=true 时的等待时间；0 表示 5000
+---
+bool success
+string message
+float32 final_angle_deg   # wait=true 时为停止后的角度

@@ -16,15 +16,6 @@ def main():
     tests = Path(__file__).resolve().parent
     gripper = source / 'src/common/gripper'
     header = source / 'include/motion_control_pkg/gripper'
-    text = (source / 'src/dual_arm_module.cpp').read_text()
-    progress_start = text.index('float_t DualArmModule::get_progress_1000(')
-    progress_end = text.index('void DualArmModule::control_gripper_result', progress_start)
-    helper_start = text.index('static uint8_t ds485_pwm_to_255')
-    helper_end = text.index('void DualArmModule::load_ds485_gripper_parameters', helper_start)
-    action_start = text.index('void DualArmModule::execution_loop_control_ds485_gripper', helper_end)
-    action_end = text.index('void DualArmModule::heart_beat_cb', action_start)
-    extracted = text[progress_start:progress_end] + text[helper_start:helper_end] + text[action_start:action_end]
-    (build / 'ds485_extracted_action.inc').write_text(extracted)
     common = ['c++', '-std=c++17', '-Wall', '-Wextra', '-pthread',
               '-I' + str(build), '-I' + str(tests), '-I' + str(header),
               '-I' + str(source / 'include'),
@@ -32,8 +23,6 @@ def main():
     cases = {
         'protocol': [tests / 'test_ds485_gripper.cpp', tests / 'fake_ds485_servo.cpp'],
         'combined': [tests / 'test_combined.cpp'],
-        'action': [tests / 'test_action.cpp', tests / 'fake_ds485_servo.cpp',
-                   gripper / 'Ds485_Marvin_Transport.cpp'],
     }
     for name, files in cases.items():
         executable = build / ('test_' + name)
