@@ -47,6 +47,7 @@
 #include <pinocchio/algorithm/geometry.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
 #include <pinocchio/collision/collision.hpp>
+#include "motion_control_pkg/motion/suction_collision_pairs.hpp"
 #include <pinocchio/collision/distance.hpp>
 #include <coal/collision.h>
 #include <coal/shape/geometric_shapes.h>
@@ -339,8 +340,11 @@ void MiracleMAlgo::setupInternalCollisionPairs() {
     
     int added_pairs = 0;
     
-    // Add internal collision pairs
-    for (const auto& pair : collision_pairs) {
+    // Keep the existing body/gripper policy and add rigid suction geometry when present.
+    auto configured_pairs = collision_pairs;
+    const auto suction_pairs = motion_control_pkg::motion::suctionCollisionPairs();
+    configured_pairs.insert(configured_pairs.end(), suction_pairs.begin(), suction_pairs.end());
+    for (const auto& pair : configured_pairs) {
         // Pinocchio might append "_0" or "_1" or "_2" if there are multiple meshes per link.
         // Also it uses the mesh name from the URDF which might not be exactly the link name.
         // Let's iterate over all geometry objects to find a match by substring instead.

@@ -463,6 +463,10 @@ install(DIRECTORY launch
 
 # Offline regression: real URDF/Pinocchio, no vendor SDK or hardware node.
 if(BUILD_TESTING)
+    add_executable(test_suction_collision test/suction_collision_test.cpp)
+    target_link_libraries(test_suction_collision motion_planning_core)
+    add_test(NAME suction_collision COMMAND test_suction_collision "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+    set_tests_properties(suction_collision PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
     add_executable(test_sdk_arm_position_limits test/sdk_arm_position_limits_test.cpp)
     target_link_libraries(test_sdk_arm_position_limits motion_planning_core)
     add_dependencies(test_sdk_arm_position_limits ik_recovery_worker)

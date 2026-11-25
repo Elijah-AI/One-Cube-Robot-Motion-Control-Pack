@@ -1,0 +1,395 @@
+{
+  "seed": 20261114,
+  "cases": [
+    {
+      "name": "suction_only_collision_4",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": -1.2732619717623856,
+        "Joint2_L": 1.5169900797155846,
+        "Joint3_L": 1.5980085987608308,
+        "Joint4_L": -0.40806663458666015,
+        "Joint5_L": -2.0201677304913614,
+        "Joint6_L": 0.7482520273872995,
+        "Joint7_L": 0.18797594291490372,
+        "Joint1_R": 1.2820198368458091,
+        "Joint2_R": 0.1894312880104363,
+        "Joint3_R": -2.091706402772394,
+        "Joint4_R": 0.09227492021504435,
+        "Joint5_R": -0.5771378568219916,
+        "Joint6_R": 0.18036137204685088,
+        "Joint7_R": -0.549654371296443,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "leg_link2",
+          "sucker_l_Link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_33",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": -0.657036667986787,
+        "Joint2_L": 0.38251401627868997,
+        "Joint3_L": -1.3374563700490063,
+        "Joint4_L": 1.0294285765762883,
+        "Joint5_L": 0.0715701481001676,
+        "Joint6_L": -0.46483299009970724,
+        "Joint7_L": 1.5429994581649191,
+        "Joint1_R": -0.6298056124415334,
+        "Joint2_R": -1.679841057369035,
+        "Joint3_R": 0.7146393748229922,
+        "Joint4_R": -1.9753280545791538,
+        "Joint5_R": 0.5245342673266151,
+        "Joint6_R": -0.39736041988187887,
+        "Joint7_R": 0.48537896154860083,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "body_link",
+          "sucker_r_Link"
+        ],
+        [
+          "head_pitch_link",
+          "sucker_r_Link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_37",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": 0.29889085585263464,
+        "Joint2_L": -0.2052356154128807,
+        "Joint3_L": 1.356683928592926,
+        "Joint4_L": -1.527008555448202,
+        "Joint5_L": 0.5877155905579916,
+        "Joint6_L": -0.07814480879394459,
+        "Joint7_L": -0.35271110718839527,
+        "Joint1_R": -1.7799357659713326,
+        "Joint2_R": -1.3077044182551119,
+        "Joint3_R": -0.39936181080760447,
+        "Joint4_R": -0.8916547508119579,
+        "Joint5_R": 0.7343288142232676,
+        "Joint6_R": -0.5099091339915439,
+        "Joint7_R": -1.1698887223564711,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "leg_link2",
+          "sucker_r_Link"
+        ],
+        [
+          "leg_link3",
+          "sucker_r_Link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_40",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": 0.23600373343906522,
+        "Joint2_L": -1.7099786203144631,
+        "Joint3_L": 1.4853054770295544,
+        "Joint4_L": -2.2552451322981564,
+        "Joint5_L": 1.713586207856388,
+        "Joint6_L": 0.39725137552742096,
+        "Joint7_L": 1.3280849392632958,
+        "Joint1_R": -2.295448208545441,
+        "Joint2_R": 0.012217894189542555,
+        "Joint3_R": -1.5440920880336912,
+        "Joint4_R": 0.8786950826165119,
+        "Joint5_R": 0.9187059512603257,
+        "Joint6_R": 0.041480928029651976,
+        "Joint7_R": -0.7032421370854305,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "body_link",
+          "sucker_l_Link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_69",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": 1.096284902599412,
+        "Joint2_L": -0.14578019553262744,
+        "Joint3_L": -0.8845706445097494,
+        "Joint4_L": -0.6134147387219033,
+        "Joint5_L": 1.4114967997825154,
+        "Joint6_L": 0.13277071411270458,
+        "Joint7_L": 0.12455975578038658,
+        "Joint1_R": -1.458451026132526,
+        "Joint2_R": -1.3722003164053032,
+        "Joint3_R": 0.5817610611155613,
+        "Joint4_R": -1.630590741869643,
+        "Joint5_R": -1.1615620665722868,
+        "Joint6_R": -0.6043243726677378,
+        "Joint7_R": -0.30633298714616486,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "body_link",
+          "sucker_r_Link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_99",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": -0.16005500479682855,
+        "Joint2_L": 0.36013645643544967,
+        "Joint3_L": 0.10955683184133003,
+        "Joint4_L": 0.7898088351196124,
+        "Joint5_L": 2.212141824048589,
+        "Joint6_L": -0.6112859825470736,
+        "Joint7_L": -0.3990974248951944,
+        "Joint1_R": -0.8052339932317099,
+        "Joint2_R": -1.0340483673382908,
+        "Joint3_R": -0.4721365635316268,
+        "Joint4_R": -1.6492598004805565,
+        "Joint5_R": -1.289552945361111,
+        "Joint6_R": 0.8374665060459676,
+        "Joint7_R": -1.1345862384375687,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "body_link",
+          "sucker_r_Link"
+        ],
+        [
+          "body_link",
+          "sucker_r_base_link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_111",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": -2.24568885550363,
+        "Joint2_L": -0.629440438923148,
+        "Joint3_L": 0.828816289576225,
+        "Joint4_L": -1.8658092911919564,
+        "Joint5_L": -1.8065286235652538,
+        "Joint6_L": 0.2927704404771043,
+        "Joint7_L": -0.45532488006417093,
+        "Joint1_R": 1.3642699310724873,
+        "Joint2_R": 0.9314759912182939,
+        "Joint3_R": 1.7024432321275804,
+        "Joint4_R": 0.5196712339488063,
+        "Joint5_R": -0.7051047707056561,
+        "Joint6_R": -0.2403576956423652,
+        "Joint7_R": -1.478150143979326,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "head_pitch_link",
+          "sucker_l_Link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_133",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": -0.8328452024370867,
+        "Joint2_L": -1.1654910521141095,
+        "Joint3_L": -2.283515345438495,
+        "Joint4_L": -2.327087827538462,
+        "Joint5_L": -1.0684392498908255,
+        "Joint6_L": 0.10145403056358626,
+        "Joint7_L": -1.4623150292138622,
+        "Joint1_R": 0.47656206225668507,
+        "Joint2_R": -0.18585882168671053,
+        "Joint3_R": 0.722744550212425,
+        "Joint4_R": 0.08747853656144944,
+        "Joint5_R": 1.3111039657645303,
+        "Joint6_R": -0.005137232401053904,
+        "Joint7_R": -0.7349275198970453,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "Link1_L",
+          "sucker_l_Link"
+        ],
+        [
+          "body_link",
+          "sucker_l_Link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_302",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": 1.0273307731356347,
+        "Joint2_L": -1.0524320047090008,
+        "Joint3_L": 1.2004845808291442,
+        "Joint4_L": -2.176836588024071,
+        "Joint5_L": 1.5559395733605297,
+        "Joint6_L": 0.8212759170107027,
+        "Joint7_L": 0.4932869407216527,
+        "Joint1_R": -0.8435257040687685,
+        "Joint2_R": 1.3399911355160312,
+        "Joint3_R": 1.2684581301365943,
+        "Joint4_R": -1.9687921387216027,
+        "Joint5_R": 1.8868470845528793,
+        "Joint6_R": -0.3604768359642412,
+        "Joint7_R": 1.3693583947543047,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "body_link",
+          "sucker_l_Link"
+        ],
+        [
+          "body_link",
+          "sucker_l_base_link"
+        ]
+      ]
+    },
+    {
+      "name": "suction_only_collision_470",
+      "joints": {
+        "base_front_wheel_1_yaw_joint": 0.0,
+        "base_front_wheel_1_pitch_joint": 0.0,
+        "base_rear_wheel_1_yaw_joint": 0.0,
+        "base_rear_wheel_1_pitch_joint": 0.0,
+        "leg_joint1": 0.0,
+        "leg_joint2": 0.0,
+        "leg_joint3": 0.0,
+        "body_joint": 0.0,
+        "Joint1_L": 0.7328553632393451,
+        "Joint2_L": 1.0561960356033837,
+        "Joint3_L": 1.9299713182983713,
+        "Joint4_L": -1.8785526247144786,
+        "Joint5_L": 0.043978601692127306,
+        "Joint6_L": 0.8808574296035085,
+        "Joint7_L": -0.36833257161081767,
+        "Joint1_R": 2.0497421856423688,
+        "Joint2_R": -1.7093803386006412,
+        "Joint3_R": 0.7807863819536984,
+        "Joint4_R": -1.3506399841472707,
+        "Joint5_R": -0.35968142295091043,
+        "Joint6_R": -0.16581993702931674,
+        "Joint7_R": -0.5612484157838669,
+        "head_yaw_joint": 0.0,
+        "head_pitch_joint": 0.0
+      },
+      "expected_collisions": [
+        [
+          "Link5_L",
+          "sucker_r_Link"
+        ],
+        [
+          "Link6_L",
+          "sucker_r_Link"
+        ],
+        [
+          "Link7_L",
+          "sucker_r_Link"
+        ],
+        [
+          "sucker_l_Link",
+          "sucker_r_Link"
+        ],
+        [
+          "sucker_l_Link",
+          "sucker_r_base_link"
+        ],
+        [
+          "sucker_l_base_link",
+          "sucker_r_Link"
+        ]
+      ]
+    }
+  ]
+}
