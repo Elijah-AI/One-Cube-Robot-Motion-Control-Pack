@@ -23,7 +23,7 @@ def run(binary, config_path, directory):
         result = bench.torque(1, 100)
         assert result.success and result.sent and not result.acknowledged, result
         bench.until(lambda: bench.health[(1, 1)].reason == "PWM_START_CONFIRMED")
-        assert bus[1].pwm == bus[2].pwm == 100
+        assert (bus[1].pwm, bus[2].pwm) == (-100, 100)
         assert bench.call(gate, SetBool.Request(data=False)).success
         bench.until(lambda: all(bench.health[(1, sid)].stop_confirmed for sid in (1, 2)))
         assert bus[1].pwm == bus[2].pwm == 0

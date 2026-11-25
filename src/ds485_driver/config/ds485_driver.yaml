@@ -69,7 +69,7 @@ ds485_node:
       serial_baud: 115200
       servo_id: 1
       servo_ids: [1, 2]
-      servo_directions: [1, 1]
+      servo_directions: [-1, 1]
       sync_write: "multi_id"
       start_confirm_ms: 200
       gap_ms: 10
