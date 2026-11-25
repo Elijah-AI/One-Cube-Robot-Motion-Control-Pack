@@ -1,0 +1,10 @@
+# 调试：扭矩开关 0x64
+uint8 SWITCH_RELEASE=0    # 关闭输出，自由释放（夹持的物体可能掉落）
+uint8 SWITCH_BRAKE=1      # 关闭驱动，带刹车阻尼
+uint8 SWITCH_HOLD=2       # 打开输出，在当前位置锁舵
+
+uint8 side
+uint8 mode
+---
+bool success
+string message

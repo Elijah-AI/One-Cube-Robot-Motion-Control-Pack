@@ -1,0 +1,18 @@
+# 0 左，1 右。每次请求只操作一条总线，作用于该侧配置的全部舵机。
+uint8 side
+# 0x6E 有符号 PWM，-1000 至 1000。0 请求制动停止。
+# 每台实际写入 pwm × servo_directions[i]；一侧多台时按 sync_write 同时下发（默认 0x83 一帧）。
+int16 pwm
+# 0 持续输出直到新指令或停止。正值从交给传输层起计时，单位毫秒。
+uint32 duration_ms
+---
+bool success
+# 非零请求对应原运动帧。零请求在电机模式下对应零输出帧。
+bool sent
+# true 表示收到了成功短应答。固件明确拒绝时 sent 仍为 true，原因见 message。
+# 0x83/0x84 同步帧协议规定无应答，此项为 false；启动由反馈确认，见健康话题 reason
+# PWM_START_CONFIRMED，超时未确认则整侧以 START_UNCONFIRMED 停止。
+bool acknowledged
+# 本侧每台的制动开关、零 PWM 和静止反馈均已读回。
+bool stop_confirmed
+string message

@@ -17,6 +17,7 @@
   <depend>com_interfaces</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>ds485_driver</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>tf2_ros_py</exec_depend>

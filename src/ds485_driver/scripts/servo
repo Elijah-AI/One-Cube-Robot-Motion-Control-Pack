@@ -1,0 +1,142 @@
+#!/bin/bash
+# 舵机直接控制（调试）：调用 ds485_node 的 ds485/servo/* 服务。需先启动 ds485_node。
+#
+# 用法：
+#   ros2 run ds485_driver servo <侧>[:<舵机ID>] <命令> [参数...]
+#     侧：left | right。一侧多台时用 left:2 指定舵机；省略 ID 时
+#         info/read/write 作用于本侧第一台，pwm/speedlimit 作用于本侧全部
+#   命令：
+#     info                      读取全部常用信息（限位、模式、开关、PWM/速度上限、温度、电压）
+#     read  <地址> [长度]        读寄存器，例如 read 0x46 4
+#     write <地址> <字节...>     写寄存器（需 allow_raw_write: true），例如 write 0x5B 0xE8 0x03
+#     move  <角度> [速度] [nowait]  按标定轨迹转到绝对角度（度），速度 °/s，0 使用本侧允许速度
+#     hold | brake | release    扭矩开关：锁舵 / 刹车 / 释放（作用于整侧；释放后夹持物可能掉落）
+#     torque <有符号PWM> [毫秒]  电机恒定输出，整侧同时启动，0 制动，省略时长则持续输出
+#     pwm   <0~1000>            运行时 PWM 上限（协议中的“扭矩”）
+#     speedlimit <°/s>          运行时速度上限 0x5D（未实机验证）
+#     state                     查看一次 ds485/state 话题（每台一条）
+# 例：
+#   ros2 run ds485_driver servo left info
+#   ros2 run ds485_driver servo left:2 info
+#   ros2 run ds485_driver servo left torque 300 500
+#   ros2 run ds485_driver servo left read 0x59 10 0x46 0x47 0x48 0x49   # 地址列表读
+set -e
+shopt -s inherit_errexit   # $(...) 中的错误也终止脚本
+
+usage() {
+    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+}
+
+[ $# -ge 2 ] || usage
+SIDE_SPEC=$1
+CMD=$2
+shift 2
+
+SIDE_NAME=${SIDE_SPEC%%:*}
+SERVO_ID=-1
+if [[ "$SIDE_SPEC" == *:* ]]; then
+    SERVO_ID=${SIDE_SPEC#*:}
+    if ! [[ "$SERVO_ID" =~ ^(0|[1-9][0-9]{0,2})$ ]] || [ "$SERVO_ID" -gt 250 ]; then
+        echo "舵机 ID 必须为 0~250：$SIDE_SPEC" >&2
+        exit 1
+    fi
+fi
+case "$SIDE_NAME" in
+    left)  SIDE=0 ;;
+    right) SIDE=1 ;;
+    *) echo "侧必须是 left 或 right" >&2; usage ;;
+esac
+case "$CMD" in
+    move|hold|brake|release|torque)
+        if [ "$SERVO_ID" -ge 0 ]; then
+            echo "$CMD 作用于整侧，不接受舵机 ID：请写 $SIDE_NAME" >&2
+            exit 1
+        fi
+        ;;
+esac
+
+# 把 0x46 / 70 之类的数字转成十进制，并检查 0~255
+to_byte() {
+    if ! [[ "$1" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+        echo "不是数字：$1" >&2
+        exit 1
+    fi
+    local v=$(( $1 ))
+    if [ "$v" -lt 0 ] || [ "$v" -gt 255 ]; then
+        echo "超出 0~255：$1" >&2
+        exit 1
+    fi
+    echo "$v"
+}
+
+# 把剩余参数拼成 [a, b, c]
+to_list() {
+    local out=""
+    for b in "$@"; do
+        out="${out:+$out, }$(to_byte "$b")"
+    done
+    echo "[$out]"
+}
+
+SRV=/ds485/servo
+case "$CMD" in
+    info)
+        exec ros2 service call $SRV/get_info ds485_interfaces/srv/ServoGetInfo \
+            "{side: $SIDE, servo_id: $SERVO_ID}"
+        ;;
+    read)
+        [ $# -ge 1 ] || usage
+        ADDR=$(to_byte "$1")
+        LEN=$(to_byte "${2:-0}")
+        shift; [ $# -ge 1 ] && shift
+        REQ=$(to_list "$@")
+        exec ros2 service call $SRV/read_register ds485_interfaces/srv/ServoReadRegister \
+            "{side: $SIDE, address: $ADDR, length: $LEN, request: $REQ, servo_id: $SERVO_ID}"
+        ;;
+    write)
+        [ $# -ge 2 ] || usage
+        ADDR=$(to_byte "$1")
+        shift
+        DATA=$(to_list "$@")
+        exec ros2 service call $SRV/write_register ds485_interfaces/srv/ServoWriteRegister \
+            "{side: $SIDE, address: $ADDR, data: $DATA, servo_id: $SERVO_ID}"
+        ;;
+    move)
+        [ $# -ge 1 ] || usage
+        ANGLE=$1
+        SPEED=${2:-0}
+        WAIT=true
+        [ "${3:-}" = "nowait" ] && WAIT=false
+        exec ros2 service call $SRV/move_angle ds485_interfaces/srv/ServoMoveAngle \
+            "{side: $SIDE, angle_deg: $ANGLE, speed_dps: $SPEED, wait: $WAIT, timeout_ms: 0}"
+        ;;
+    release|brake|hold)
+        case "$CMD" in release) MODE=0 ;; brake) MODE=1 ;; hold) MODE=2 ;; esac
+        exec ros2 service call $SRV/set_switch ds485_interfaces/srv/ServoSetSwitch \
+            "{side: $SIDE, mode: $MODE}"
+        ;;
+    torque)
+        [[ $# -ge 1 && $# -le 2 ]] || usage
+        [[ "$1" =~ ^-?(0|[1-9][0-9]{0,3})$ && "${2:-0}" =~ ^(0|[1-9][0-9]{0,9})$ ]] || usage
+        (( $1 >= -1000 && $1 <= 1000 && ${2:-0} <= 4294967295 )) || usage
+        exec ros2 service call $SRV/set_torque ds485_interfaces/srv/ServoSetTorque \
+            "{side: $SIDE, pwm: $1, duration_ms: ${2:-0}}"
+        ;;
+    pwm)
+        [ $# -ge 1 ] || usage
+        exec ros2 service call $SRV/set_limits ds485_interfaces/srv/ServoSetLimits \
+            "{side: $SIDE, pwm_limit: $1, speed_limit: -1, current_limit: -1, servo_id: $SERVO_ID}"
+        ;;
+    speedlimit)
+        [ $# -ge 1 ] || usage
+        exec ros2 service call $SRV/set_limits ds485_interfaces/srv/ServoSetLimits \
+            "{side: $SIDE, pwm_limit: -1, speed_limit: $1, current_limit: -1, servo_id: $SERVO_ID}"
+        ;;
+    state)
+        exec ros2 topic echo --once /ds485/state
+        ;;
+    *)
+        usage
+        ;;
+esac

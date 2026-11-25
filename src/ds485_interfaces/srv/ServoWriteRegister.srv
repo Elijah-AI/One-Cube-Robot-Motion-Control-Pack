@@ -1,0 +1,11 @@
+# 调试：写舵机任意寄存器。默认关闭，需在配置中设 allow_raw_write: true
+# 注意：可写入掉电保存的参数（ID、限位等），写错可能导致舵机失联或撞机构
+uint8 side            # 0 左 1 右
+uint8 address         # 寄存器地址
+uint8[] data          # 写入数据（小端）
+int16 servo_id -1     # 本侧舵机 ID；-1 为本侧第一台
+---
+bool success
+string message
+string tx_hex
+string rx_hex

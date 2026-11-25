@@ -1,0 +1,104 @@
+# DS485 双夹爪未标定时的空载调试参数
+# 两个 verified 标志均为 false。节点可读反馈，运动请求返回 CALIBRATION_REQUIRED。
+# -1 表示待测。驱动只在运动校验通过后，将闭合 PWM 和电流上限写入运行时寄存器。
+# 速度和加速度为规划候选值。25 Hz 匀速时每周期约 0.1°，从静止规划到 2.5°/s 需 0.5 s。
+# PWM 和电流沿用上次台架的限幅。此草案将软件停止线也设在同一数值，达到即停止。
+# 机械端点、串口间隔和空闲应答超时继承 ds485_driver.yaml。舵机保护寄存器也由该设备配置管理。
+ds485_node:
+  ros__parameters:
+    trace_hex: false
+    left:
+      safety:
+        limits_verified: true 
+        interpolation_verified: true 
+        control_mode: 1
+        control_frequency_hz: 25
+        feedback_frequency_hz: 25
+        health_frequency_hz: 2
+        read_max_retries: 0
+        close_direction: 0
+
+        close_velocity_deg_s: 2.5
+        close_acceleration_deg_s2: 5.0
+        max_following_error_deg: 2.5  # 上次插补试验的最大目标领先量，左侧终点仍差 1.1°。
+
+        pwm_free: 80
+        pwm_contact_threshold: 800
+        pwm_contact_delta_threshold: 100
+        pwm_close_limit: 900
+        pwm_hold_limit: 800
+        pwm_hard_limit: 1000
+
+        current_contact_ma: 1000
+        current_close_limit_ma: 1000
+        current_hold_limit_ma: 4000
+        current_hard_limit_ma: 2000
+        temperature_warning_c: 50
+        temperature_stop_c: 58
+
+        contact_error_deg: -1.0
+        contact_min_fraction: -1.0
+        contact_max_fraction: -1.0
+        startup_guard_ms: -1
+        contact_confirm_ms: -1
+        filter_ms: -1
+        feedback_timeout_ms: 50
+        max_feedback_failures: 3
+
+        motion_timeout_ms: -1
+        max_close_duration_ms: -1
+        max_hold_duration_ms: -1
+        hold_overload_duration_ms: -1
+        hold_drift_deg: -1.0
+        unload_step_deg: 0.0
+        max_unload_deg: 0.0
+        enable_auto_preload: false
+        fault_stop_policy: "brake"  # 空载实测已确认制动，带载保持需另行验证
+
+    right:
+      safety:
+        limits_verified: true
+        interpolation_verified: true
+        control_mode: 1
+        control_frequency_hz: 25
+        feedback_frequency_hz: 25
+        health_frequency_hz: 2
+        read_max_retries: 0
+        close_direction: 0
+
+        close_velocity_deg_s: 2.5
+        close_acceleration_deg_s2: 5.0
+        max_following_error_deg: 2.5  # 上次试验在此领先量下无位移，保留该边界。
+
+        pwm_free: 80
+        pwm_contact_threshold: 800
+        pwm_contact_delta_threshold: 100
+        pwm_close_limit: 900
+        pwm_hold_limit: 800
+        pwm_hard_limit: 1000
+
+        current_contact_ma: 1000
+        current_close_limit_ma: 1000
+        current_hold_limit_ma: 4000
+        current_hard_limit_ma: 2000
+        temperature_warning_c: 50
+        temperature_stop_c: 58
+
+        contact_error_deg: -1.0
+        contact_min_fraction: -1.0
+        contact_max_fraction: -1.0
+        startup_guard_ms: -1
+        contact_confirm_ms: -1
+        filter_ms: -1
+        feedback_timeout_ms: 50
+        max_feedback_failures: 3
+
+        motion_timeout_ms: -1
+        max_close_duration_ms: -1
+        max_hold_duration_ms: -1
+        hold_overload_duration_ms: -1
+        hold_drift_deg: -1.0
+        unload_step_deg: 0.0
+        max_unload_deg: 0.0
+        enable_auto_preload: false
+        fault_stop_policy: "brake"  # 空载实测已确认制动，带载保持需另行验证

@@ -33,7 +33,7 @@
     left_arm_tool: suck  #根据机器人实际配置修改
     left_arm_tool_tf: [0.0, 0.0, 0.159, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
     
-    right_arm_tool: gripper    #根据机器人实际配置修改
+    right_arm_tool: ds485_torque    #根据机器人实际配置修改
     right_arm_tool_tf: [0.0, 0.0, 0.2205, 0.0, 0.0, 0.0, 1.0]   #米；[x,y,z,qx,qy,qz,qw]，从模型末端/SDK法兰到工具TCP
 
     # control_mode=1 时，MoveJoints 使用关节阻抗，MovePose 使用笛卡尔阻抗。

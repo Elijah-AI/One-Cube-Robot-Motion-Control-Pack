@@ -36,6 +36,7 @@
 #include "motion_control_pkg/kinematics/transform_utils.hpp"
 #include "motion_control_pkg/motion/joint_space_control.hpp"
 #include "motion_control_pkg/sdk/marvin_dual_arm_sdk_adapter.hpp"
+#include "ds485_driver/embedded_torque.h"
 
 
 using namespace miracle;
@@ -44,6 +45,7 @@ class RobotControlNode : public rclcpp::Node {
 public:
     RobotControlNode() : Node("robot_control_node") {}
     ~RobotControlNode() override {
+        if (torque_gripper_) torque_gripper_->shutdown();
         if (motion_safety_) motion_safety_->requestStop("control node shutdown");
         if (head_startup_thread_.joinable()) head_startup_thread_.join();
     }
@@ -156,10 +158,10 @@ public:
             return tool == "gripper" || tool == "suck" || tool == "none";
         };
         if (!is_supported_tool(left_arm_tool_) ||
-            !is_supported_tool(right_arm_tool_))
+            (!is_supported_tool(right_arm_tool_) && right_arm_tool_ != "ds485_torque"))
         {
             throw std::invalid_argument(
-                "left_arm_tool/right_arm_tool must be gripper, suck, or none");
+                "Unsupported end effector (right arm also supports ds485_torque)");
         }
 
         if (planning_frame.empty() ||
@@ -315,6 +317,24 @@ public:
                 else RCLCPP_ERROR(get_logger(),"Head startup home failed: %s",error.c_str());
             });
         }
+        if (right_arm_tool_ == "ds485_torque") {
+            const auto config = declare_parameter<std::string>("ds485_device_config",
+                ament_index_cpp::get_package_share_directory("ds485_driver") + "/config/ds485_driver.yaml");
+            torque_gripper_ = std::make_unique<ds485_driver::EmbeddedTorque>(
+                get_node_base_interface()->get_context(), config, std::array<bool, 2>{false, true},
+                [this](unsigned side, const std::function<void()>& submit, std::string& error) {
+                    std::lock_guard<std::mutex> lock(admission_mutex_);
+                    if (side != 1 || motion_control_pkg::execution::shutdownRequested() ||
+                        maintenance_active_ || teaching_mask_ || !head_startup_finished_) {
+                        error = "right gripper unavailable during startup, shutdown, maintenance or teaching";
+                        return false;
+                    }
+                    if (!motion_safety_->ready(error)) return false;
+                    submit();
+                    return true;
+                });
+            torque_gripper_->start();
+        }
         RCLCPP_INFO(this->get_logger(), "Robot Control Action Server is ready; motion admission follows safety/startup state.");
     }
 
@@ -322,6 +342,7 @@ public:
         std::lock_guard<std::mutex> lock(admission_mutex_);
         motion_control_pkg::execution::requestShutdown();
         if (shutdown_) return;
+        if (torque_gripper_) torque_gripper_->requestStop();
         if (motion_safety_) motion_safety_->requestStop("orderly process shutdown");
         const std::size_t axes=(ethercat_attempted_ ? 6U : 0U)+
             ((dual_arm_module_ && dual_arm_module_->shutdownDriverConnected()) ? 14U : 0U);
@@ -354,6 +375,7 @@ public:
             if (head_startup_thread_.joinable()) head_startup_thread_.join();
             // Readers are serialized by the SDK gate; after release they fail
             // closed without touching the vendor handle. PDO joins precede IgH release.
+            if (torque_gripper_) torque_gripper_->shutdown();
             if (dual_arm_module_ && !dual_arm_module_->releaseAfterShutdown(error)) return false;
             return !ethercat_bus_manager_ptr_ || ethercat_bus_manager_ptr_->releaseAfterShutdown(error);
         };
@@ -392,7 +414,7 @@ private:
         if (shutdown_pub_) {std_msgs::msg::String msg;msg.data=status;shutdown_pub_->publish(msg);}
     }
     bool shutdownResourcesIdle() const {
-        return head_startup_finished_ && (!motion_safety_ || motion_safety_->workersIdle()) &&
+        return (!torque_gripper_ || !torque_gripper_->busy(1)) && head_startup_finished_ && (!motion_safety_ || motion_safety_->workersIdle()) &&
             (!whole_body_module_ || whole_body_module_->is_idle()) &&
             (!head_module_ || head_module_->is_idle(ID_HEAD)) &&
             (!lower_body_module_ || lower_body_module_->is_idle(ID_LEG)) &&
@@ -414,6 +436,8 @@ private:
         motion_control_pkg::sdk::ActiveArmConfiguration::kDualArm};
     std::shared_ptr<DualArmModule> dual_arm_module_;
     std::shared_ptr<WholeBodyModule> whole_body_module_;
+    std::unique_ptr<ds485_driver::EmbeddedTorque> torque_gripper_;
+    bool torque_stop_requested_{false};
     std::string left_arm_tool_{"suck"};
     std::string right_arm_tool_{"gripper"};
     rclcpp_action::Server<MovePose>::SharedPtr move_pose_action_server_;
@@ -442,7 +466,8 @@ private:
         ~MaintenanceActiveReset() { value=false; }
     };
     void cancelMaintenance(const std::string& reason) {
-        std::lock_guard<std::mutex> lock(maintenance_stop_mutex_);
+        std::scoped_lock lock(admission_mutex_, maintenance_stop_mutex_);
+        if (torque_gripper_) torque_gripper_->requestStop();
         ++maintenance_epoch_;
         motion_safety_->requestStop(reason);
     }
@@ -711,6 +736,12 @@ private:
         motion_safety_pub_=create_publisher<std_msgs::msg::String>("/Control/motion_safety",rclcpp::QoS(1).transient_local());
         motion_safety_timer_=create_wall_timer(std::chrono::milliseconds(100),[this]{
             std::string error;
+            if (torque_gripper_ && motion_safety_->latched() && torque_gripper_->busy(1) &&
+                !torque_stop_requested_) {
+                torque_gripper_->requestStop();
+                torque_stop_requested_ = true;
+            }
+            if (!motion_safety_->latched()) torque_stop_requested_ = false;
             const auto mask=teaching_mask_.load();
             if(mask && !maintenance_active_ && !motion_control_pkg::execution::shutdownRequested() &&
                 !motion_safety_->ready(error) && !teaching_stop_issued_.exchange(true)) {
@@ -736,7 +767,8 @@ private:
                 // Resource reservations precede worker startup. Include workers
                 // that have been accepted but have not entered MotionSafetyScope
                 // yet (and head/leg workers that are still planning).
-                if (!whole_body_module_->is_idle() || !head_module_->is_idle(ID_HEAD) ||
+                if ((torque_gripper_ && torque_gripper_->busy(1)) ||
+                    !whole_body_module_->is_idle() || !head_module_->is_idle(ID_HEAD) ||
                     !lower_body_module_->is_idle(ID_LEG) || !dual_arm_module_->is_idle(ID_LEFT_ARM) ||
                     !dual_arm_module_->is_idle(ID_RIGHT_ARM)) {
                     response->success=false;

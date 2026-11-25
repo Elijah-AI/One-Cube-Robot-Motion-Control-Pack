@@ -37,6 +37,7 @@ endif()
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(ds485_driver REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -341,6 +342,7 @@ ament_target_dependencies(motion_control_node
 
 # 2. 第三方库
 target_link_libraries(motion_control_node
+    ds485_driver::ds485_control
     motion_planning_core
     dual_arm_sdk_core
     marvin_sdk
@@ -444,7 +446,7 @@ install(DIRECTORY config
 
 install(FILES doc/ORDERLY_SHUTDOWN.txt DESTINATION share/${PROJECT_NAME}/doc)
 install(FILES doc/ROBOT_TF.md DESTINATION share/${PROJECT_NAME}/doc)
-install(FILES doc/TEACH_AND_RECOVERY.md doc/SDK_LIMITS_AND_TEACH_RELEASE.md
+install(FILES doc/TEACH_AND_RECOVERY.md doc/SDK_LIMITS_AND_TEACH_RELEASE.md doc/GX12-01_GRIPPER.md
     DESTINATION share/${PROJECT_NAME}/doc)
 
 install(DIRECTORY launch   
